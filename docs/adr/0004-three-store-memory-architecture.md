@@ -8,7 +8,9 @@ Wabi keeps three kinds of data in three stores, with a strict boundary so it's a
 
 ## Deletion
 
-A person's "delete my data" request must purge **Postgres rows and Mem0 memories** (both personal). **Qdrant is never touched** — it holds no personal data. Any new personal-data store added later inherits this rule.
+A person's "delete my data" request must purge **Postgres rows, all Mem0 memories for the user, and Escalation Events** (all personal). The rule is **"never delete shared knowledge,"** not "never touch Qdrant": the shared **`wabi_strategies`** collection is never purged, but Mem0 *does* store the person's memory vectors in Qdrant (per-user `mem0_<userId>` namespace, see ADR-0017 / amendment below), and **those personal vectors must be purged** — deletion drops the `mem0_<userId>` collection. Any new personal-data store added later inherits this rule.
+
+> **Amendment (post-ADR-0015/0017):** the original wording "Qdrant is never touched — it holds no personal data" predates self-hosting Mem0 *on Qdrant*. Mem0 personal vectors live in Qdrant and **are** deleted; only the shared Strategy collection is exempt. Verify Mem0's delete path actually evicts vectors from Qdrant (drop `mem0_<userId>`); if per-user collections prove unsupported, fall back to `Mem0.deleteAll({user_id})` against a shared collection.
 
 ## Why
 

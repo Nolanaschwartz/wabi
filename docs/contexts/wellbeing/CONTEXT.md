@@ -63,11 +63,11 @@ A structured, person-logged event stored in Postgres — a Mood, Tilt Session, P
 _Avoid_: entry (when precision matters), data point
 
 **Memory**:
-A durable fact the AI Coach *infers* about a person to personalize coaching (e.g. "tilts in ranked", "prefers breathing exercises"), held in Mem0. Rebuildable from Records and conversation; never a source of truth.
+A durable fact the AI Coach *infers* about a person to personalize coaching (e.g. "tilts in ranked", "prefers breathing exercises"), held in Mem0. Rebuildable from Records and conversation; never a source of truth. Derived **at session end**, not per message (ADR-0016); Mem0's vectors are embedded by a **self-hosted** embedder and stored in a per-user Qdrant namespace that "delete my data" purges (ADR-0017, ADR-0004).
 _Avoid_: note, profile fact, record
 
 **Conversation** (a **Session**):
-A coaching exchange. Wabi stores only its *metadata* (session id, topic) — the verbatim transcript is **never persisted** (ADR-0013). Within-session continuity comes from a short-lived buffer; cross-session continuity comes from derived Memory. The verbatim record lives in the person's Discord DM, not in Wabi.
+A coaching exchange — in v1, a free-form **DM** thread (ADR-0015). Wabi stores only its *metadata* (session id, topic) — the verbatim transcript is **never persisted** (ADR-0013). Within-session continuity comes from a short-lived **Redis buffer** (persistence off, ~10 turns); a session is bounded by **30 minutes of inactivity**. Cross-session continuity comes from derived Memory, extracted **at session end** by a sweeper (ADR-0016). The verbatim record lives in the person's Discord DM, not in Wabi.
 _Avoid_: transcript, chat log, message history
 
 **Strategy**:

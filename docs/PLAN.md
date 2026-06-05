@@ -26,6 +26,24 @@ This plan predates the design decisions recorded in `docs/adr/` and the glossari
 
 ---
 
+## ⚠️ Technical Architecture Reconciliation (grilling session, 2026-06-05 — read second)
+
+The reconciliation above fixed the plan against the *product* ADRs. This block fixes it against the *implementation* decisions made in a follow-up grilling session, recorded in **ADR-0015 / 0016 / 0017** and amendments to **ADR-0003 / 0004 / 0011**. Where a task body conflicts with these, the ADRs win.
+
+1. **Classic bot, not user-install (ADR-0015).** Wabi is a `scope=bot` classic bot with `MessageContent` + `DirectMessages`, reached via a shared **hub server** — *not* `integration_type=1`. Fix the invite URL (Task 1) and intents (Task 3). `MessageContent` is a launch-gate (Discord review).
+2. **A DM is a coaching turn (ADR-0015).** `messageCreate` is the primary pipeline; it routes non-crisis DMs to the coach. `/talk` (Task 15) demotes to an optional in-server entrypoint. Rework Task 13 accordingly.
+3. **DM pipeline order is fixed:** `tripwire` (pre-consent) → user **lookup** (never upsert) → consent gate → access gate → `screenForCrisis` classifier → coach + `storeMemory`. Unknown/unconsented DM → tripwire + "finish setup" link, no coaching.
+4. **Web-first onboarding (ADR-0015/0011).** `User` + `consentAcceptedAt` + Trial are all created in the **OAuth callback** (Task 20). `startTrialIfNew` moves there; Task 26's "single creation entrypoint" becomes "the DM path must never create a `User`." Consent is captured web-only (Task 27 resolved).
+5. **Redis session buffer, persistence OFF (ADR-0016).** Add a `redis` service (no RDB/AOF) to Task 1's compose. Within-session context = `wabi:sess:<userId>` (~10 turns); a session is bounded by 30 min idle. `coachStream`'s `history` arg is fed from this buffer.
+6. **Memory derived at session end (ADR-0016).** Replace per-message `storeMemory` (Tasks 8/15) with a **sweeper** (Task 11 scheduler) that flushes idle sessions into Mem0 once, writes `AiConversation.topic`, then deletes the Redis key. Disable Mem0's history/SQLite store.
+7. **Self-hosted embeddings, 768-dim (ADR-0017).** Add an embedding service; point `qdrant.ts` *and* Mem0 at it. **`VECTOR_SIZE = 768`** (Task 4, was 1536). No hard-coded `new OpenAI()` for embeddings (Tasks 4/6). Chat LLM stays OpenAI-for-PoC.
+8. **Delete = "never shared knowledge" (ADR-0004 amended).** Task 28 purges Postgres + Mem0 (per-user `mem0_<userId>` Qdrant namespace) + Escalation Events; never `wabi_strategies`. Verify Mem0 supports per-user collections; else fall back to `deleteAll({user_id})`.
+9. **Crisis screening: fast classifier + overlapped retrieval (ADR-0006; Tasks 7/25).** Separate `CLASSIFIER_MODEL` (cheap/fast) gates the turn; retrieval runs concurrently with it; only coach generation + `storeMemory` wait on the verdict. Never a combined classify-and-respond call (that ingests crisis text before the verdict).
+10. **Tilt detection is an affordance, not a 2nd message (Task 13).** On tilt keywords, the coached reply carries a **"Start a tilt reset"** button that opens the structured Tilt Session; no canned redirect.
+11. **Strategy review = minimal web admin page (Task 31).** Operator-gated `/admin/drafts` in `packages/web` over the (surface-agnostic) provenance + safety-filter + promote/demote engine.
+
+---
+
 ## Phase 1: Monorepo Setup & Infrastructure
 
 ### Task 1: Initialize TypeScript monorepo

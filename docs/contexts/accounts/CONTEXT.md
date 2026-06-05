@@ -17,7 +17,7 @@ A person's active paid access to Wabi via Stripe. Wabi is paid-only — there is
 _Avoid_: plan, membership, Pro tier (as a noun)
 
 **Trial**:
-A time-limited (~7-day) period of full access granted to a new User at no cost — the only no-cost path. Starts on the person's **first interaction** (no card up front), and converts to a Subscription or ends (ADR-0011).
+A time-limited (~7-day) period of full access granted to a new User at no cost — the only no-cost path. Starts at **web OAuth onboarding** ("Connect Discord"), the same step that creates the User and captures consent (no card up front), and converts to a Subscription or ends (ADR-0011, ADR-0015).
 _Avoid_: free tier, demo
 
 **Active Access**:
