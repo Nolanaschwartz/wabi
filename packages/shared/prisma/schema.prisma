@@ -125,3 +125,22 @@ model EscalationEvent {
   @@index([userId])
   @@index([timestamp])
 }
+
+model StrategyDraft {
+  id          String   @id @default(uuid())
+  title       String
+  technique   String
+  source      String
+  evidence    String
+  sourceText  String?
+  sourceUrl   String
+  trustLevel  String   @default("community")
+  status      String   @default("pending-review")
+  negativeCount Int    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
+  @@index([trustLevel])
+  @@index([negativeCount])
+}

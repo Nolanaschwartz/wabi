@@ -3,7 +3,10 @@ import { StrategyTrustGate } from './strategy-trust-gate';
 import { StrategyAdminService } from './strategy-admin.service';
 
 @Module({
-  providers: [StrategyTrustGate, StrategyAdminService],
+  providers: [
+    { provide: StrategyTrustGate, useValue: new StrategyTrustGate() },
+    StrategyAdminService,
+  ],
   exports: [StrategyAdminService],
 })
 export class StrategyAdminModule {}

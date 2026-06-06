@@ -22,6 +22,12 @@ export interface TiltSession {
   technique?: string;
 }
 
+export interface TiltOffer {
+  acceptMessage: string;
+  declineMessage: string;
+  trigger: string;
+}
+
 export class TiltService {
   constructor(
     private readonly strategyRetrieval: StrategyRetrievalService,
@@ -32,7 +38,15 @@ export class TiltService {
     return TILT_KEYWORDS.some((keyword) => lower.includes(keyword));
   }
 
-  async start(
+  createOffer(trigger: string): TiltOffer {
+    return {
+      acceptMessage: `I noticed you're dealing with "${trigger}". Want to start a tilt session to reset? Reply **accept** or **decline**.`,
+      declineMessage: "No problem — focus on the next round. I'm here if you need me.",
+      trigger,
+    };
+  }
+
+  async acceptOffer(
     discordId: string,
     tilt: TiltSession,
   ): Promise<string> {
@@ -51,6 +65,13 @@ export class TiltService {
     return strategy ?? "Take a deep breath and step away for a bit.";
   }
 
+  async start(
+    discordId: string,
+    tilt: TiltSession,
+  ): Promise<string> {
+    return this.acceptOffer(discordId, tilt);
+  }
+
   async resolve(discordId: string): Promise<void> {
     await prisma.tiltSession.updateMany({
       where: {
@@ -61,6 +82,20 @@ export class TiltService {
         resolved: true,
       },
     });
+  }
+
+  async autoResolveExpired(): Promise<number> {
+    const result = await prisma.tiltSession.updateMany({
+      where: {
+        resolved: false,
+        expiresAt: { lt: new Date() },
+      },
+      data: {
+        resolved: true,
+      },
+    });
+
+    return result.count;
   }
 
   async stats(discordId: string): Promise<{

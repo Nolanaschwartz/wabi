@@ -1,10 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { StrategyTrustGate, StrategyDraft } from './strategy-trust-gate';
+import { prisma } from '@wabi/shared';
+import { StrategyTrustGate, StrategyDraft, EvaluationDecision } from './strategy-trust-gate';
 
 @Injectable()
 export class StrategyAdminService {
-  private drafts: StrategyDraft[] = [];
-
   constructor(
     private readonly trustGate: StrategyTrustGate,
   ) {}
@@ -12,60 +11,92 @@ export class StrategyAdminService {
   async submitDraft(draft: StrategyDraft): Promise<StrategyDraft> {
     const result = await this.trustGate.evaluate(draft);
 
-    const processed: StrategyDraft = {
-      ...draft,
-      status: result.approved ? 'published' : 'pending-review',
-    };
+    const status = result.decision === 'publish' ? 'published' : 'pending-review';
 
-    this.drafts.push(processed);
-    return processed;
+    const persisted = await prisma.strategyDraft.create({
+      data: {
+        id: draft.id,
+        title: draft.title,
+        technique: draft.technique,
+        source: draft.source,
+        evidence: draft.evidence,
+        sourceText: draft.sourceText ?? null,
+        sourceUrl: draft.sourceUrl,
+        trustLevel: draft.trustLevel,
+        status,
+      },
+    });
+
+    return this.toDraft(persisted);
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {
-    return this.drafts.filter((d) => d.status === 'pending-review');
+    const drafts = await prisma.strategyDraft.findMany({
+      where: { status: 'pending-review' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return drafts.map(this.toDraft);
   }
 
   async approveDraft(id: string): Promise<StrategyDraft | null> {
-    const idx = this.drafts.findIndex((d) => d.id === id);
-    if (idx === -1) return null;
+    const updated = await prisma.strategyDraft.update({
+      where: { id },
+      data: { status: 'published' },
+    }).catch(() => null);
 
-    this.drafts[idx] = {
-      ...this.drafts[idx],
-      status: 'published',
-    };
-
-    return this.drafts[idx];
+    return updated ? this.toDraft(updated) : null;
   }
 
   async rejectDraft(id: string): Promise<StrategyDraft | null> {
-    const idx = this.drafts.findIndex((d) => d.id === id);
-    if (idx === -1) return null;
+    const updated = await prisma.strategyDraft.update({
+      where: { id },
+      data: { status: 'quarantined' },
+    }).catch(() => null);
 
-    this.drafts[idx] = {
-      ...this.drafts[idx],
-      status: 'quarantined',
-    };
-
-    return this.drafts[idx];
+    return updated ? this.toDraft(updated) : null;
   }
 
   async recordNegativeFeedback(draftId: string): Promise<void> {
-    const draft = this.drafts.find((d) => d.id === draftId);
-    if (!draft) return;
+    const draft = await prisma.strategyDraft.findUnique({ where: { id: draftId } });
+    if (!draft || draft.status !== 'published') return;
 
-    if (draft.status === 'published') {
-      const negativeCount = (draft as any).negativeCount ?? 0;
-      if (negativeCount >= 3) {
-        this.drafts = this.drafts.map((d) =>
-          d.id === draftId
-            ? { ...d, status: 'quarantined' as const, negativeCount: 0 }
-            : d,
-        );
-      }
+    const newCount = draft.negativeCount + 1;
+
+    if (this.trustGate.shouldQuarantine(newCount)) {
+      await prisma.strategyDraft.update({
+        where: { id: draftId },
+        data: { status: 'quarantined', negativeCount: 0 },
+      });
+    } else {
+      await prisma.strategyDraft.update({
+        where: { id: draftId },
+        data: { negativeCount: newCount },
+      });
     }
   }
 
   async getPublishedDrafts(): Promise<StrategyDraft[]> {
-    return this.drafts.filter((d) => d.status === 'published');
+    const drafts = await prisma.strategyDraft.findMany({
+      where: { status: 'published' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return drafts.map(this.toDraft);
+  }
+
+  private toDraft(row: any): StrategyDraft {
+    return {
+      id: row.id,
+      title: row.title,
+      technique: row.technique,
+      source: row.source,
+      evidence: row.evidence,
+      sourceText: row.sourceText,
+      sourceUrl: row.sourceUrl,
+      trustLevel: row.trustLevel,
+      status: row.status,
+      negativeCount: row.negativeCount,
+    };
   }
 }

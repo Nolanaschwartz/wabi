@@ -10,35 +10,51 @@ const ALLOWLISTED_SOURCES = [
   'counseling.org',
 ];
 
+const QUARANTINE_THRESHOLD = 3;
+
 export interface StrategyDraft {
   id: string;
   title: string;
   technique: string;
   source: string;
   evidence: string;
+  sourceText?: string;
   sourceUrl: string;
   trustLevel: 'allowlisted' | 'community' | 'session-mined';
   status: 'draft' | 'pending-review' | 'published' | 'quarantined';
+  negativeCount?: number;
 }
+
+export type EvaluationDecision = 'publish' | 'queue' | 'reject';
 
 export class StrategyTrustGate {
   async evaluate(draft: StrategyDraft): Promise<{
-    approved: boolean;
+    decision: EvaluationDecision;
     reason: string;
   }> {
-    const isAllowlisted = this.isSourceAllowlisted(draft.sourceUrl);
-
-    if (!isAllowlisted) {
+    // Session-mined drafts always go to queue regardless of source
+    if (draft.trustLevel === 'session-mined') {
       return {
-        approved: false,
-        reason: 'Source not allowlisted — requires human review',
+        decision: 'queue',
+        reason: 'Session-mined draft — requires human review',
       };
     }
 
+    const isAllowlisted = this.isSourceAllowlisted(draft.sourceUrl);
+
+    // Non-allowlisted sources go to queue
+    if (!isAllowlisted) {
+      return {
+        decision: 'queue',
+        reason: 'Source not allowlisted — queued for human review',
+      };
+    }
+
+    // Allowlisted sources: run safety + faithfulness for auto-publish
     const safetyCheck = await this.safetyFilter(draft);
     if (!safetyCheck) {
       return {
-        approved: false,
+        decision: 'reject',
         reason: 'Failed safety filter',
       };
     }
@@ -46,14 +62,14 @@ export class StrategyTrustGate {
     const faithfulness = await this.faithfulnessCheck(draft);
     if (!faithfulness) {
       return {
-        approved: false,
+        decision: 'reject',
         reason: 'Technique not faithful to cited source',
       };
     }
 
     return {
-      approved: true,
-      reason: 'Passed all checks — auto-published',
+      decision: 'publish',
+      reason: 'Allowlisted + safe + faithful — auto-published',
     };
   }
 
@@ -92,12 +108,16 @@ Source: ${draft.source}`,
         apiKey: config.apiKey,
       });
 
+      const sourceTextSection = draft.sourceText
+        ? `\nSource Text: ${draft.sourceText}`
+        : '';
+
       const { text } = await generateText({
         model: openai(config.model),
         prompt: `Does this technique actually appear in the cited source? Return only "faithful" or "unfaithful":
 Technique: ${draft.technique}
 Source: ${draft.source}
-Evidence: ${draft.evidence}`,
+Evidence: ${draft.evidence}${sourceTextSection}`,
         maxOutputTokens: 10,
       });
 
@@ -105,6 +125,10 @@ Evidence: ${draft.evidence}`,
     } catch {
       return false;
     }
+  }
+
+  shouldQuarantine(negativeCount: number): boolean {
+    return negativeCount >= QUARANTINE_THRESHOLD;
   }
 
   static quarantine(draft: StrategyDraft): StrategyDraft {

@@ -34,7 +34,36 @@ describe('TiltService', () => {
     expect(service.isTiltLanguage('good game')).toBe(false);
   });
 
-  it('starts a tilt session', async () => {
+  it('creates an offer for detected frustration', () => {
+    const offer = service.createOffer('raging');
+
+    expect(offer.acceptMessage).toContain('accept');
+    expect(offer.acceptMessage).toContain('decline');
+    expect(offer.acceptMessage).toContain('raging');
+    expect(offer.declineMessage).toBeTruthy();
+    expect(offer.trigger).toBe('raging');
+  });
+
+  it('accepting offer starts a tilt session', async () => {
+    (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
+    (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
+
+    const technique = await service.acceptOffer('123', {
+      trigger: 'frustrated',
+      severity: 7,
+    });
+
+    expect(prisma.tiltSession.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: '123',
+        trigger: 'frustrated',
+        severity: 7,
+      }),
+    });
+    expect(technique).toBeTruthy();
+  });
+
+  it('starts a tilt session (backward compat)', async () => {
     (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
     (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
 
@@ -48,7 +77,7 @@ describe('TiltService', () => {
   });
 
   it('resolves active tilt sessions', async () => {
-    (prisma.tiltSession.updateMany as jest.Mock).mockResolvedValue({});
+    (prisma.tiltSession.updateMany as jest.Mock).mockResolvedValue({ count: 2 });
 
     await service.resolve('123');
 
@@ -56,6 +85,23 @@ describe('TiltService', () => {
       where: {
         userId: '123',
         resolved: false,
+      },
+      data: {
+        resolved: true,
+      },
+    });
+  });
+
+  it('auto-resolves expired sessions', async () => {
+    (prisma.tiltSession.updateMany as jest.Mock).mockResolvedValue({ count: 5 });
+
+    const count = await service.autoResolveExpired();
+
+    expect(count).toBe(5);
+    expect(prisma.tiltSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        resolved: false,
+        expiresAt: expect.any(Object),
       },
       data: {
         resolved: true,
