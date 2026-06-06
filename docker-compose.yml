@@ -17,7 +17,7 @@ services:
       - '6379:6379'
 
   qdrant:
-    image: qdrant/qdrant:v1.12.0
+    image: qdrant/qdrant:v1.18.0
     environment:
       QDRANT__SERVICE__GRPC_PORT: '6334'
     ports:
@@ -82,7 +82,7 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       TRIAL_DAYS: ${TRIAL_DAYS}
-       SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
+      SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
     depends_on:
       - postgres
       - redis
@@ -104,7 +104,7 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_PRICE_ID: ${STRIPE_PRICE_ID}
       TRIAL_DAYS: ${TRIAL_DAYS}
-       SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
+      SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
     depends_on:
       - postgres
       - glitchtip
