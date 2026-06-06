@@ -24,6 +24,7 @@ export class CheckInService {
         connectionString: process.env.DATABASE_URL,
       });
       await this.bossClient.start();
+      await this.bossClient.createQueue('check-in-scheduler');
       await this.bossClient.schedule('check-in-scheduler', CHECK_IN_CRON);
       await this.bossClient.work('check-in-scheduler', this.handleCheckIns.bind(this));
     } catch {

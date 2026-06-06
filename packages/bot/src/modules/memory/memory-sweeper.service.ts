@@ -28,6 +28,7 @@ export class MemorySweeperService {
         connectionString: process.env.DATABASE_URL,
       });
       await this.bossClient.start();
+      await this.bossClient.createQueue('memory-sweeper');
       await this.bossClient.work('memory-sweeper', this.sweeperJob.bind(this));
       await this.bossClient.schedule(
         'memory-sweeper',

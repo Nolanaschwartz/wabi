@@ -27,6 +27,7 @@ export class CrisisAftermathService {
         connectionString: process.env.DATABASE_URL,
       });
       await this.bossClient.start();
+      await this.bossClient.createQueue('crisis-follow-up');
       await this.bossClient.work('crisis-follow-up', this.followUpJob.bind(this));
     } catch {
       // Graceful degradation
