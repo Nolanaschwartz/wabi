@@ -47,16 +47,17 @@ export class StrategyRetrievalService {
   async search(query: string, topK = 3): Promise<StrategyPoint[]> {
     try {
       const embedding = await this.embed(query);
-      const results = await this.qdrant.scroll(COLLECTION_NAME, {
+      const results = await this.qdrant.search(COLLECTION_NAME, {
+        vector: embedding,
         limit: topK,
         with_payload: true,
       });
 
-      if (results.points.length === 0) {
+      if (results.length === 0) {
         return [];
       }
 
-      return results.points.map((point: any) => ({
+      return results.map((point: any) => ({
         id: String(point.id),
         content: (point.payload?.content as string) ?? '',
         evidence: (point.payload?.evidence as string) ?? '',

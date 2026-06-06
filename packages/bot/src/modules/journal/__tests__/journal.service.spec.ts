@@ -1,5 +1,6 @@
 import { JournalService } from '../journal.service';
 import { ClassifierService } from '../../coaching/classifier.service';
+import { CoachService } from '../../coaching/coach.service';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
@@ -16,14 +17,22 @@ jest.mock('../../coaching/classifier.service', () => ({
   })),
 }));
 
+jest.mock('../../coaching/coach.service', () => ({
+  CoachService: jest.fn().mockImplementation(() => ({
+    generate: jest.fn(),
+  })),
+}));
+
 describe('JournalService', () => {
   let service: JournalService;
   let classifier: jest.Mocked<ClassifierService>;
+  let coach: jest.Mocked<CoachService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     classifier = new ClassifierService() as any;
-    service = new JournalService(classifier);
+    coach = new CoachService() as any;
+    service = new JournalService(classifier, coach);
   });
 
   it('returns a prompt', async () => {
@@ -31,14 +40,16 @@ describe('JournalService', () => {
     expect(prompt.length).toBeGreaterThan(10);
   });
 
-  it('saves entry with reflection for safe content', async () => {
+  it('saves entry with AI-generated reflection for safe content', async () => {
     (classifier.classify as jest.Mock).mockResolvedValue('safe');
+    (coach.generate as jest.Mock).mockResolvedValue("Thanks for sharing that.");
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
     const result = await service.write('123', 'I had a good day today');
 
     expect(result.crisis).toBe(false);
     expect(result.reflection).toBeTruthy();
+    expect(coach.generate).toHaveBeenCalled();
     expect(prisma.journalEntry.create).toHaveBeenCalled();
   });
 
@@ -52,30 +63,15 @@ describe('JournalService', () => {
     expect(prisma.journalEntry.create).not.toHaveBeenCalled();
   });
 
-  it('generates positive reflection for happy content', async () => {
+  it('falls back to default reflection on coach error', async () => {
     (classifier.classify as jest.Mock).mockResolvedValue('safe');
+    (coach.generate as jest.Mock).mockRejectedValue(new Error('API down'));
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
-    const result = await service.write('123', 'I feel great today');
+    const result = await service.write('123', 'I had a good day today');
 
-    expect(result.reflection).toContain('positive');
-  });
-
-  it('generates supportive reflection for difficult content', async () => {
-    (classifier.classify as jest.Mock).mockResolvedValue('safe');
-    (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
-
-    const result = await service.write('123', 'This is really hard');
-
-    expect(result.reflection).toContain('courage');
-  });
-
-  it('generates short reflection for brief content', async () => {
-    (classifier.classify as jest.Mock).mockResolvedValue('safe');
-    (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
-
-    const result = await service.write('123', 'Okay today');
-
-    expect(result.reflection).toContain('small note');
+    expect(result.crisis).toBe(false);
+    expect(result.reflection).toBeTruthy();
+    expect(prisma.journalEntry.create).toHaveBeenCalled();
   });
 });

@@ -10,7 +10,7 @@ jest.mock('@qdrant/qdrant-js', () => {
     QdrantClient: jest.fn().mockImplementation(() => ({
       getCollections: jest.fn().mockResolvedValue({ collections: [] }),
       createCollection: jest.fn().mockResolvedValue(true),
-      scroll: jest.fn().mockResolvedValue({ points: [] }),
+      search: jest.fn().mockResolvedValue([]),
       upsert: jest.fn().mockResolvedValue(true),
     })),
   };
@@ -38,7 +38,7 @@ describe('StrategyRetrievalService', () => {
   });
 
   it('handles search errors gracefully', async () => {
-    (service as any).qdrant.scroll = jest.fn().mockRejectedValue(new Error('connection refused'));
+    (service as any).qdrant.search = jest.fn().mockRejectedValue(new Error('connection refused'));
     const results = await service.search('test');
     expect(results).toEqual([]);
   });
@@ -48,5 +48,13 @@ describe('StrategyRetrievalService', () => {
     await expect(
       service.upsert('1', 'test content', 'test evidence'),
     ).resolves.not.toThrow();
+  });
+
+  it('uses vector search (not scroll) for retrieval', async () => {
+    const mockSearch = jest.fn().mockResolvedValue([]);
+    (service as any).qdrant.search = mockSearch;
+    jest.spyOn(service as any, 'embed').mockResolvedValue(new Array(768).fill(0));
+    await service.search('test query');
+    expect(mockSearch).toHaveBeenCalled();
   });
 });

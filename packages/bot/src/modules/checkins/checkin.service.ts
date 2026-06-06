@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
 import { Client } from 'discord.js';
+import { prisma } from '@wabi/shared';
 import { CheckInScheduler } from './checkin-timing';
 import { CoachingService } from '../coaching/coaching.service';
 
 const CHECK_IN_CRON = '0 */4 * * *';
+const VALID_TIMEZONES = Intl.supportedValuesOf('timeZone');
 
 @Injectable()
 export class CheckInService {
@@ -37,7 +39,7 @@ export class CheckInService {
 
     for (const user of dueUsers) {
       try {
-        const dmChannel = await this.client.users.send(user.discordId, {
+        await this.client.users.send(user.discordId, {
           content: 'Hey there! How are you doing today?',
         });
 
@@ -49,7 +51,28 @@ export class CheckInService {
   }
 
   async toggleCheckIn(discordId: string, enabled: boolean): Promise<void> {
-    await this.scheduler.recordCheckIn(discordId);
+    await prisma.user.update({
+      where: { discordId },
+      data: { checkInsEnabled: enabled },
+    });
+  }
+
+  async setCadence(
+    discordId: string,
+    cadence: 'daily' | 'every-other' | 'weekly',
+  ): Promise<void> {
+    await prisma.user.update({
+      where: { discordId },
+      data: { checkInCadence: cadence },
+    });
+  }
+
+  async setTimezone(discordId: string, tz: string): Promise<void> {
+    const valid = VALID_TIMEZONES.includes(tz) ? tz : 'UTC';
+    await prisma.user.update({
+      where: { discordId },
+      data: { timezone: valid },
+    });
   }
 
   async destroy(): Promise<void> {

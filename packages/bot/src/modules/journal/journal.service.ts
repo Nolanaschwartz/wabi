@@ -1,5 +1,6 @@
 import { prisma } from '@wabi/shared';
 import { ClassifierService } from '../coaching/classifier.service';
+import { CoachService } from '../coaching/coach.service';
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -15,7 +16,10 @@ const PROMPTS = [
 ];
 
 export class JournalService {
-  constructor(private readonly classifier: ClassifierService) {}
+  constructor(
+    private readonly classifier: ClassifierService,
+    private readonly coach: CoachService,
+  ) {}
 
   async prompt(): Promise<string> {
     const idx = Math.floor(Math.random() * PROMPTS.length);
@@ -32,32 +36,27 @@ export class JournalService {
       return { crisis: true, reflection: '' };
     }
 
-    const reflection = this.generateReflection(content);
+    const reflection = await this.generateReflection(content);
 
     await prisma.journalEntry.create({
       data: {
         userId: discordId,
         content,
-        reflection: reflection ?? null,
+        reflection: reflection || null,
       },
     });
 
-    return { crisis: false, reflection: reflection ?? '' };
+    return { crisis: false, reflection: reflection || '' };
   }
 
-  private generateReflection(content: string): string {
-    if (content.toLowerCase().includes('hard') || content.toLowerCase().includes('difficult')) {
-      return "It takes courage to write about the hard stuff. You're doing better than you think.";
+  private async generateReflection(content: string): Promise<string> {
+    try {
+      const reply = await this.coach.generate(
+        `Reflect briefly and supportively on this journal entry. Be warm, brief (under 150 chars), and specific to what they wrote:\n${content}`,
+      );
+      return reply;
+    } catch {
+      return "Thanks for journaling. Reflecting on your thoughts is a healthy habit.";
     }
-
-    if (content.toLowerCase().includes('good') || content.toLowerCase().includes('great') || content.toLowerCase().includes('happy')) {
-      return "It's great to hear you're feeling positive. Hold onto that feeling.";
-    }
-
-    if (content.length < 20) {
-      return "Thanks for sharing. Even a small note is a step forward.";
-    }
-
-    return "Thanks for journaling. Reflecting on your thoughts is a healthy habit.";
   }
 }

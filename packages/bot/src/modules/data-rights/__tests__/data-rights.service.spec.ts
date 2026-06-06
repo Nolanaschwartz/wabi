@@ -11,12 +11,23 @@ jest.mock('@wabi/shared', () => ({
     xpEntry: { findMany: jest.fn(), deleteMany: jest.fn() },
     escalationEvent: { findMany: jest.fn(), deleteMany: jest.fn() },
     session: { findMany: jest.fn(), deleteMany: jest.fn() },
+    tiltSession: { findMany: jest.fn(), deleteMany: jest.fn() },
+    $transaction: jest.fn((fn) => fn({
+      mood: { deleteMany: jest.fn() },
+      playtimeLog: { deleteMany: jest.fn() },
+      journalEntry: { deleteMany: jest.fn() },
+      xpEntry: { deleteMany: jest.fn() },
+      escalationEvent: { deleteMany: jest.fn() },
+      session: { deleteMany: jest.fn() },
+      tiltSession: { deleteMany: jest.fn() },
+    })),
   },
 }));
 
 jest.mock('../../memory/memory-store.service', () => ({
   MemoryStoreService: jest.fn().mockImplementation(() => ({
     deleteAllForUser: jest.fn(),
+    search: jest.fn(),
   })),
 }));
 
@@ -30,7 +41,7 @@ describe('DataRightsService', () => {
     service = new DataRightsService(memoryStore);
   });
 
-  it('exports user data', async () => {
+  it('exports user data including tilt sessions and memory', async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       email: null,
@@ -43,23 +54,21 @@ describe('DataRightsService', () => {
     (prisma.xpEntry.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.escalationEvent.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.session.findMany as jest.Mock).mockResolvedValue([]);
+    (prisma.tiltSession.findMany as jest.Mock).mockResolvedValue([]);
+    (memoryStore.search as jest.Mock).mockResolvedValue([]);
 
     const data = await service.export('123');
     const parsed = JSON.parse(data);
 
     expect(parsed.user.discordId).toBe('123');
-    expect(parsed.moods).toEqual([]);
+    expect(parsed.tilt).toEqual([]);
+    expect(parsed.memory).toEqual([]);
   });
 
-  it('deletes all user data', async () => {
+  it('deletes all user data atomically in transaction', async () => {
     await service.delete('123');
 
+    expect(prisma.$transaction).toHaveBeenCalled();
     expect(memoryStore.deleteAllForUser).toHaveBeenCalledWith('123');
-    expect(prisma.mood.deleteMany).toHaveBeenCalledWith({ where: { userId: '123' } });
-    expect(prisma.playtimeLog.deleteMany).toHaveBeenCalledWith({ where: { userId: '123' } });
-    expect(prisma.journalEntry.deleteMany).toHaveBeenCalledWith({ where: { userId: '123' } });
-    expect(prisma.xpEntry.deleteMany).toHaveBeenCalledWith({ where: { userId: '123' } });
-    expect(prisma.escalationEvent.deleteMany).toHaveBeenCalledWith({ where: { userId: '123' } });
-    expect(prisma.session.deleteMany).toHaveBeenCalledWith({ where: { userId: '123' } });
   });
 });

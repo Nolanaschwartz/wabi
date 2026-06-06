@@ -8,26 +8,34 @@ export type CheckInCadence = 'daily' | 'every-other' | 'weekly';
 
 export class CheckInTiming {
   static isWithinQuietHours(userTimezone: string): boolean {
-    const now = new Date();
-    const userHour = now.toLocaleString('en-US', {
-      timeZone: userTimezone,
-      hour: 'numeric',
-      hour12: false,
-    });
+    try {
+      const now = new Date();
+      const userHour = now.toLocaleString('en-US', {
+        timeZone: userTimezone || 'UTC',
+        hour: 'numeric',
+        hour12: false,
+      });
 
-    const hour = parseInt(userHour, 10);
-    return hour >= DEFAULT_QUIET_HOURS_START || hour < DEFAULT_QUIET_HOURS_END;
+      const hour = parseInt(userHour, 10);
+      return hour >= DEFAULT_QUIET_HOURS_START || hour < DEFAULT_QUIET_HOURS_END;
+    } catch {
+      return true; // Safe default: assume quiet hours on invalid timezone
+    }
   }
 
   static isLateNightForUser(userTimezone: string): boolean {
-    const now = new Date();
-    const userHour = now.toLocaleString('en-US', {
-      timeZone: userTimezone,
-      hour: 'numeric',
-      hour12: false,
-    });
+    try {
+      const now = new Date();
+      const userHour = now.toLocaleString('en-US', {
+        timeZone: userTimezone || 'UTC',
+        hour: 'numeric',
+        hour12: false,
+      });
 
-    return parseInt(userHour, 10) >= LATE_NIGHT_HOUR;
+      return parseInt(userHour, 10) >= LATE_NIGHT_HOUR;
+    } catch {
+      return true; // Safe default: assume late night on invalid timezone
+    }
   }
 
   static isCheckInDue(user: {
