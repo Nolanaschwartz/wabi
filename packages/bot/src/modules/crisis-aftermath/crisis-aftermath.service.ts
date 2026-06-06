@@ -1,6 +1,8 @@
+import { Injectable } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
+import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 
 const FOLLOW_UP_DELAY_MINUTES = 30;
 const FOLLOW_UP_MESSAGES = [
@@ -9,12 +11,14 @@ const FOLLOW_UP_MESSAGES = [
   "I've been thinking about our conversation. How are you feeling?",
 ];
 
+@Injectable()
 export class CrisisAftermathService {
   private bossClient: PgBoss | null = null;
   private enabled: boolean;
 
   constructor(
     private readonly sessionBuffer: SessionBufferService,
+    private readonly coachingSession: CoachingSessionService,
   ) {
     this.enabled = !!process.env.DATABASE_URL;
   }
@@ -35,6 +39,11 @@ export class CrisisAftermathService {
   }
 
   async onEscalation(userId: string): Promise<void> {
+    // Single source of truth for "never mine this session": the Postgres do-not-mine flag the
+    // sweeper reads. Set on BOTH crisis paths (classifier + tripwire), since onEscalation is the
+    // one call both make. The Redis buffer clear + quarantine key are the time-bounded aftermath
+    // window, a separate concern. (Issue #24 / ADR-0010/0016.)
+    await this.coachingSession.quarantine(userId);
     await this.sessionBuffer.clearAndQuarantine(userId);
 
     if (!this.bossClient) return;

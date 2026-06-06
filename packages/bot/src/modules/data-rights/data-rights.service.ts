@@ -1,6 +1,8 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { MemoryStoreService } from '../memory/memory-store.service';
 
+@Injectable()
 export class DataRightsService {
   constructor(
     private readonly memoryStore: MemoryStoreService,
@@ -17,7 +19,7 @@ export class DataRightsService {
         prisma.escalationEvent.findMany({ where: { userId: discordId } }),
         prisma.session.findMany({ where: { userId: discordId } }),
         prisma.tiltSession.findMany({ where: { userId: discordId } }),
-        this.memoryStore.search(discordId, ''),
+        this.memoryStore.getAllForUser(discordId),
       ]);
 
     const data = {

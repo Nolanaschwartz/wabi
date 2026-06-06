@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { ClassifierService } from '../coaching/classifier.service';
 import { CoachService } from '../coaching/coach.service';
@@ -15,6 +16,7 @@ const PROMPTS = [
   "What made you smile today?",
 ];
 
+@Injectable()
 export class JournalService {
   constructor(
     private readonly classifier: ClassifierService,

@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 const DEBOUNCE_MS = 3000;
 const HOURLY_CEILING = 30;
 
@@ -8,6 +9,7 @@ interface CoalescedTurn {
   isCanceled: boolean;
 }
 
+@Injectable()
 export class BurstCoalescer {
   private pending = new Map<string, CoalescedTurn>();
   private timers = new Map<string, NodeJS.Timeout>();

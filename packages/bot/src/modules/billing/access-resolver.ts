@@ -1,6 +1,8 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import type { AccessState } from './stripe-access-mapper';
 
+@Injectable()
 export class AccessResolver {
   async resolve(discordId: string): Promise<AccessState> {
     const user = await prisma.user.findUnique({

@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import { createClient, RedisClientType } from 'redis';
 
 const SESSION_KEY_PREFIX = 'wabi:sess:';
@@ -18,6 +19,7 @@ interface RawSessionData {
   doNotMine?: string;
 }
 
+@Injectable()
 export class SessionBufferService {
   private client: RedisClientType;
   private initialized = false;

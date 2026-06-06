@@ -1,7 +1,9 @@
+import { Injectable } from '@nestjs/common';
 const SAMPLE_RATE = 0.1;
 
 export type TraceStep = 'classify' | 'coach' | 'retrieval';
 
+@Injectable()
 export class LangfuseTracer {
   private enabled: boolean;
 

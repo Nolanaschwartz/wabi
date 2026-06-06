@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 
@@ -28,6 +29,7 @@ export interface TiltOffer {
   trigger: string;
 }
 
+@Injectable()
 export class TiltService {
   constructor(
     private readonly strategyRetrieval: StrategyRetrievalService,

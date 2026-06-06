@@ -1,9 +1,11 @@
+import { Injectable } from '@nestjs/common';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { getProvider, type ProviderConfig } from '@wabi/shared';
 
 export type ClassifierResult = 'safe' | 'crisis';
 
+@Injectable()
 export class ClassifierService {
   private config: ProviderConfig;
 

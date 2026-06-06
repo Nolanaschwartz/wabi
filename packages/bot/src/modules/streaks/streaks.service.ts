@@ -1,68 +1,103 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 
 const STREAK_GRACE_DAYS = 1;
+const XP_PER_COACHING_TURN = 10;
 
+function startOfDayInTZ(tz: string, d: Date = new Date()): Date {
+  try {
+    const utcStr = d.toLocaleString('en-US', { timeZone: tz });
+    const dt = new Date(utcStr);
+    dt.setHours(0, 0, 0, 0);
+    return dt;
+  } catch {
+    const fallback = new Date(d);
+    fallback.setHours(0, 0, 0, 0);
+    return fallback;
+  }
+}
+
+@Injectable()
 export class StreaksService {
-  async checkAndAward(discordId: string): Promise<{
+  async checkAndAward(
+    discordId: string,
+    timezone: string = 'UTC',
+  ): Promise<{
     streak: number;
     message: string;
   }> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
+    const today = startOfDayInTZ(timezone);
     const lastEntry = await prisma.xpEntry.findFirst({
       where: { userId: discordId },
       orderBy: { createdAt: 'desc' },
     });
 
     if (!lastEntry) {
+      await prisma.xpEntry.create({
+        data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
+      });
       return {
         streak: 1,
         message: "Welcome! Your streak has begun.",
       };
     }
 
-    const lastDay = new Date(lastEntry.createdAt);
-    lastDay.setHours(0, 0, 0, 0);
-
+    const lastDay = startOfDayInTZ(timezone, lastEntry.createdAt);
     const daysSince = Math.floor((today.getTime() - lastDay.getTime()) / 86400000);
 
-    if (daysSince === 1) {
+    if (daysSince === 0) {
       return {
-        streak: (await this.getCurrentStreak(discordId)) + 1,
-        message: "Great to see you again! Your streak continues.",
+        streak: await this.getCurrentStreak(discordId, timezone),
+        message: '',
       };
     }
 
-    if (daysSince <= STREAK_GRACE_DAYS) {
+    if (daysSince === 1) {
+      await prisma.xpEntry.create({
+        data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
+      });
+      const streak = (await this.getCurrentStreak(discordId, timezone)) + 1;
       return {
-        streak: await this.getCurrentStreak(discordId),
+        streak,
+        message: streak >= 7 ? `🔥 ${streak}-day streak! You're on fire.` : "Great to see you again! Your streak continues.",
+      };
+    }
+
+    if (daysSince <= STREAK_GRACE_DAYS + 1) {
+      await prisma.xpEntry.create({
+        data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
+      });
+      return {
+        streak: await this.getCurrentStreak(discordId, timezone),
         message: "Welcome back! No worries about the break.",
       };
     }
 
+    await prisma.xpEntry.create({
+      data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
+    });
     return {
       streak: 1,
       message: "Welcome back! Fresh start, no pressure.",
     };
   }
 
-  async getCurrentStreak(discordId: string): Promise<number> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  async getCurrentStreak(discordId: string, timezone: string = 'UTC'): Promise<number> {
+    const today = startOfDayInTZ(timezone);
 
     let streak = 0;
     let checkDate = new Date(today);
 
     while (true) {
+      const nextDay = new Date(checkDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+
       const entries = await prisma.xpEntry.findMany({
         where: {
           userId: discordId,
           createdAt: {
             gte: checkDate,
+            lt: nextDay,
           },
         },
         take: 1,

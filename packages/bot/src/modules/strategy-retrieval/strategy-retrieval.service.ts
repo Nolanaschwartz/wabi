@@ -1,3 +1,4 @@
+import { Injectable } from '@nestjs/common';
 import { QdrantClient } from '@qdrant/qdrant-js';
 import { getProvider, type ProviderConfig } from '@wabi/shared';
 
@@ -11,6 +12,7 @@ export interface StrategyPoint {
   effectivenessScore?: number;
 }
 
+@Injectable()
 export class StrategyRetrievalService {
   private qdrant: QdrantClient;
   private embeddingConfig: ProviderConfig;
