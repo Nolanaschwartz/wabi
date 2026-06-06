@@ -1,0 +1,127 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                    String   @id @default(uuid())
+  discordId             String   @unique
+  email                 String?
+  hasActiveAccess       Boolean  @default(true)
+  trialEndsAt           DateTime?
+  subscriptionStatus    String   @default("trialing")
+  consentAcceptedAt     DateTime?
+  locale                String   @default("en-US")
+  timezone              String   @default("UTC")
+  checkInsEnabled       Boolean  @default(false)
+  checkInCadence        String   @default("daily")
+  quietHoursStart       Int      @default(22)
+  quietHoursEnd         Int      @default(8)
+  lastCheckIn           DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  sessions Session[]
+
+  @@index([discordId])
+  @@index([hasActiveAccess])
+}
+
+model Session {
+  id          String   @id @default(uuid())
+  userId      String
+  expiresAt   DateTime
+  lastActivity DateTime @default(now())
+  mined       Boolean  @default(false)
+  doNotMine   Boolean  @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([lastActivity])
+}
+
+model AiConversation {
+  id        String   @id @default(uuid())
+  userId    String
+  topic     String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Mood {
+  id        String   @id @default(uuid())
+  userId    String
+  rating    Int      // 1-5
+  emoji     String
+  note      String?
+  context   String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model PlaytimeLog {
+  id        String   @id @default(uuid())
+  userId    String
+  duration  Int      // minutes
+  game      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model JournalEntry {
+  id        String   @id @default(uuid())
+  userId    String
+  content   String
+  reflection String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model XpEntry {
+  id        String   @id @default(uuid())
+  userId    String
+  amount    Int      // XP points
+  reason    String   // journal, mood, streak, etc.
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model TiltSession {
+  id        String   @id @default(uuid())
+  userId    String
+  trigger   String
+  severity  Int      // 1-10
+  technique String?
+  resolved  Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([resolved])
+  @@index([createdAt])
+}
+
+model EscalationEvent {
+  id        String   @id @default(uuid())
+  userId    String?
+  timestamp DateTime @default(now())
+  layer     String   @default("tripwire")
+
+  @@index([userId])
+  @@index([timestamp])
+}

@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.next/
+
+# Environment
+.env
+.env.local
+
+# Prisma
+packages/shared/generated/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Testing
+coverage/
+
+# Docker volumes
+postgres_data/
+qdrant_data/
+
+# Taskmaster
+.taskmaster/
+
+.scratch/

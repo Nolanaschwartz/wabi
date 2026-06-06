@@ -1,0 +1,116 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: wabi
+      POSTGRES_USER: wabi
+      POSTGRES_PASSWORD: wabi-local
+    ports:
+      - '5433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    ports:
+      - '6379:6379'
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.0
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: '6334'
+    ports:
+      - '6333:6333'
+      - '6334:6334'
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  mem0:
+    image: mem0/mem0-api-server:latest
+    environment:
+      MEM0_DB_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      MEM0_VECTOR_DB: qdrant
+      MEM0_QDRANT_URL: http://qdrant:6333
+      MEM0_EMBEDDING_MODEL: nomic-embed-text-v2-moe.Q4_K_M.gguf
+      MEM0_EMBEDDING_DIMENSION: '768'
+    ports:
+      - '8081:8081'
+
+  langfuse:
+    image: langfuse/langfuse:latest
+    environment:
+      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      NEXTAUTH_SECRET: langfuse-local-secret
+      SALT: langfuse-local-salt
+    ports:
+      - '3030:3000'
+
+  glitchtip:
+    image: glitchtip/glitchtip:latest
+    environment:
+      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      GLITCHTIP_SECRET_KEY: glitchtip-local-secret-key
+      GLITCHTIP_ALLOWED_HOSTS: '*'
+      EMAIL_ENABLED: 'false'
+    ports:
+      - '8000:8000'
+    depends_on:
+      - postgres
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      REDIS_URL: redis://redis:6379
+      QDRANT_URL: http://qdrant:6333
+      MEM0_URL: http://mem0:8081
+      EMBEDDING_BASE_URL: http://192.168.1.127:8081
+      EMBEDDING_MODEL: nomic-embed-text-v2-moe.Q4_K_M.gguf
+      COACH_BASE_URL: ${COACH_BASE_URL}
+      COACH_MODEL: ${COACH_MODEL}
+      COACH_API_KEY: ${COACH_API_KEY}
+      CLASSIFIER_BASE_URL: ${CLASSIFIER_BASE_URL}
+      CLASSIFIER_MODEL: ${CLASSIFIER_MODEL}
+      CLASSIFIER_API_KEY: ${CLASSIFIER_API_KEY}
+      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      TRIAL_DAYS: ${TRIAL_DAYS}
+       SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - mem0
+      - langfuse
+      - glitchtip
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      DISCORD_REDIRECT_URI: ${DISCORD_REDIRECT_URI}
+      LUCIA_SECRET: ${LUCIA_SECRET}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_PRICE_ID: ${STRIPE_PRICE_ID}
+      TRIAL_DAYS: ${TRIAL_DAYS}
+       SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
+    depends_on:
+      - postgres
+      - glitchtip
+    ports:
+      - '3001:3000'
+
+volumes:
+  postgres_data:
+  qdrant_data:
