@@ -1,8 +1,10 @@
+import { Injectable } from '@nestjs/common';
 export type MemoryEntry = {
   id: string;
   content: string;
 };
 
+@Injectable()
 export class MemoryStoreService {
   private enabled: boolean;
   private baseUrl: string | undefined;
@@ -19,7 +21,7 @@ export class MemoryStoreService {
     if (!this.enabled) return;
 
     try {
-      await fetch(`${this.baseUrl}/v1/memories/add`, {
+      const res = await fetch(`${this.baseUrl}/memories`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -27,8 +29,11 @@ export class MemoryStoreService {
           user_id: `mem0_${userId}`,
         }),
       });
-    } catch {
-      // Best-effort memory storage
+      if (!res.ok) {
+        console.error(`[memory] add failed: ${res.status} ${await res.text()}`);
+      }
+    } catch (err) {
+      console.error('[memory] add error', err);
     }
   }
 
@@ -39,7 +44,7 @@ export class MemoryStoreService {
     if (!this.enabled) return [];
 
     try {
-      const res = await fetch(`${this.baseUrl}/v1/memories/search`, {
+      const res = await fetch(`${this.baseUrl}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -47,12 +52,43 @@ export class MemoryStoreService {
           user_id: `mem0_${userId}`,
         }),
       });
+      if (!res.ok) {
+        console.error(
+          `[memory] search failed: ${res.status} ${await res.text()}`,
+        );
+        return [];
+      }
       const json = await res.json();
       return (json.results ?? []).map((r: any) => ({
         id: r.id,
         content: r.memory ?? '',
       }));
-    } catch {
+    } catch (err) {
+      console.error('[memory] search error', err);
+      return [];
+    }
+  }
+
+  async getAllForUser(userId: string): Promise<MemoryEntry[]> {
+    if (!this.enabled) return [];
+
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/memories?user_id=${encodeURIComponent(`mem0_${userId}`)}`,
+      );
+      if (!res.ok) {
+        console.error(
+          `[memory] getAll failed: ${res.status} ${await res.text()}`,
+        );
+        return [];
+      }
+      const json = await res.json();
+      return (json.results ?? []).map((r: any) => ({
+        id: r.id,
+        content: r.memory ?? '',
+      }));
+    } catch (err) {
+      console.error('[memory] getAll error', err);
       return [];
     }
   }
@@ -61,15 +97,17 @@ export class MemoryStoreService {
     if (!this.enabled) return;
 
     try {
-      await fetch(`${this.baseUrl}/v1/memories/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: `mem0_${userId}`,
-        }),
-      });
-    } catch {
-      // Best-effort deletion
+      const res = await fetch(
+        `${this.baseUrl}/memories?user_id=${encodeURIComponent(`mem0_${userId}`)}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) {
+        console.error(
+          `[memory] delete failed: ${res.status} ${await res.text()}`,
+        );
+      }
+    } catch (err) {
+      console.error('[memory] delete error', err);
     }
   }
 }
