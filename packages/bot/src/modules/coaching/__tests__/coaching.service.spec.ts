@@ -7,6 +7,7 @@ import { StrategyRetrievalService } from '../../strategy-retrieval/strategy-retr
 import { BurstCoalescer } from '../../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../../billing/access-resolver';
+import { MemoryStoreService } from '../../memory/memory-store.service';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
@@ -69,6 +70,12 @@ jest.mock('../../billing/access-resolver', () => ({
   })),
 }));
 
+jest.mock('../../memory/memory-store.service', () => ({
+  MemoryStoreService: jest.fn().mockImplementation(() => ({
+    deriveAndStore: jest.fn(),
+  })),
+}));
+
 describe('CoachingService', () => {
   let service: CoachingService;
   let classifier: jest.Mocked<ClassifierService>;
@@ -78,6 +85,7 @@ describe('CoachingService', () => {
   let burstCoalescer: jest.Mocked<BurstCoalescer>;
   let langfuseTracer: jest.Mocked<LangfuseTracer>;
   let accessResolver: jest.Mocked<AccessResolver>;
+  let memoryStore: jest.Mocked<MemoryStoreService>;
 
   const mockMessage = {
     author: { id: '123', bot: false },
@@ -97,6 +105,7 @@ describe('CoachingService', () => {
     burstCoalescer = new BurstCoalescer() as any;
     langfuseTracer = new LangfuseTracer() as any;
     accessResolver = new AccessResolver() as any;
+    memoryStore = new MemoryStoreService() as any;
     service = new CoachingService(
       classifier,
       coach,
@@ -105,6 +114,7 @@ describe('CoachingService', () => {
       burstCoalescer,
       langfuseTracer,
       accessResolver,
+      memoryStore,
     );
   });
 
@@ -125,13 +135,11 @@ describe('CoachingService', () => {
     expect(classifier.classify).not.toHaveBeenCalled();
   });
 
-  it('shows subscribe link for lapsed access after crisis check', async () => {
+  it('shows subscribe link for lapsed access (before any classifier work)', async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
-    classifier.classify.mockResolvedValue('safe');
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: false,
       subscriptionStatus: 'past_due',
@@ -139,7 +147,7 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage, jest.fn());
 
-    expect(classifier.classify).toHaveBeenCalled();
+    expect(classifier.classify).not.toHaveBeenCalled();
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
         content: expect.stringContaining('Subscribe'),
@@ -153,8 +161,13 @@ describe('CoachingService', () => {
       discordId: '123',
       consentAcceptedAt: new Date(),
     });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('batch');
     classifier.classify.mockResolvedValue('crisis');
+    strategyRetrieval.search.mockResolvedValue([]);
 
     const onCrisis = jest.fn();
     await service.handle(mockMessage, onCrisis);
@@ -200,18 +213,50 @@ describe('CoachingService', () => {
     expect(burstCoalescer.cancel).toHaveBeenCalledWith('123');
   });
 
-  it('classifier runs for lapsed users (crisis still escalates)', async () => {
+  it('classifier and retrieval run concurrently (pipeline order)', async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('i want to end it');
-    classifier.classify.mockResolvedValue('crisis');
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
 
-    const onCrisis = jest.fn();
-    await service.handle(mockMessage, onCrisis);
+    await service.handle(mockMessage, jest.fn());
 
-    expect(classifier.classify).toHaveBeenCalled();
-    expect(onCrisis).toHaveBeenCalled();
+    expect(classifier.classify).toHaveBeenCalledWith('test message');
+    expect(strategyRetrieval.search).toHaveBeenCalledWith('test message');
+    expect(coach.generate).toHaveBeenCalled();
+    expect(memoryStore.deriveAndStore).toHaveBeenCalledWith(
+      '123',
+      expect.stringContaining('test message'),
+    );
+  });
+
+  it('coaches even when retrieval fails (graceful degradation)', async () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockRejectedValue(new Error('qdrant down'));
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
+
+    await service.handle(mockMessage, jest.fn());
+
+    expect(coach.generate).toHaveBeenCalled();
+    expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
 });

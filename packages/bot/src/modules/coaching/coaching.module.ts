@@ -7,6 +7,7 @@ import { StrategyRetrievalModule } from '../strategy-retrieval/strategy-retrieva
 import { BurstCoalescerModule } from '../burst-coalescer/burst-coalescer.module';
 import { LangfuseModule } from '../langfuse/langfuse.module';
 import { BillingModule } from '../billing/billing.module';
+import { MemoryModule } from '../memory/memory.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { BillingModule } from '../billing/billing.module';
     BurstCoalescerModule,
     LangfuseModule,
     BillingModule,
+    MemoryModule,
   ],
   providers: [ClassifierService, CoachService, CoachingService],
   exports: [CoachingService],

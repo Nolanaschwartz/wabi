@@ -8,6 +8,7 @@ import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retriev
 import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../billing/access-resolver';
+import { MemoryStoreService } from '../memory/memory-store.service';
 
 export class CoachingService {
   constructor(
@@ -18,6 +19,7 @@ export class CoachingService {
     private readonly burstCoalescer: BurstCoalescer,
     private readonly langfuseTracer: LangfuseTracer,
     private readonly accessResolver: AccessResolver,
+    private readonly memoryStore: MemoryStoreService,
   ) {}
 
   async handle(
@@ -40,6 +42,16 @@ export class CoachingService {
       return;
     }
 
+    const access = await this.accessResolver.resolve(userId);
+    if (!access.hasActiveAccess) {
+      const subscribeUrl = process.env.DISCORD_REDIRECT_URI?.replace('/callback', '/subscribe')
+        || 'https://wabi.gg/subscribe';
+      await message.reply({
+        content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,
+      });
+      return;
+    }
+
     if (message.channel instanceof DMChannel) {
       await message.channel.sendTyping();
     }
@@ -49,7 +61,10 @@ export class CoachingService {
       return;
     }
 
-    const classification = await this.classifier.classify(batch);
+    const [classification, strategies] = await Promise.all([
+      this.classifier.classify(batch),
+      this.strategyRetrieval.search(batch).catch(() => []),
+    ]);
 
     if (classification === 'crisis') {
       this.burstCoalescer.cancel(userId);
@@ -62,17 +77,6 @@ export class CoachingService {
 
     this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
 
-    const access = await this.accessResolver.resolve(userId);
-    if (!access.hasActiveAccess) {
-      const subscribeUrl = process.env.DISCORD_REDIRECT_URI?.replace('/callback', '/subscribe')
-        || 'https://wabi.gg/subscribe';
-      await message.reply({
-        content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,
-      });
-      return;
-    }
-
-    const strategies = await this.strategyRetrieval.search(batch);
     const context = await this.buildContext(userId, batch, strategies);
 
     const coachStart = Date.now();
@@ -86,6 +90,8 @@ export class CoachingService {
 
     await this.sessionBuffer.append(userId, 'user', message.content);
     await this.sessionBuffer.append(userId, 'assistant', reply);
+
+    await this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
 
     this.langfuseTracer.trace(traceId, 'coach', context, reply, { latencyMs: coachLatency });
 

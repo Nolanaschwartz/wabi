@@ -48,7 +48,7 @@ export class MemoryStoreService {
         }),
       });
       const json = await res.json();
-      return (json.results ?? []).map((r) => ({
+      return (json.results ?? []).map((r: any) => ({
         id: r.id,
         content: r.memory ?? '',
       }));
