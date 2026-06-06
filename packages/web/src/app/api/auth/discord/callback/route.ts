@@ -30,26 +30,21 @@ export async function GET(request: NextRequest): Promise<Response> {
 		if (existingUser) {
 			const session = await lucia.createSession(existingUser.id, {});
 			const sessionCookie = lucia.createSessionCookie(session.id);
-			const response = NextResponse.redirect("/");
+			const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/dashboard`);
 			response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
 			return response;
 		}
-
-		const trialEndsAt = new Date(Date.now() + parseInt(process.env.TRIAL_DAYS || "7") * 24 * 60 * 60 * 1000);
 
 		const newUser = await prisma.user.create({
 			data: {
 				discordId: discordUser.id,
 				email: discordUser.email,
-				consentAcceptedAt: new Date(),
-				trialEndsAt,
-				subscriptionStatus: "trialing",
 			},
 		});
 
 		const session = await lucia.createSession(newUser.id, {});
 		const sessionCookie = lucia.createSessionCookie(session.id);
-		const response = NextResponse.redirect("/");
+		const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/consent`);
 		response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
 
 		return response;
