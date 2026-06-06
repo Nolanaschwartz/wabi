@@ -12,7 +12,8 @@ model User {
   id                    String   @id @default(uuid())
   discordId             String   @unique
   email                 String?
-  hasActiveAccess       Boolean  @default(true)
+  stripeCustomerId      String?  @unique
+  hasActiveAccess       Boolean  @default(false)
   trialEndsAt           DateTime?
   subscriptionStatus    String   @default("trialing")
   consentAcceptedAt     DateTime?
@@ -30,6 +31,7 @@ model User {
 
   @@index([discordId])
   @@index([hasActiveAccess])
+  @@index([stripeCustomerId])
 }
 
 model Session {
@@ -139,6 +141,15 @@ model EscalationEvent {
 
   @@index([userId])
   @@index([timestamp])
+}
+
+model ProcessedStripeEvent {
+  id        String   @id
+  type      String
+  updatedAt DateTime @updatedAt
+
+  @@unique([id])
+  @@index([type])
 }
 
 model StrategyDraft {

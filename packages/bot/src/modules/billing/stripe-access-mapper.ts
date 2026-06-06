@@ -32,6 +32,7 @@ export class StripeAccessMapper {
 }
 
 export interface StripeWebhookEvent {
+  id?: string;
   type:
     | 'customer.subscription.created'
     | 'customer.subscription.updated'

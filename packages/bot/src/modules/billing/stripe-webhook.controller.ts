@@ -1,10 +1,18 @@
 import { Controller, Post, Req, Res, RawBodyRequest } from '@nestjs/common';
 import { StripeAccessMapper, type StripeWebhookEvent } from './stripe-access-mapper';
 import { AccessResolver } from './access-resolver';
+import { prisma } from '@wabi/shared';
+import Stripe from 'stripe';
 
 @Controller('webhooks/stripe')
 export class StripeWebhookController {
-  constructor(private readonly accessResolver: AccessResolver) {}
+  private stripe: InstanceType<typeof Stripe>;
+
+  constructor(private readonly accessResolver: AccessResolver) {
+    this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? '', {
+      typescript: true,
+    });
+  }
 
   @Post()
   async handle(
@@ -20,22 +28,51 @@ export class StripeWebhookController {
       return;
     }
 
-    if (!this.verifySignature(rawBody, signature, webhookSecret)) {
+    let event: any;
+    try {
+      event = this.stripe.webhooks.constructEvent(
+        rawBody.toString(),
+        signature,
+        webhookSecret,
+      );
+    } catch {
       res.status(401).send('Invalid signature');
       return;
     }
 
+    if (event.type !== 'customer.subscription.created' &&
+        event.type !== 'customer.subscription.updated' &&
+        event.type !== 'customer.subscription.deleted') {
+      res.status(200).send('Ignored');
+      return;
+    }
+
     try {
-      const event = JSON.parse(rawBody.toString()) as StripeWebhookEvent;
-      const state = StripeAccessMapper.map(event);
+      const processed = await this.isProcessed(event.id);
+      if (processed) {
+        res.status(200).send('Duplicate');
+        return;
+      }
+
+      const stripeEvent = this.toWebhookEvent(event);
+      const state = StripeAccessMapper.map(stripeEvent);
 
       if (!state) {
         res.status(200).send('Ignored');
         return;
       }
 
-      const discordId = event.data.customerId;
-      await this.accessResolver.apply(discordId, state);
+      const user = await prisma.user.findFirst({
+        where: { stripeCustomerId: stripeEvent.data.customerId },
+      });
+
+      if (!user) {
+        res.status(404).send('User not found');
+        return;
+      }
+
+      await this.accessResolver.apply(user.discordId, state);
+      await this.markProcessed(event.id);
 
       res.status(200).send('OK');
     } catch {
@@ -43,36 +80,35 @@ export class StripeWebhookController {
     }
   }
 
-  private verifySignature(
-    payload: Buffer,
-    signature: string,
-    secret: string,
-  ): boolean {
-    const [timestamp, signed] = signature.split('v1,');
-    if (!timestamp || !signed) return false;
-
-    const expected = this.hmacSHA256(
-      `${timestamp}.${payload.toString()}`,
-      secret,
-    );
-
-    return this.constantTimeCompare(expected, signed);
+  private async isProcessed(eventId: string): Promise<boolean> {
+    const existing = await prisma.processedStripeEvent.findUnique({
+      where: { id: eventId },
+    });
+    return !!existing;
   }
 
-  private hmacSHA256(data: string, key: string): string {
-    const crypto = require('crypto');
-    return crypto
-      .createHmac('sha256', key)
-      .update(data)
-      .digest('hex');
-  }
-
-  private constantTimeCompare(a: string, b: string): boolean {
-    const crypto = require('crypto');
+  private async markProcessed(eventId: string): Promise<void> {
     try {
-      return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+      await prisma.processedStripeEvent.create({
+        data: {
+          id: eventId,
+          type: 'stripe_event',
+        },
+      });
     } catch {
-      return false;
+      // Duplicate — already processed by concurrent request
     }
+  }
+
+  private toWebhookEvent(event: any): StripeWebhookEvent {
+    const sub = event.data.object as any;
+    return {
+      id: event.id,
+      type: event.type,
+      data: {
+        customerId: sub.customer as string,
+        status: sub.status,
+      },
+    };
   }
 }

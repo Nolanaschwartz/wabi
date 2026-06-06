@@ -20,12 +20,12 @@
     "@wabi/shared": "workspace:*",
     "ai": "^6.0.197",
     "discord.js": "^14.18.0",
-    
     "necord": "^6.0.0",
     "pg-boss": "^12.18.2",
     "redis": "^4.7.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "stripe": "^22.2.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
@@ -50,9 +50,12 @@
       "**/*.spec.ts"
     ],
     "transform": {
-      "^.+\\.ts$": ["ts-jest", {
-        "diagnostics": false
-      }]
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "diagnostics": false
+        }
+      ]
     },
     "setupFilesAfterEnv": [
       "<rootDir>/jest.setup.ts"

@@ -17,7 +17,7 @@ export class AccessResolver {
     const trialActive =
       user.trialEndsAt != null && user.trialEndsAt > new Date();
     const stripeActive =
-      user.subscriptionStatus === 'active';
+      user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing';
 
     return {
       hasActiveAccess: trialActive || stripeActive,

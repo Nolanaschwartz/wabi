@@ -47,7 +47,7 @@ describe('AccessResolver', () => {
     });
 
     const result = await resolver.resolve('123');
-    expect(result.hasActiveAccess).toBe(false);
+    expect(result.hasActiveAccess).toBe(true);
   });
 
   it('grants access on active stripe subscription', async () => {
