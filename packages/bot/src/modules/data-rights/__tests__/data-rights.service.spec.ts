@@ -27,7 +27,7 @@ jest.mock('@wabi/shared', () => ({
 jest.mock('../../memory/memory-store.service', () => ({
   MemoryStoreService: jest.fn().mockImplementation(() => ({
     deleteAllForUser: jest.fn(),
-    search: jest.fn(),
+    getAllForUser: jest.fn(),
   })),
 }));
 
@@ -55,14 +55,18 @@ describe('DataRightsService', () => {
     (prisma.escalationEvent.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.session.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.tiltSession.findMany as jest.Mock).mockResolvedValue([]);
-    (memoryStore.search as jest.Mock).mockResolvedValue([]);
+    (memoryStore.getAllForUser as jest.Mock).mockResolvedValue([
+      { id: 'm1', content: 'Tilts in ranked' },
+    ]);
 
     const data = await service.export('123');
     const parsed = JSON.parse(data);
 
     expect(parsed.user.discordId).toBe('123');
     expect(parsed.tilt).toEqual([]);
-    expect(parsed.memory).toEqual([]);
+    // #34: derived Memory is exported via getAllForUser (not the empty-query search).
+    expect(memoryStore.getAllForUser).toHaveBeenCalledWith('123');
+    expect(parsed.memory).toEqual([{ id: 'm1', content: 'Tilts in ranked' }]);
   });
 
   it('deletes all user data atomically in transaction', async () => {
