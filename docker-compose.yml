@@ -26,15 +26,30 @@ services:
       - qdrant_data:/qdrant/storage
 
   mem0:
-    image: mem0/mem0-api-server:latest
+    build:
+      context: ./infra/mem0
     environment:
-      MEM0_DB_URL: postgresql://wabi:wabi-local@postgres:5432/mem0
-      MEM0_VECTOR_DB: qdrant
-      MEM0_QDRANT_URL: http://qdrant:6333
-      MEM0_EMBEDDING_MODEL: nomic-embed-text-v2-moe.Q4_K_M.gguf
-      MEM0_EMBEDDING_DIMENSION: '768'
+      # LLM for memory extraction (self-controlled, OpenAI-compatible). ADR-0017 (amended): the
+      # extraction LLM is a personal-data sub-processor, so it stays on the self-controlled tier.
+      MEM0_LLM_BASE_URL: ${COACH_BASE_URL}
+      MEM0_LLM_MODEL: ${COACH_MODEL}
+      MEM0_LLM_API_KEY: ${COACH_API_KEY:-not-needed}
+      # Embedder (llama.cpp OpenAI-compatible; lmstudio provider avoids the dimensions= param)
+      MEM0_EMBEDDER_BASE_URL: ${EMBEDDING_BASE_URL}/v1
+      MEM0_EMBEDDER_MODEL: ${EMBEDDING_MODEL}
+      MEM0_EMBEDDER_API_KEY: ${EMBEDDING_API_KEY:-not-needed}
+      MEM0_EMBEDDING_DIMS: '768'
+      # Vector store: self-hosted Qdrant (host+port; no api_key). Graph store disabled (no neo4j).
+      MEM0_QDRANT_HOST: qdrant
+      MEM0_QDRANT_PORT: '6333'
+      MEM0_QDRANT_COLLECTION: wabi_memories
+      HISTORY_DB_PATH: /app/history/history.db
     ports:
       - '8081:8081'
+    depends_on:
+      - qdrant
+    volumes:
+      - mem0_history:/app/history
 
     
 
@@ -60,15 +75,15 @@ services:
       REDIS_URL: redis://redis:6379
       QDRANT_URL: http://qdrant:6333
       MEM0_URL: http://mem0:8081
-      EMBEDDING_BASE_URL: http://192.168.1.127:8081
-      EMBEDDING_MODEL: nomic-embed-text-v2-moe.Q4_K_M.gguf
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
       COACH_BASE_URL: ${COACH_BASE_URL}
       COACH_MODEL: ${COACH_MODEL}
       COACH_API_KEY: ${COACH_API_KEY}
       CLASSIFIER_BASE_URL: ${CLASSIFIER_BASE_URL}
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL}
       CLASSIFIER_API_KEY: ${CLASSIFIER_API_KEY}
-      LANGFUSE_HOST: http://192.168.1.178:3000
+      LANGFUSE_HOST: ${LANGFUSE_HOST}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
@@ -105,3 +120,4 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  mem0_history:

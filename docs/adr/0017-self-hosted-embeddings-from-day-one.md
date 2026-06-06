@@ -13,3 +13,15 @@ Wabi self-hosts a single OpenAI-compatible **embedding** endpoint (e.g. TEI/Infi
 - An embedding service is added to `docker-compose`; both `qdrant.ts` and Mem0 point at it via a configurable endpoint (no hard-coded `new OpenAI()` for embeddings).
 - Qdrant `VECTOR_SIZE = 768` (was 1536); the seed/retrieval code and any fixtures follow.
 - The chat LLM remains the one external sub-processor for the PoC, disclosed in consent (ADR-0009) and swappable to local as the destination.
+
+## Amendment (2026-06-06): "self-hosted" → "self-controlled single-tenant"; mem0 extraction LLM is personal-data tier
+
+Production runs on a cloud platform (Railway) that cannot reach the LAN inference boxes used in dev (`192.168.1.x`). We resolve this **without** weakening the privacy stance:
+
+- **"Self-hosted" is generalized to "self-controlled."** Personal-data sub-processors may run on a **privately-managed, single-tenant, OpenAI-compatible endpoint that Wabi controls** (own VPS/GPU host, or a single-tenant managed deployment), reachable over the network with an API key — not only same-LAN. **"External" (forbidden for personal data) means third-party *multi-tenant* services.** The endpoint must guarantee **no training on, and no retention of, request data.**
+- **One artifact ships dev→prod**, differing only by env (`*_BASE_URL` / `*_API_KEY`): LAN endpoints in dev, the managed single-tenant endpoint in prod.
+- **mem0's memory-extraction LLM is a personal-data sub-processor.** It reads raw conversation text to derive memories, so under this ADR's own privacy-asymmetry principle it sits on the **personal-data (self-controlled) tier** — it may NOT be a public external chat API, even though ADR-0009/0017 let the *coaching* chat LLM stay external longest. (Crisis content is never mined — ADR-0010/0016 — so it never reaches the extraction LLM at all.)
+- **The Memory store stays self-hosted regardless:** Qdrant (vectors) + SQLite history live in Wabi's own infra; only embedding/extraction *compute* is the managed endpoint. The graph store (neo4j) is **not used** in v1 (vector-only; graph memory is optional in mem0 and unused).
+- The embedding model in practice is `nomic-embed-text-v2-moe` (768-dim), not `bge-base`; the 768-dim lock-in above is unaffected.
+
+See remediation issue #37 (inference topology) and #04/#23 (mem0 deployable image).
