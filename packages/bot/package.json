@@ -50,7 +50,12 @@
       "**/*.spec.ts"
     ],
     "transform": {
-      "^.+\\.ts$": "ts-jest"
-    }
+      "^.+\\.ts$": ["ts-jest", {
+        "diagnostics": false
+      }]
+    },
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.ts"
+    ]
   }
 }

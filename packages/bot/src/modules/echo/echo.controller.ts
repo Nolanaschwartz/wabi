@@ -7,7 +7,6 @@ import { CoachingService } from '../coaching/coaching.service';
 import { prisma } from '@wabi/shared';
 
 @Controller()
-@On('messageCreate')
 export class EchoController {
   constructor(
     private readonly crisisScreening: CrisisScreeningService,
@@ -15,6 +14,7 @@ export class EchoController {
     private readonly coaching: CoachingService,
   ) {}
 
+  @On('messageCreate')
   async handleMessage(message: Message): Promise<void> {
     if (message.author.bot) return;
     if (!message.channel.isDMBased()) return;
