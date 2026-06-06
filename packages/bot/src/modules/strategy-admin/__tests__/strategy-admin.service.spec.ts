@@ -191,6 +191,35 @@ describe('StrategyAdminService', () => {
     expect(result?.status).toBe('quarantined');
   });
 
+  it('adjusts evidence level and persists the change', async () => {
+    (prisma.strategyDraft.update as jest.Mock).mockResolvedValue({
+      id: '1',
+      title: 'Test',
+      technique: 'Test',
+      source: 'Test',
+      evidence: 'RCT meta-analysis',
+      sourceText: null,
+      sourceUrl: 'https://test.com',
+      trustLevel: 'community',
+      status: 'pending-review',
+      negativeCount: 0,
+    });
+
+    const result = await service.setEvidenceLevel('1', 'RCT meta-analysis');
+
+    expect(prisma.strategyDraft.update).toHaveBeenCalledWith({
+      where: { id: '1' },
+      data: { evidence: 'RCT meta-analysis' },
+    });
+    expect(result?.evidence).toBe('RCT meta-analysis');
+  });
+
+  it('returns null when adjusting evidence on a non-existent draft', async () => {
+    (prisma.strategyDraft.update as jest.Mock).mockRejectedValue(new Error('not found'));
+    const result = await service.setEvidenceLevel('999', 'whatever');
+    expect(result).toBeNull();
+  });
+
   it('returns null for non-existent draft approval', async () => {
     (prisma.strategyDraft.update as jest.Mock).mockRejectedValue(new Error('not found'));
     const result = await service.approveDraft('999');

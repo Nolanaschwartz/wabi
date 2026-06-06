@@ -57,6 +57,15 @@ export class StrategyAdminService {
     return updated ? this.toDraft(updated) : null;
   }
 
+  async setEvidenceLevel(id: string, evidence: string): Promise<StrategyDraft | null> {
+    const updated = await prisma.strategyDraft.update({
+      where: { id },
+      data: { evidence },
+    }).catch(() => null);
+
+    return updated ? this.toDraft(updated) : null;
+  }
+
   async recordNegativeFeedback(draftId: string): Promise<void> {
     const draft = await prisma.strategyDraft.findUnique({ where: { id: draftId } });
     if (!draft || draft.status !== 'published') return;

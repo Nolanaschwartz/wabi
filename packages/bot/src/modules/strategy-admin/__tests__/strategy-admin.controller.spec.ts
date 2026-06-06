@@ -13,6 +13,7 @@ describe('StrategyAdminController', () => {
       rejectDraft: jest.fn(),
       submitDraft: jest.fn(),
       recordNegativeFeedback: jest.fn(),
+      setEvidenceLevel: jest.fn(),
     } as any;
     controller = new StrategyAdminController(service);
   });
@@ -43,5 +44,12 @@ describe('StrategyAdminController', () => {
     const res = await controller.reject('1');
     expect(res?.status).toBe('quarantined');
     expect(service.rejectDraft).toHaveBeenCalledWith('1');
+  });
+
+  it('adjusts evidence level by id', async () => {
+    service.setEvidenceLevel.mockResolvedValue({ id: '1', evidence: 'RCT meta-analysis' } as any);
+    const res = await controller.setEvidence('1', 'RCT meta-analysis');
+    expect(res?.evidence).toBe('RCT meta-analysis');
+    expect(service.setEvidenceLevel).toHaveBeenCalledWith('1', 'RCT meta-analysis');
   });
 });

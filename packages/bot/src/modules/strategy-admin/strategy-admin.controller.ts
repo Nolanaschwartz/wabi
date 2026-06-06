@@ -1,7 +1,9 @@
-import { Controller, Get, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
 import { StrategyAdminService } from './strategy-admin.service';
+import { AdminGuard } from './admin.guard';
 
 @Controller('admin/strategies')
+@UseGuards(AdminGuard)
 export class StrategyAdminController {
   constructor(private readonly admin: StrategyAdminService) {}
 
@@ -25,5 +27,11 @@ export class StrategyAdminController {
   @HttpCode(HttpStatus.OK)
   async reject(@Body('id') id: string) {
     return this.admin.rejectDraft(id);
+  }
+
+  @Post(':id/evidence')
+  @HttpCode(HttpStatus.OK)
+  async setEvidence(@Param('id') id: string, @Body('evidence') evidence: string) {
+    return this.admin.setEvidenceLevel(id, evidence);
   }
 }
