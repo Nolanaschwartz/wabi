@@ -73,6 +73,10 @@ export class SessionBufferService {
     await this.client.del(this.sessionKey(userId));
   }
 
+  async clear(userId: string): Promise<void> {
+    await this.endSession(userId);
+  }
+
   async clearAndQuarantine(userId: string): Promise<void> {
     await this.client.del(this.sessionKey(userId));
     await this.client.set(`wabi:quarantine:${userId}`, 'true', { EX: 86400 });
