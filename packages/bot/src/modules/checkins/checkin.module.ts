@@ -6,8 +6,7 @@ import { CoachingModule } from '../coaching/coaching.module';
 
 @Module({
   imports: [CoachingModule],
-  providers: [CheckInService, CheckInScheduler],
-  controllers: [CheckInController],
+  providers: [CheckInService, CheckInScheduler, CheckInController],
   exports: [CheckInService],
 })
 export class CheckInModule {}

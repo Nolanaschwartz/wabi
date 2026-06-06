@@ -1,9 +1,9 @@
-import { Controller } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { TiltService } from './tilt.service';
 
-@Controller()
+@Injectable()
 @SlashCommand({ name: 'tilt', description: 'Manage tilt sessions' })
 export class TiltController {
   constructor(private readonly tiltService: TiltService) {}

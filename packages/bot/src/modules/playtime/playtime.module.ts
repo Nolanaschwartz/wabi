@@ -5,8 +5,7 @@ import { MemoryModule } from '../memory/memory.module';
 
 @Module({
   imports: [MemoryModule],
-  providers: [PlaytimeService],
-  controllers: [PlaytimeController],
+  providers: [PlaytimeService, PlaytimeController],
   exports: [PlaytimeService],
 })
 export class PlaytimeModule {}

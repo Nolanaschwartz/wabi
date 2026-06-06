@@ -3,8 +3,7 @@ import { MoodService } from './mood.service';
 import { MoodController } from './mood.controller';
 
 @Module({
-  providers: [MoodService],
-  controllers: [MoodController],
+  providers: [MoodService, MoodController],
   exports: [MoodService],
 })
 export class MoodModule {}

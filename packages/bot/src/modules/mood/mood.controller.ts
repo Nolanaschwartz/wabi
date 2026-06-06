@@ -1,9 +1,9 @@
-import { Controller } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { MoodService } from './mood.service';
 
-@Controller()
+@Injectable()
 @SlashCommand({ name: 'mood', description: 'Log your mood' })
 export class MoodController {
   constructor(private readonly moodService: MoodService) {}

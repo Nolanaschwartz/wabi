@@ -1,17 +1,19 @@
-import { Controller } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { On } from 'necord';
 import { Message } from 'discord.js';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
 import { CrisisResourcesService } from '../crisis/crisis-resources.service';
 import { CoachingService } from '../coaching/coaching.service';
+import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { prisma } from '@wabi/shared';
 
-@Controller()
+@Injectable()
 export class EchoController {
   constructor(
     private readonly crisisScreening: CrisisScreeningService,
     private readonly crisisResources: CrisisResourcesService,
     private readonly coaching: CoachingService,
+    private readonly crisisAftermath: CrisisAftermathService,
   ) {}
 
   @On('messageCreate')
@@ -20,6 +22,10 @@ export class EchoController {
     if (!message.channel.isDMBased()) return;
 
     if (this.crisisScreening.tripwire(message.content)) {
+      // Cancel-on-crisis: a crisis message arriving mid-burst must kill any pending coach turn
+      // for this user (e.g. a benign first message still debouncing), so no cheerful reply is
+      // sent alongside the crisis resources. (Issue #06 / #25.)
+      this.coaching.cancelPending(message.author.id);
       await this.handleCrisis(message);
       return;
     }
@@ -67,5 +73,7 @@ export class EchoController {
     } catch {
       // Best-effort logging
     }
+
+    await this.crisisAftermath.onEscalation(message.author.id);
   }
 }

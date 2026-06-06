@@ -6,8 +6,7 @@ import { XpModule } from '../xp/xp.module';
 
 @Module({
   imports: [CoachingModule, XpModule],
-  providers: [JournalService],
-  controllers: [JournalController],
+  providers: [JournalService, JournalController],
   exports: [JournalService],
 })
 export class JournalModule {}

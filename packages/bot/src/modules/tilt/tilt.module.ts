@@ -5,8 +5,7 @@ import { StrategyRetrievalModule } from '../strategy-retrieval/strategy-retrieva
 
 @Module({
   imports: [StrategyRetrievalModule],
-  providers: [TiltService],
-  controllers: [TiltController],
+  providers: [TiltService, TiltController],
   exports: [TiltService],
 })
 export class TiltModule {}

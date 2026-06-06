@@ -5,8 +5,7 @@ import { MemoryModule } from '../memory/memory.module';
 
 @Module({
   imports: [MemoryModule],
-  providers: [DataRightsService],
-  controllers: [DataRightsController],
+  providers: [DataRightsService, DataRightsController],
   exports: [DataRightsService],
 })
 export class DataRightsModule {}

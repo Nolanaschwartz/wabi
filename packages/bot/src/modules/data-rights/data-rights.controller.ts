@@ -1,9 +1,9 @@
-import { Controller } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { DataRightsService } from './data-rights.service';
 
-@Controller()
+@Injectable()
 @SlashCommand({ name: 'data', description: 'Manage your data' })
 export class DataRightsController {
   constructor(private readonly dataRightsService: DataRightsService) {}

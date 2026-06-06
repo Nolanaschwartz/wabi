@@ -1,10 +1,10 @@
-import { Controller } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { PlaytimeService } from './playtime.service';
 import { MemoryStoreService } from '../memory/memory-store.service';
 
-@Controller()
+@Injectable()
 @SlashCommand({ name: 'playtime', description: 'Log and track playtime' })
 export class PlaytimeController {
   constructor(

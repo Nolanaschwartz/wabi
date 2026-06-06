@@ -1,27 +1,73 @@
+jest.mock('pg-boss', () => ({
+  PgBoss: jest.fn().mockImplementation(() => ({
+    start: jest.fn(),
+    createQueue: jest.fn(),
+    work: jest.fn(),
+    schedule: jest.fn(),
+    stop: jest.fn(),
+  })),
+}));
+
+jest.mock('@wabi/shared', () => ({
+  prisma: {
+    user: { findUnique: jest.fn().mockResolvedValue({ locale: 'en-US' }) },
+    escalationEvent: { create: jest.fn().mockResolvedValue({}) },
+  },
+}));
+
+import { Test } from '@nestjs/testing';
+import { DiscoveryModule, DiscoveryService, MetadataScanner, Reflector } from '@nestjs/core';
+import { Listener } from 'necord';
 import { EchoController } from '../echo.controller';
 
 describe('EchoController', () => {
   describe('listener registration', () => {
-    it('@On(messageCreate) decorator is on the handler method (verified by design:type)', () => {
-      const proto = EchoController.prototype;
-      // TypeScript's emitDecoratorMetadata emits design:type metadata for each decorated member.
-      // If the decorator is on the method, design:type should be Function.
-      // If the decorator was on the class, design:type would NOT be on the method.
-      const methodDesignType = Reflect.getMetadata('design:type', proto, 'handleMessage');
-      expect(methodDesignType).toBe(Function);
-    });
+    // necord's explorer discovers listeners by scanning Nest PROVIDERS
+    // (DiscoveryService.getProviders()) — never controllers. This test reproduces
+    // that exact discovery so it fails if the handler regresses to a controller-only
+    // registration (the original bug: the @On listener was never wired to the client).
+    it('necord discovers the messageCreate listener from the provider graph', async () => {
+      const moduleRef = await Test.createTestingModule({
+        imports: [DiscoveryModule],
+        providers: [
+          {
+            provide: EchoController,
+            useValue: new EchoController(
+              { tripwire: jest.fn() } as any,
+              {} as any,
+              { handle: jest.fn() } as any,
+              {} as any,
+            ),
+          },
+        ],
+      }).compile();
 
-    it('handleMessage has correct parameter types (Message)', () => {
-      const proto = EchoController.prototype;
-      const params = Reflect.getMetadata('design:paramtypes', proto, 'handleMessage');
-      expect(params).toHaveLength(1);
-      expect(params[0].name).toBe('Message');
-    });
+      const discovery = moduleRef.get(DiscoveryService);
+      const scanner = moduleRef.get(MetadataScanner);
+      const reflector = moduleRef.get(Reflector);
 
-    it('@On is NOT on the class (class only has @Controller)', () => {
-      // Class decorator metadata is stored on the constructor function.
-      const classParams = Reflect.getMetadata('design:paramtypes', EchoController);
-      expect(classParams).toHaveLength(3); // crisisScreening, crisisResources, coaching
+      // Mirror NecordExplorerService: only providers are scanned for @On metadata.
+      const discovered = discovery
+        .getProviders()
+        .filter((w) => w.instance && Object.getPrototypeOf(w.instance))
+        .flatMap((w) => {
+          const proto = Object.getPrototypeOf(w.instance);
+          return scanner.getAllMethodNames(proto).map((method) => ({
+            cls: w.instance.constructor,
+            listener: reflector.get(Listener, (w.instance as any)[method]),
+          }));
+        })
+        .filter((x) => x.listener);
+
+      const messageCreate = discovered.find(
+        (x) => x.listener.getEvent() === 'messageCreate',
+      );
+
+      expect(messageCreate).toBeDefined();
+      expect(messageCreate!.listener.getType()).toBe('on');
+      expect(messageCreate!.cls).toBe(EchoController);
+
+      await moduleRef.close();
     });
   });
 
@@ -34,6 +80,7 @@ describe('EchoController', () => {
         { tripwire: mockTripwire } as any,
         null!,
         { handle: mockHandle } as any,
+        {} as any,
       );
 
       const message = {
@@ -55,6 +102,7 @@ describe('EchoController', () => {
         { tripwire: mockTripwire } as any,
         null!,
         { handle: mockHandle } as any,
+        {} as any,
       );
 
       const message = {
@@ -66,6 +114,54 @@ describe('EchoController', () => {
       await controller.handleMessage(message);
       expect(mockTripwire).not.toHaveBeenCalled();
       expect(mockHandle).not.toHaveBeenCalled();
+    });
+
+    it('dispatches a real DM to the coaching pipeline', async () => {
+      const mockTripwire = jest.fn().mockReturnValue(false);
+      const mockHandle = jest.fn();
+
+      const controller = new EchoController(
+        { tripwire: mockTripwire } as any,
+        null!,
+        { handle: mockHandle } as any,
+        {} as any,
+      );
+
+      const message = {
+        author: { bot: false, id: '123' },
+        channel: { isDMBased: () => true },
+        content: 'i played ranked all night',
+      } as any;
+
+      await controller.handleMessage(message);
+      expect(mockTripwire).toHaveBeenCalledWith('i played ranked all night');
+      expect(mockHandle).toHaveBeenCalledWith(message, expect.any(Function));
+    });
+
+    it('cancels a pending coach turn when a tripwire crisis arrives mid-burst', async () => {
+      const cancelPending = jest.fn();
+      const handle = jest.fn();
+      const controller = new EchoController(
+        { tripwire: jest.fn().mockReturnValue(true) } as any,
+        { resourcesFor: () => ({ resources: [] }) } as any,
+        { handle, cancelPending } as any,
+        { onEscalation: jest.fn().mockResolvedValue(undefined) } as any,
+      );
+
+      const message = {
+        author: { bot: false, id: '123' },
+        channel: { isDMBased: () => true },
+        content: 'i want to end it',
+        reply: jest.fn().mockResolvedValue({}),
+      } as any;
+
+      await controller.handleMessage(message);
+
+      // Pending coach turn is canceled (no cheerful reply), and we don't run the coach pipeline.
+      expect(cancelPending).toHaveBeenCalledWith('123');
+      expect(handle).not.toHaveBeenCalled();
+      // Crisis resources are still delivered.
+      expect(message.reply).toHaveBeenCalled();
     });
   });
 });

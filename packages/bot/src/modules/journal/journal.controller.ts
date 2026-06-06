@@ -1,10 +1,10 @@
-import { Controller } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { JournalService } from './journal.service';
 import { XpService } from '../xp/xp.service';
 
-@Controller()
+@Injectable()
 @SlashCommand({ name: 'journal', description: 'Journal and reflect' })
 export class JournalController {
   constructor(
