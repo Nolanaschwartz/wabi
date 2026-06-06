@@ -3,7 +3,7 @@ import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
-    xpEntry: { findFirst: jest.fn(), findMany: jest.fn() },
+    xpEntry: { findFirst: jest.fn(), findMany: jest.fn(), create: jest.fn() },
     journalEntry: { findMany: jest.fn() },
   },
 }));
@@ -23,6 +23,36 @@ describe('StreaksService', () => {
 
     expect(result.streak).toBe(1);
     expect(result.message).toContain('Welcome');
+    expect(prisma.xpEntry.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount: 10, reason: 'coaching' }) }),
+    );
+  });
+
+  it('skips XP award on same-day activity', async () => {
+    (prisma.xpEntry.findFirst as jest.Mock).mockResolvedValue({
+      createdAt: new Date(),
+    });
+    (prisma.xpEntry.findMany as jest.Mock).mockResolvedValue([]);
+
+    const result = await service.checkAndAward('123');
+
+    expect(result.message).toBe('');
+    expect(prisma.xpEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('uses timezone for day boundaries', async () => {
+    const yesterdayPacific = new Date();
+    yesterdayPacific.setDate(yesterdayPacific.getDate() - 1);
+
+    (prisma.xpEntry.findFirst as jest.Mock).mockResolvedValue({
+      createdAt: yesterdayPacific,
+    });
+    (prisma.xpEntry.findMany as jest.Mock).mockResolvedValue([]);
+
+    const result = await service.checkAndAward('123', 'America/Los_Angeles');
+
+    expect(result.streak).toBeGreaterThanOrEqual(1);
+    expect(prisma.xpEntry.create).toHaveBeenCalled();
   });
 
   it('continues streak for consecutive day', async () => {
