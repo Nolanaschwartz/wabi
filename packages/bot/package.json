@@ -19,7 +19,9 @@
     "@wabi/shared": "workspace:*",
     "ai": "^6.0.197",
     "discord.js": "^14.18.0",
+    "mem0ai": "^3.0.6",
     "necord": "^6.0.0",
+    "pg-boss": "^12.18.2",
     "redis": "^4.7.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
