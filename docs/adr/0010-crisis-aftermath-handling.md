@@ -12,7 +12,16 @@ Wabi logs only that an **Escalation Event** occurred — a timestamp and which l
 
 ## One gentle follow-up
 
-Wabi may send a single, opt-out, caring follow-up later (re-surfacing resources) — never repeated nagging (ADR-0008 spirit).
+Wabi may send a single, opt-out, caring follow-up later (re-surfacing resources) — never repeated nagging (ADR-0008 spirit). This follow-up is a **durable scheduled job** (ADR-0018), not an in-memory timer, so a restart never drops it.
+
+## Never derive Memory from an escalated session
+
+The crisis *message* is never stored (screen-before-store). But because Memory is derived from a whole session at session end (ADR-0016), a session in which escalation fired could still leak an ideation history through the *derived* layer — e.g. a Memory like "felt hopeless after a loss." That is exactly the history this ADR refuses to keep, sneaking in through derivation. Therefore, when escalation fires:
+
+- **Clear the live Redis session buffer** immediately, and
+- **Flag the session `do-not-mine`** so the session-end sweeper (ADR-0016) never derives Memory from it.
+
+Conversationally, Wabi re-screens every subsequent turn and stays protective: continued crisis language re-surfaces resources (varied, not identical), and coaching may resume only on a clear safe pivot — from the cleared buffer.
 
 ## Why
 

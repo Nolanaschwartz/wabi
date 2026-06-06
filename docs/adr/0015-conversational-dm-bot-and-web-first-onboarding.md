@@ -10,9 +10,15 @@ This **amends the delivery mechanism** of ADR-0003 (DM-first stands; "user-insta
 - **Hybrid (user-install slash + classic-bot DM)** — rejected for v1 as two installation/permission models to build and reconcile.
 - **Classic bot + hub server (chosen)** — the only model that delivers a real conversational DM companion. Costs: a mutual/hub server is required to open a DM, the `MessageContent` privileged intent must be enabled (and approved by Discord at 100+ servers), and the ADR-0003 invite URL must change from `integration_type=1&scope=applications.commands` to a `scope=bot applications.commands` install.
 
+## Hub-server onboarding (mutual-guild mechanics)
+
+A classic bot can only DM a person it shares a server with, so onboarding must land the person in a single Wabi **hub server**. The person joins via an **explicit invite link** (the post-checkout "Start talking to Wabi" CTA) — Wabi does **not** auto-add them (no `guilds.join` scope; OAuth stays `identify email`), preserving ADR-0003's "never adds anyone to a server."
+
+The hub is **locked down**: regular members have **no viewable channels**, so they see no member-list sidebar and cannot enumerate other members. This neutralizes the otherwise-real leak that "membership in a mental-health bot's server" is socially observable (ADR-0001/0002). The `guildMemberAdd` event on the hub fires the welcome DM (Task 23) and confirms the DM channel works. A stray join *without* prior OAuth still lands safely on the "unconsented DM → setup link" path.
+
 ## Consequences
 
-- **Onboarding is web-first; usage is DM-first.** Landing → "Connect Discord" (OAuth) creates the `User`, sets `consentAcceptedAt` and `trialEndsAt`, and points the person at the hub server. Only then is a DM productive.
+- **Onboarding is web-first; usage is DM-first.** Landing → "Connect Discord" (OAuth) creates the `User`, sets `consentAcceptedAt` and `trialEndsAt`, then the "Start" CTA links the person into the hub server. Only then is a DM productive.
 - **The DM pipeline order is fixed:** `tripwire` (pre-consent, safety) → user lookup → consent gate → access gate → `screenForCrisis` classifier → coach + `storeMemory`. An unknown/unconsented DM gets the tripwire plus a "finish setup" link, **never** coaching, and **never** a `User` upsert.
 - **`startTrialIfNew` moves to the OAuth route.** The DM path's job becomes "the DM path must never create a `User`," which is a stronger version of the single-entrypoint rule ADR-0011 introduced.
 - **`MessageContent` is a launch-gate dependency** (Discord review for a mental-health DM-reading bot) and a privacy surface to disclose in consent (ADR-0009).
