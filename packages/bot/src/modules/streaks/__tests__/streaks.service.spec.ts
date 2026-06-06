@@ -4,7 +4,6 @@ import { prisma } from '@wabi/shared';
 jest.mock('@wabi/shared', () => ({
   prisma: {
     xpEntry: { findFirst: jest.fn(), findMany: jest.fn() },
-    mood: { findMany: jest.fn() },
     journalEntry: { findMany: jest.fn() },
   },
 }));
@@ -56,7 +55,6 @@ describe('StreaksService', () => {
 
   it('returns profile with XP and wellness score', async () => {
     (prisma.xpEntry.findMany as jest.Mock).mockResolvedValue([]);
-    (prisma.mood.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.journalEntry.findMany as jest.Mock).mockResolvedValue([]);
 
     const profile = await service.profile('123');
@@ -64,5 +62,16 @@ describe('StreaksService', () => {
     expect(profile.xp).toBe(0);
     expect(profile.streak).toBe(0);
     expect(typeof profile.wellnessScore).toBe('number');
+  });
+
+  it('wellness score never reads Mood or Tilt data (privacy)', async () => {
+    (prisma.xpEntry.findMany as jest.Mock).mockResolvedValue([{ createdAt: new Date() }]);
+    (prisma.journalEntry.findMany as jest.Mock).mockResolvedValue([]);
+
+    await service.wellnessScore('123');
+
+    // wellnessScore should only query xpEntry and journalEntry, never mood/tilt
+    expect(prisma.xpEntry.findMany).toHaveBeenCalled();
+    expect(prisma.journalEntry.findMany).toHaveBeenCalled();
   });
 });

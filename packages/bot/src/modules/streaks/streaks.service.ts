@@ -86,11 +86,8 @@ export class StreaksService {
     const days = 30;
     const since = new Date(Date.now() - days * 86400000);
 
-    const [xpEntries, moods, journals] = await Promise.all([
+    const [xpEntries, journals] = await Promise.all([
       prisma.xpEntry.findMany({
-        where: { userId: discordId, createdAt: { gte: since } },
-      }),
-      prisma.mood.findMany({
         where: { userId: discordId, createdAt: { gte: since } },
       }),
       prisma.journalEntry.findMany({
@@ -98,7 +95,7 @@ export class StreaksService {
       }),
     ]);
 
-    const activities = xpEntries.length + moods.length + journals.length;
+    const activities = xpEntries.length + journals.length;
     const score = Math.min(100, Math.round((activities / days) * 100));
 
     const level = score >= 80 ? '🌟 Wellness Champion' :
