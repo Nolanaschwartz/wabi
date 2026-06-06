@@ -14,6 +14,7 @@
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
+    "@qdrant/qdrant-js": "^1.18.0",
     "@sentry/node": "^10.56.0",
     "@wabi/shared": "workspace:*",
     "ai": "^6.0.197",

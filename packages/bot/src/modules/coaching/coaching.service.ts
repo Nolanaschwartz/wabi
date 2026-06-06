@@ -1,13 +1,17 @@
 import { prisma } from '@wabi/shared';
-import { ClassifierService, type ClassifierResult } from './classifier.service';
+import { ClassifierService } from './classifier.service';
 import { CoachService } from './coach.service';
 import { splitMessage } from './message-splitter';
 import { Message, DMChannel } from 'discord.js';
+import { SessionBufferService } from '../session-buffer/session-buffer.service';
+import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 
 export class CoachingService {
   constructor(
     private readonly classifier: ClassifierService,
     private readonly coach: CoachService,
+    private readonly sessionBuffer: SessionBufferService,
+    private readonly strategyRetrieval: StrategyRetrievalService,
   ) {}
 
   async handle(
@@ -43,21 +47,54 @@ export class CoachingService {
     const classification = await this.classifier.classify(message.content);
 
     if (classification === 'crisis') {
+      await this.sessionBuffer.clearAndQuarantine(user.discordId);
       await this.logEscalation(user.discordId, 'classifier');
       await onCrisis();
       return;
     }
 
-    const reply = await this.coach.generate(message.content);
+    const strategies = await this.strategyRetrieval.search(message.content);
+    const context = await this.buildContext(
+      user.discordId,
+      message.content,
+      strategies,
+    );
+
+    const reply = await this.coach.generate(context);
     if (!reply) {
       await message.reply("I'm not sure how to respond to that right now. Want to try again?");
       return;
     }
 
+    await this.sessionBuffer.append(user.discordId, 'user', message.content);
+    await this.sessionBuffer.append(user.discordId, 'assistant', reply);
+
     const parts = splitMessage(reply);
     for (const part of parts) {
       await message.reply(part);
     }
+  }
+
+  private async buildContext(
+    userId: string,
+    currentMessage: string,
+    strategies: Array<{ content: string; evidence: string }>,
+  ): Promise<string> {
+    const session = await this.sessionBuffer.getContext(userId);
+    const turnHistory = session?.turns
+      .map((t) => `${t.role}: ${t.content}`)
+      .join('\n')
+      .trim();
+
+    const strategyContext = strategies.length > 0
+      ? `\nRelevant strategies:\n${strategies.map((s) => `- ${s.content} (${s.evidence})`).join('\n')}`
+      : '';
+
+    let context = `Conversation history:\n${turnHistory || 'No prior turns'}`;
+    context += strategyContext;
+    context += `\n\nCurrent message: ${currentMessage}`;
+
+    return context;
   }
 
   private async logEscalation(userId: string, layer: string): Promise<void> {
