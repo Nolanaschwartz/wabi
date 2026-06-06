@@ -2,6 +2,7 @@ import { On } from 'necord';
 import { Message } from 'discord.js';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
 import { CrisisResourcesService } from '../crisis/crisis-resources.service';
+import { CoachingService } from '../coaching/coaching.service';
 import { prisma } from '@wabi/shared';
 
 @On('messageCreate')
@@ -9,9 +10,10 @@ export class EchoController {
   constructor(
     private readonly crisisScreening: CrisisScreeningService,
     private readonly crisisResources: CrisisResourcesService,
+    private readonly coaching: CoachingService,
   ) {}
 
-  async handleEcho(message: Message): Promise<void> {
+  async handleMessage(message: Message): Promise<void> {
     if (message.author.bot) return;
     if (!message.channel.isDMBased()) return;
 
@@ -20,11 +22,15 @@ export class EchoController {
       return;
     }
 
-    await message.reply(`Echo: ${message.content}`);
+    await this.coaching.handle(message, async () => this.handleCrisis(message));
   }
 
   private async handleCrisis(message: Message): Promise<void> {
-    const resources = this.crisisResources.resourcesFor('en-US');
+    const user = await prisma.user.findUnique({
+      where: { discordId: message.author.id },
+    });
+    const locale = user?.locale ?? 'en-US';
+    const resources = this.crisisResources.resourcesFor(locale);
 
     const resourceLines = resources.resources.map((r) => {
       if (r.type === 'web') return `• ${r.name}: ${r.url}`;
@@ -57,8 +63,7 @@ export class EchoController {
         },
       });
     } catch {
-      // Escalation event logging may fail if Postgres is down — that's OK.
-      // The safety floor still worked: resources were surfaced.
+      // Best-effort logging
     }
   }
 }

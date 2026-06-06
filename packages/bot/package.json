@@ -10,11 +10,13 @@
     "test:watch": "jest --watch"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^3.0.68",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",
     "@sentry/node": "^10.56.0",
     "@wabi/shared": "workspace:*",
+    "ai": "^6.0.197",
     "discord.js": "^14.18.0",
     "necord": "^6.0.0",
     "redis": "^4.7.0",
