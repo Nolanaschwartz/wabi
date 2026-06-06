@@ -21,6 +21,16 @@ describe('BurstCoalescer', () => {
     expect(result).toBe('hello\nworld');
   });
 
+  it('returns null for interim messages (no dangling promises)', async () => {
+    const promise = coalescer.coalesce('123', 'hello');
+    const interim = coalescer.coalesce('123', 'world');
+
+    expect(interim).toBeNull();
+    jest.advanceTimersByTime(3001);
+    const result = await promise;
+    expect(result).toBe('hello\nworld');
+  });
+
   it('cancels pending turn on crisis', async () => {
     const promise = coalescer.coalesce('123', 'hello');
 
@@ -47,5 +57,18 @@ describe('BurstCoalescer', () => {
     jest.advanceTimersByTime(3001);
     const result = await promise;
     expect(result).toBe('only message');
+  });
+
+  it('burst resolves exactly once (no duplicate coach turns)', async () => {
+    const p1 = coalescer.coalesce('123', 'msg1');
+    const p2 = coalescer.coalesce('123', 'msg2');
+    const p3 = coalescer.coalesce('123', 'msg3');
+
+    expect(p2).toBeNull();
+    expect(p3).toBeNull();
+
+    jest.advanceTimersByTime(3001);
+    const result = await p1;
+    expect(result).toBe('msg1\nmsg2\nmsg3');
   });
 });

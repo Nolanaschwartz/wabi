@@ -57,7 +57,7 @@ export class CoachingService {
     }
 
     const batch = await this.burstCoalescer.coalesce(userId, message.content);
-    if (batch === '__canceled__') {
+    if (!batch || batch === '__canceled__') {
       return;
     }
 

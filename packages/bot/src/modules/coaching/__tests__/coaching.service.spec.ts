@@ -54,6 +54,7 @@ jest.mock('../../burst-coalescer/burst-coalescer.service', () => ({
   BurstCoalescer: jest.fn().mockImplementation(() => ({
     coalesce: jest.fn(),
     cancel: jest.fn(),
+    addMessage: jest.fn(),
   })),
 }));
 
@@ -237,6 +238,23 @@ describe('CoachingService', () => {
       '123',
       expect.stringContaining('test message'),
     );
+  });
+
+  it('skips interim messages when coalesce returns null', async () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockReturnValue(null);
+
+    await service.handle(mockMessage, jest.fn());
+
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(coach.generate).not.toHaveBeenCalled();
   });
 
   it('coaches even when retrieval fails (graceful degradation)', async () => {

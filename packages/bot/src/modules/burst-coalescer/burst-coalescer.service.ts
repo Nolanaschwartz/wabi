@@ -14,22 +14,21 @@ export class BurstCoalescer {
   private hourlyCounts = new Map<string, number>();
   private hourlyResets = new Map<string, number>();
 
-  coalesce(userId: string, initialMessage?: string): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const existing = this.pending.get(userId);
-      if (existing) {
-        if (initialMessage) existing.messages.push(initialMessage);
-        return;
-      }
+  coalesce(userId: string, initialMessage?: string): Promise<string> | null {
+    const existing = this.pending.get(userId);
+    if (existing) {
+      if (initialMessage) existing.messages.push(initialMessage);
+      return null;
+    }
 
-      const hourlyLimit = this.getHourlyLimit(userId);
-      if (this.isOverCeiling(userId, hourlyLimit)) {
-        resolve(
-          "I care about our conversations, and I want to give each one the attention it deserves. Let's take these one at a time — what's on your mind?",
-        );
-        return;
-      }
+    const hourlyLimit = this.getHourlyLimit(userId);
+    if (this.isOverCeiling(userId, hourlyLimit)) {
+      return Promise.resolve(
+        "I care about our conversations, and I want to give each one the attention it deserves. Let's take these one at a time — what's on your mind?",
+      );
+    }
 
+    return new Promise<string>((resolve) => {
       const turn: CoalescedTurn = {
         messages: initialMessage ? [initialMessage] : [],
         resolve,
