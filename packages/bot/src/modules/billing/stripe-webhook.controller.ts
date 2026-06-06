@@ -71,7 +71,18 @@ export class StripeWebhookController {
         return;
       }
 
-      await this.accessResolver.apply(user.discordId, state);
+      // Out-of-order guard (#27): Stripe does not guarantee delivery order. A stale
+      // `updated` (active) delivered after a `deleted` must not resurrect access. Compare the
+      // event's creation time against the last applied one and drop anything strictly older.
+      // (Exact redeliveries are already short-circuited by the event-id dedup above.)
+      const eventCreatedAt = new Date((event.created ?? 0) * 1000);
+      if (user.lastStripeEventAt && eventCreatedAt < user.lastStripeEventAt) {
+        await this.markProcessed(event.id);
+        res.status(200).send('Stale');
+        return;
+      }
+
+      await this.accessResolver.apply(user.discordId, state, eventCreatedAt);
       await this.markProcessed(event.id);
 
       res.status(200).send('OK');

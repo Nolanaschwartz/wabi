@@ -1,4 +1,4 @@
-import { AccessResolver } from '../access-resolver';
+import { AccessResolver, decideAccess } from '../access-resolver';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
@@ -39,15 +39,17 @@ describe('AccessResolver', () => {
     expect(result.hasActiveAccess).toBe(true);
   });
 
-  it('denies access on expired trial', async () => {
+  it('denies access on expired trial with a terminal subscription status', async () => {
+    // Regression: this case previously used subscriptionStatus 'trialing' and asserted `true`,
+    // so it never actually tested denial. A genuinely expired user has a terminal status.
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       trialEndsAt: new Date(Date.now() - 86400000),
-      subscriptionStatus: 'trialing',
+      subscriptionStatus: 'canceled',
     });
 
     const result = await resolver.resolve('123');
-    expect(result.hasActiveAccess).toBe(true);
+    expect(result.hasActiveAccess).toBe(false);
   });
 
   it('grants access on active stripe subscription', async () => {
@@ -80,5 +82,63 @@ describe('AccessResolver', () => {
       where: { discordId: '123' },
       data: { hasActiveAccess: true, subscriptionStatus: 'active' },
     });
+  });
+
+  it('records lastStripeEventAt when an event timestamp is supplied', async () => {
+    (prisma.user.update as jest.Mock).mockResolvedValue({});
+    const eventAt = new Date('2026-06-06T00:00:00Z');
+    await resolver.apply('123', { hasActiveAccess: false, subscriptionStatus: 'canceled' }, eventAt);
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { discordId: '123' },
+      data: {
+        hasActiveAccess: false,
+        subscriptionStatus: 'canceled',
+        lastStripeEventAt: eventAt,
+      },
+    });
+  });
+});
+
+describe('decideAccess (pure)', () => {
+  const now = new Date('2026-06-06T00:00:00Z');
+  const past = new Date('2026-06-01T00:00:00Z');
+  const future = new Date('2026-06-30T00:00:00Z');
+
+  it('denies access for a null user', () => {
+    expect(decideAccess(null, now)).toEqual({
+      hasActiveAccess: false,
+      subscriptionStatus: 'canceled',
+    });
+  });
+
+  it('grants access while the app-managed trial is active', () => {
+    expect(
+      decideAccess({ trialEndsAt: future, subscriptionStatus: 'trialing' }, now).hasActiveAccess,
+    ).toBe(true);
+  });
+
+  it('grants access for an active stripe subscription even after the trial', () => {
+    expect(
+      decideAccess({ trialEndsAt: past, subscriptionStatus: 'active' }, now).hasActiveAccess,
+    ).toBe(true);
+  });
+
+  it('grants access for trialing stripe status', () => {
+    expect(
+      decideAccess({ trialEndsAt: past, subscriptionStatus: 'trialing' }, now).hasActiveAccess,
+    ).toBe(true);
+  });
+
+  it('denies access for past_due', () => {
+    expect(
+      decideAccess({ trialEndsAt: past, subscriptionStatus: 'past_due' }, now).hasActiveAccess,
+    ).toBe(false);
+  });
+
+  it('denies access for an expired trial with a canceled status', () => {
+    expect(
+      decideAccess({ trialEndsAt: past, subscriptionStatus: 'canceled' }, now).hasActiveAccess,
+    ).toBe(false);
   });
 });
