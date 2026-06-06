@@ -4,6 +4,10 @@ node_modules/
 # Build outputs
 dist/
 .next/
+packages/shared/src/*.js
+packages/shared/src/*.js.map
+packages/shared/src/*.d.ts
+packages/shared/src/*.d.ts.map
 
 # Environment
 .env
