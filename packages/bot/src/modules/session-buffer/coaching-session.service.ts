@@ -38,12 +38,22 @@ export class CoachingSessionService {
   }
 
   async quarantine(discordId: string) {
-    await prisma.coachingSession.update({
-      where: { discordId },
-      data: { doNotMine: true },
-    }).catch(() => {
-      // Session may not exist yet — no-op
-    });
+    // Upsert so a tripwire-first crisis (no prior coaching turn -> no session row) still
+    // records the do-not-mine flag. This Postgres column is the single source of truth the
+    // sweeper reads (issue #24 / ADR-0010/0016).
+    await prisma.coachingSession
+      .upsert({
+        where: { discordId },
+        create: {
+          discordId,
+          expiresAt: new Date(Date.now() + SESSION_IDLE_MS),
+          doNotMine: true,
+        },
+        update: { doNotMine: true },
+      })
+      .catch((err) => {
+        console.error('[coaching-session] quarantine failed', err);
+      });
   }
 
   async isQuarantined(discordId: string): Promise<boolean> {

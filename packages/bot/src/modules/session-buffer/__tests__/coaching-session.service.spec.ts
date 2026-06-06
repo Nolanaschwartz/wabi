@@ -81,19 +81,20 @@ describe('CoachingSessionService', () => {
     });
   });
 
-  it('quarantines session', async () => {
-    (prisma.coachingSession.update as jest.Mock).mockResolvedValue({});
+  it('quarantines session via upsert (creates row if tripwire-first)', async () => {
+    (prisma.coachingSession.upsert as jest.Mock).mockResolvedValue({});
 
     await service.quarantine('123');
 
-    expect(prisma.coachingSession.update).toHaveBeenCalledWith({
+    expect(prisma.coachingSession.upsert).toHaveBeenCalledWith({
       where: { discordId: '123' },
-      data: { doNotMine: true },
+      create: expect.objectContaining({ discordId: '123', doNotMine: true }),
+      update: { doNotMine: true },
     });
   });
 
-  it('quarantine no-ops on missing session', async () => {
-    (prisma.coachingSession.update as jest.Mock).mockRejectedValue(new Error('not found'));
+  it('quarantine is resilient to db errors', async () => {
+    (prisma.coachingSession.upsert as jest.Mock).mockRejectedValue(new Error('db down'));
 
     await expect(service.quarantine('999')).resolves.not.toThrow();
   });
