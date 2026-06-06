@@ -8,6 +8,8 @@ import { BurstCoalescerModule } from '../burst-coalescer/burst-coalescer.module'
 import { LangfuseModule } from '../langfuse/langfuse.module';
 import { BillingModule } from '../billing/billing.module';
 import { MemoryModule } from '../memory/memory.module';
+import { CrisisAftermathModule } from '../crisis-aftermath/crisis-aftermath.module';
+import { StreaksModule } from '../streaks/streaks.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { MemoryModule } from '../memory/memory.module';
     LangfuseModule,
     BillingModule,
     MemoryModule,
+    CrisisAftermathModule,
+    StreaksModule,
   ],
   providers: [ClassifierService, CoachService, CoachingService],
   exports: [CoachingService],

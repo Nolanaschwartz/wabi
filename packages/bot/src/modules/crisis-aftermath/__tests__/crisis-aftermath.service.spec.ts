@@ -22,12 +22,14 @@ jest.mock('pg-boss', () => ({
 describe('CrisisAftermathService', () => {
   let service: CrisisAftermathService;
   let sessionBuffer: jest.Mocked<SessionBufferService>;
+  let coachingSession: { quarantine: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
     sessionBuffer = new SessionBufferService() as any;
     sessionBuffer.clearAndQuarantine = jest.fn().mockResolvedValue(undefined);
-    service = new CrisisAftermathService(sessionBuffer);
+    coachingSession = { quarantine: jest.fn().mockResolvedValue(undefined) };
+    service = new CrisisAftermathService(sessionBuffer, coachingSession as any);
     await service.init();
   });
 
@@ -36,12 +38,17 @@ describe('CrisisAftermathService', () => {
     expect(sessionBuffer.clearAndQuarantine).toHaveBeenCalledWith('123');
   });
 
+  it('sets the Postgres do-not-mine flag on escalation (single source of truth)', async () => {
+    await service.onEscalation('123');
+    expect(coachingSession.quarantine).toHaveBeenCalledWith('123');
+  });
+
   it('schedules follow-up job', async () => {
     await service.onEscalation('123');
   });
 
   it('does not init when disabled', async () => {
-    const disabledService = new CrisisAftermathService(sessionBuffer);
+    const disabledService = new CrisisAftermathService(sessionBuffer, coachingSession as any);
     (disabledService as any).enabled = false;
     await disabledService.init();
   });

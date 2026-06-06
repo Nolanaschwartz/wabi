@@ -9,6 +9,8 @@ import { BurstCoalescer } from '../../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../../billing/access-resolver';
 import { MemoryStoreService } from '../../memory/memory-store.service';
+import { CrisisAftermathService } from '../../crisis-aftermath/crisis-aftermath.service';
+import { StreaksService } from '../../streaks/streaks.service';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
@@ -16,6 +18,9 @@ jest.mock('@wabi/shared', () => ({
       findUnique: jest.fn(),
     },
     escalationEvent: {
+      create: jest.fn(),
+    },
+    xpEntry: {
       create: jest.fn(),
     },
   },
@@ -75,12 +80,27 @@ jest.mock('../../billing/access-resolver', () => ({
 jest.mock('../../memory/memory-store.service', () => ({
   MemoryStoreService: jest.fn().mockImplementation(() => ({
     deriveAndStore: jest.fn(),
+    search: jest.fn().mockResolvedValue([]),
   })),
 }));
 
 jest.mock('../../session-buffer/coaching-session.service', () => ({
   CoachingSessionService: jest.fn().mockImplementation(() => ({
     touch: jest.fn(),
+    quarantine: jest.fn(),
+  })),
+}));
+
+jest.mock('../../crisis-aftermath/crisis-aftermath.service', () => ({
+  CrisisAftermathService: jest.fn(() => ({
+    onEscalation: jest.fn(),
+    isQuarantined: jest.fn().mockResolvedValue(false),
+  })),
+}));
+
+jest.mock('../../streaks/streaks.service', () => ({
+  StreaksService: jest.fn(() => ({
+    checkAndAward: jest.fn().mockResolvedValue({ streak: 1, message: '' }),
   })),
 }));
 
@@ -95,6 +115,8 @@ describe('CoachingService', () => {
   let accessResolver: jest.Mocked<AccessResolver>;
   let coachingSession: jest.Mocked<CoachingSessionService>;
   let memoryStore: jest.Mocked<MemoryStoreService>;
+  let crisisAftermath: jest.Mocked<CrisisAftermathService>;
+  let streaks: jest.Mocked<StreaksService>;
 
   const mockMessage = {
     author: { id: '123', bot: false },
@@ -116,6 +138,8 @@ describe('CoachingService', () => {
     accessResolver = new AccessResolver() as any;
     coachingSession = new CoachingSessionService() as any;
     memoryStore = new MemoryStoreService() as any;
+    crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
+    streaks = (StreaksService as jest.Mock)() as any;
     service = new CoachingService(
       classifier,
       coach,
@@ -126,6 +150,8 @@ describe('CoachingService', () => {
       langfuseTracer,
       accessResolver,
       memoryStore,
+      crisisAftermath,
+      streaks,
     );
   });
 
@@ -133,6 +159,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: null,
+      timezone: 'UTC',
     });
 
     await service.handle(mockMessage, jest.fn());
@@ -150,6 +177,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
+      timezone: 'UTC',
     });
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: false,
@@ -171,6 +199,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
+      timezone: 'UTC',
     });
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: true,
@@ -200,6 +229,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
+      timezone: 'UTC',
     });
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
     classifier.classify.mockResolvedValue('safe');
@@ -209,6 +239,9 @@ describe('CoachingService', () => {
     });
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
+    (memoryStore.search as jest.Mock).mockResolvedValue([
+      { id: 'm1', content: 'Tilts in ranked after losing two games in a row' },
+    ]);
     coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
 
     await service.handle(mockMessage, jest.fn());
@@ -216,6 +249,12 @@ describe('CoachingService', () => {
     expect(coach.generate).toHaveBeenCalled();
     expect(strategyRetrieval.search).toHaveBeenCalled();
     expect(sessionBuffer.append).toHaveBeenCalled();
+    // Read-back: retrieved memory is injected into the coach prompt.
+    expect(memoryStore.search).toHaveBeenCalledWith('123', 'test message');
+    expect(coach.generate).toHaveBeenCalledWith(
+      expect.stringContaining('Tilts in ranked'),
+      false,
+    );
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
 
@@ -228,6 +267,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
+      timezone: 'UTC',
     });
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: true,
@@ -254,6 +294,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
+      timezone: 'UTC',
     });
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: true,
@@ -271,6 +312,7 @@ describe('CoachingService', () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
+      timezone: 'UTC',
     });
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: true,
