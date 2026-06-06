@@ -5,6 +5,9 @@ import { splitMessage } from './message-splitter';
 import { Message, DMChannel } from 'discord.js';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
+import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
+import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
+import { AccessResolver } from '../billing/access-resolver';
 
 export class CoachingService {
   constructor(
@@ -12,14 +15,20 @@ export class CoachingService {
     private readonly coach: CoachService,
     private readonly sessionBuffer: SessionBufferService,
     private readonly strategyRetrieval: StrategyRetrievalService,
+    private readonly burstCoalescer: BurstCoalescer,
+    private readonly langfuseTracer: LangfuseTracer,
+    private readonly accessResolver: AccessResolver,
   ) {}
 
   async handle(
     message: Message,
     onCrisis: () => Promise<void>,
   ): Promise<void> {
+    const userId = message.author.id;
+    const traceId = crypto.randomUUID();
+
     const user = await prisma.user.findUnique({
-      where: { discordId: message.author.id },
+      where: { discordId: userId },
     });
 
     if (!user || !user.consentAcceptedAt) {
@@ -31,7 +40,30 @@ export class CoachingService {
       return;
     }
 
-    if (!user.hasActiveAccess) {
+    if (message.channel instanceof DMChannel) {
+      await message.channel.sendTyping();
+    }
+
+    const batch = await this.burstCoalescer.coalesce(userId, message.content);
+    if (batch === '__canceled__') {
+      return;
+    }
+
+    const classification = await this.classifier.classify(batch);
+
+    if (classification === 'crisis') {
+      this.burstCoalescer.cancel(userId);
+      await this.sessionBuffer.clearAndQuarantine(userId);
+      await this.logEscalation(userId, 'classifier');
+      this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
+      await onCrisis();
+      return;
+    }
+
+    this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
+
+    const access = await this.accessResolver.resolve(userId);
+    if (!access.hasActiveAccess) {
       const subscribeUrl = process.env.DISCORD_REDIRECT_URI?.replace('/callback', '/subscribe')
         || 'https://wabi.gg/subscribe';
       await message.reply({
@@ -40,39 +72,31 @@ export class CoachingService {
       return;
     }
 
-    if (message.channel instanceof DMChannel) {
-      await message.channel.sendTyping();
-    }
+    const strategies = await this.strategyRetrieval.search(batch);
+    const context = await this.buildContext(userId, batch, strategies);
 
-    const classification = await this.classifier.classify(message.content);
-
-    if (classification === 'crisis') {
-      await this.sessionBuffer.clearAndQuarantine(user.discordId);
-      await this.logEscalation(user.discordId, 'classifier');
-      await onCrisis();
-      return;
-    }
-
-    const strategies = await this.strategyRetrieval.search(message.content);
-    const context = await this.buildContext(
-      user.discordId,
-      message.content,
-      strategies,
-    );
-
+    const coachStart = Date.now();
     const reply = await this.coach.generate(context);
+    const coachLatency = Date.now() - coachStart;
+
     if (!reply) {
       await message.reply("I'm not sure how to respond to that right now. Want to try again?");
       return;
     }
 
-    await this.sessionBuffer.append(user.discordId, 'user', message.content);
-    await this.sessionBuffer.append(user.discordId, 'assistant', reply);
+    await this.sessionBuffer.append(userId, 'user', message.content);
+    await this.sessionBuffer.append(userId, 'assistant', reply);
+
+    this.langfuseTracer.trace(traceId, 'coach', context, reply, { latencyMs: coachLatency });
 
     const parts = splitMessage(reply);
     for (const part of parts) {
       await message.reply(part);
     }
+  }
+
+  cancelPending(userId: string): void {
+    this.burstCoalescer.cancel(userId);
   }
 
   private async buildContext(

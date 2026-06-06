@@ -4,6 +4,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Partials } from 'discord.js';
 import { EchoModule } from './modules/echo/echo.module';
 import { HealthModule } from './modules/health/health.module';
+import { BillingModule } from './modules/billing/billing.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { HealthModule } from './modules/health/health.module';
     }),
     EchoModule,
     HealthModule,
+    BillingModule,
   ],
 })
 export class AppModule {}
