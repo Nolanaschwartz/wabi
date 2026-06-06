@@ -1,7 +1,9 @@
+import { Controller } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { CheckInService } from './checkin.service';
 
+@Controller()
 @SlashCommand({ name: 'checkins', description: 'Manage your check-in preferences' })
 export class CheckInController {
   constructor(private readonly checkInService: CheckInService) {}

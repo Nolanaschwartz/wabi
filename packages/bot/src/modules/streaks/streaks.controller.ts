@@ -1,7 +1,9 @@
+import { Controller } from '@nestjs/common';
 import { SlashCommand } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { StreaksService } from './streaks.service';
 
+@Controller()
 @SlashCommand({ name: 'profile', description: 'View your wellness profile' })
 export class StreaksController {
   constructor(private readonly streaksService: StreaksService) {}

@@ -1,3 +1,4 @@
+import { Controller } from '@nestjs/common';
 import { On } from 'necord';
 import { Message } from 'discord.js';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
@@ -5,6 +6,7 @@ import { CrisisResourcesService } from '../crisis/crisis-resources.service';
 import { CoachingService } from '../coaching/coaching.service';
 import { prisma } from '@wabi/shared';
 
+@Controller()
 @On('messageCreate')
 export class EchoController {
   constructor(
