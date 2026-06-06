@@ -2,7 +2,6 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: wabi
       POSTGRES_USER: wabi
       POSTGRES_PASSWORD: wabi-local
     ports:
@@ -29,7 +28,7 @@ services:
   mem0:
     image: mem0/mem0-api-server:latest
     environment:
-      MEM0_DB_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      MEM0_DB_URL: postgresql://wabi:wabi-local@postgres:5432/mem0
       MEM0_VECTOR_DB: qdrant
       MEM0_QDRANT_URL: http://qdrant:6333
       MEM0_EMBEDDING_MODEL: nomic-embed-text-v2-moe.Q4_K_M.gguf
@@ -37,19 +36,12 @@ services:
     ports:
       - '8081:8081'
 
-  langfuse:
-    image: langfuse/langfuse:latest
-    environment:
-      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
-      NEXTAUTH_SECRET: langfuse-local-secret
-      SALT: langfuse-local-salt
-    ports:
-      - '3030:3000'
+    
 
   glitchtip:
     image: glitchtip/glitchtip:latest
     environment:
-      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/glitchtip
       GLITCHTIP_SECRET_KEY: glitchtip-local-secret-key
       GLITCHTIP_ALLOWED_HOSTS: '*'
       EMAIL_ENABLED: 'false'
@@ -76,7 +68,7 @@ services:
       CLASSIFIER_BASE_URL: ${CLASSIFIER_BASE_URL}
       CLASSIFIER_MODEL: ${CLASSIFIER_MODEL}
       CLASSIFIER_API_KEY: ${CLASSIFIER_API_KEY}
-      LANGFUSE_HOST: http://langfuse:3000
+      LANGFUSE_HOST: http://192.168.1.178:3000
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
@@ -88,7 +80,6 @@ services:
       - redis
       - qdrant
       - mem0
-      - langfuse
       - glitchtip
 
   web:
