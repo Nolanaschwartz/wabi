@@ -15,16 +15,17 @@ interface Strategy {
 export default function StrategyAdminPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
+  const [evidenceDraft, setEvidenceDraft] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/admin/strategies/pending`)
+    fetch('/api/admin/strategies/pending')
       .then((r) => r.json())
-      .then(setStrategies)
+      .then((data) => setStrategies(Array.isArray(data) ? data : []))
       .finally(() => setLoading(false));
   }, []);
 
   const approve = async (id: string) => {
-    await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/admin/strategies/${id}/approve`, {
+    await fetch(`/api/admin/strategies/${id}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -33,12 +34,28 @@ export default function StrategyAdminPage() {
   };
 
   const reject = async (id: string) => {
-    await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/admin/strategies/${id}/reject`, {
+    await fetch(`/api/admin/strategies/${id}/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
     });
     setStrategies((s) => s.filter((d) => d.id !== id));
+  };
+
+  const saveEvidence = async (id: string) => {
+    const evidence = evidenceDraft[id];
+    if (evidence === undefined) return;
+    await fetch(`/api/admin/strategies/${id}/evidence`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ evidence }),
+    });
+    setStrategies((s) => s.map((d) => (d.id === id ? { ...d, evidence } : d)));
+    setEvidenceDraft((e) => {
+      const next = { ...e };
+      delete next[id];
+      return next;
+    });
   };
 
   if (loading) return <div>Loading...</div>;
@@ -64,8 +81,40 @@ export default function StrategyAdminPage() {
                 {d.technique}
               </p>
               <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#9ca3af' }}>
-                Source: {d.source} | Evidence: {d.evidence} | Trust: {d.trustLevel}
+                Source: {d.source} | Trust: {d.trustLevel}
               </p>
+              <label
+                style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0 0 0.75rem', fontSize: '0.75rem', color: '#6b7280' }}
+              >
+                Evidence:
+                <input
+                  value={evidenceDraft[d.id] ?? d.evidence}
+                  onChange={(e) =>
+                    setEvidenceDraft((prev) => ({ ...prev, [d.id]: e.target.value }))
+                  }
+                  style={{
+                    flex: 1,
+                    padding: '0.25rem 0.5rem',
+                    border: '1px solid #d1d5db',
+                    borderRadius: 4,
+                    fontSize: '0.75rem',
+                  }}
+                />
+                <button
+                  onClick={() => saveEvidence(d.id)}
+                  disabled={evidenceDraft[d.id] === undefined || evidenceDraft[d.id] === d.evidence}
+                  style={{
+                    padding: '0.25rem 0.75rem',
+                    background: '#374151',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Save
+                </button>
+              </label>
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
                   onClick={() => approve(d.id)}
