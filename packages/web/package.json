@@ -12,6 +12,7 @@
     "@lucia-auth/adapter-prisma": "^4.0.1",
     "@oslojs/crypto": "^1.0.1",
     "@oslojs/encoding": "^1.1.0",
+    "@sentry/nextjs": "^10.56.0",
     "@wabi/shared": "workspace:*",
     "arctic": "^3.7.0",
     "lucia": "^3.2.2",

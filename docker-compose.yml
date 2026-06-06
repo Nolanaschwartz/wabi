@@ -46,6 +46,18 @@ services:
     ports:
       - '3030:3000'
 
+  glitchtip:
+    image: glitchtip/glitchtip:latest
+    environment:
+      DATABASE_URL: postgresql://wabi:wabi-local@postgres:5432/wabi
+      GLITCHTIP_SECRET_KEY: glitchtip-local-secret-key
+      GLITCHTIP_ALLOWED_HOSTS: '*'
+      EMAIL_ENABLED: 'false'
+    ports:
+      - '8000:8000'
+    depends_on:
+      - postgres
+
   bot:
     build:
       context: .
@@ -70,12 +82,14 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       TRIAL_DAYS: ${TRIAL_DAYS}
+       SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
     depends_on:
       - postgres
       - redis
       - qdrant
       - mem0
       - langfuse
+      - glitchtip
 
   web:
     build:
@@ -90,8 +104,10 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_PRICE_ID: ${STRIPE_PRICE_ID}
       TRIAL_DAYS: ${TRIAL_DAYS}
+       SENTRY_DSN: ${SENTRY_DSN:-http://admin:password@glitchtip:8000/1}
     depends_on:
       - postgres
+      - glitchtip
     ports:
       - '3001:3000'
 

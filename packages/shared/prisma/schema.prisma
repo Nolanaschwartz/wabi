@@ -35,3 +35,13 @@ model Session {
 
   @@index([userId])
 }
+
+model EscalationEvent {
+  id        String   @id @default(uuid())
+  userId    String?
+  timestamp DateTime @default(now())
+  layer     String   @default("tripwire")
+
+  @@index([userId])
+  @@index([timestamp])
+}

@@ -3,6 +3,7 @@ import { NecordModule } from 'necord';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Partials } from 'discord.js';
 import { EchoModule } from './modules/echo/echo.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { EchoModule } from './modules/echo/echo.module';
       inject: [ConfigService],
     }),
     EchoModule,
+    HealthModule,
   ],
 })
 export class AppModule {}

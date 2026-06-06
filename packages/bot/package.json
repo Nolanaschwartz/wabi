@@ -11,11 +11,12 @@
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
-    "@nestjs/core": "^11.0.0",
     "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@sentry/node": "^10.56.0",
     "@wabi/shared": "workspace:*",
-    "necord": "^6.0.0",
     "discord.js": "^14.18.0",
+    "necord": "^6.0.0",
     "redis": "^4.7.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -30,5 +31,20 @@
     "ts-jest": "^29.2.0",
     "ts-node": "^10.9.0",
     "typescript": "^5.8.2"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "moduleFileExtensions": [
+      "ts",
+      "js"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.spec.ts",
+      "**/*.spec.ts"
+    ],
+    "transform": {
+      "^.+\\.ts$": "ts-jest"
+    }
   }
 }

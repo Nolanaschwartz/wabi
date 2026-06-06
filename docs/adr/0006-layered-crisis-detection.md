@@ -14,3 +14,7 @@ Crisis detection is the mechanism behind the ADR-0001 safety boundary. It is **n
 - Requires a maintained, locale-keyed directory of crisis resources (hotlines), not just US 988.
 - The classifier must be explicitly gamer-slang-aware, or precision collapses.
 - Tripwire logic lives outside the entitlement gate so it can fire for lapsed/unsubscribed users.
+
+## Amendment (2026-06-06, post-implementation)
+
+DM crisis resources default to `en-US` because `discord.js`'s `User` type does not expose `locale` in DMs — only `GuildMember` does. This is acceptable: the international fallback (ADR-0023) is the safety guarantee for unserved locales, and US-first is the v1 scope. If locale-aware DM resources are needed later, Discord's Gateway `READY` event includes `user_settings` with locale, but that requires a privileged intent.
