@@ -1,21 +1,15 @@
-import MemoryClient from 'mem0ai';
-
 export type MemoryEntry = {
   id: string;
   content: string;
 };
 
 export class MemoryStoreService {
-  private mem0!: MemoryClient;
   private enabled: boolean;
+  private baseUrl: string | undefined;
 
   constructor() {
-    this.enabled = !!process.env.MEM0_API_KEY;
-    if (this.enabled) {
-      this.mem0 = new MemoryClient({
-        apiKey: process.env.MEM0_API_KEY ?? '',
-      });
-    }
+    this.baseUrl = process.env.MEM0_URL;
+    this.enabled = !!this.baseUrl;
   }
 
   async deriveAndStore(
@@ -25,10 +19,14 @@ export class MemoryStoreService {
     if (!this.enabled) return;
 
     try {
-      await this.mem0.add(
-        [{ role: 'user', content: sessionText }],
-        { userId: `mem0_${userId}` },
-      );
+      await fetch(`${this.baseUrl}/v1/memories/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: sessionText }],
+          user_id: `mem0_${userId}`,
+        }),
+      });
     } catch {
       // Best-effort memory storage
     }
@@ -41,11 +39,16 @@ export class MemoryStoreService {
     if (!this.enabled) return [];
 
     try {
-      const results = await this.mem0.search(query, {
-        filters: { userId: `mem0_${userId}` },
+      const res = await fetch(`${this.baseUrl}/v1/memories/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          user_id: `mem0_${userId}`,
+        }),
       });
-
-      return (results.results ?? []).map((r) => ({
+      const json = await res.json();
+      return (json.results ?? []).map((r) => ({
         id: r.id,
         content: r.memory ?? '',
       }));
@@ -58,8 +61,12 @@ export class MemoryStoreService {
     if (!this.enabled) return;
 
     try {
-      await this.mem0.deleteAll({
-        userId: `mem0_${userId}`,
+      await fetch(`${this.baseUrl}/v1/memories/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: `mem0_${userId}`,
+        }),
       });
     } catch {
       // Best-effort deletion

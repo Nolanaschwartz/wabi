@@ -7,6 +7,10 @@ describe('MemoryStoreService', () => {
     store = new MemoryStoreService();
   });
 
+  it('is disabled when MEM0_URL is not set', () => {
+    expect((store as any).enabled).toBe(false);
+  });
+
   it('does not store when disabled', async () => {
     await store.deriveAndStore('123', 'test session');
     // Should not throw
