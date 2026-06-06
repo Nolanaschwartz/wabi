@@ -16,6 +16,7 @@ model User {
   hasActiveAccess       Boolean  @default(false)
   trialEndsAt           DateTime?
   subscriptionStatus    String   @default("trialing")
+  lastStripeEventAt     DateTime?
   consentAcceptedAt     DateTime?
   locale                String   @default("en-US")
   timezone              String   @default("UTC")
