@@ -41,9 +41,12 @@ export class CoachingService {
       where: { discordId: userId },
     });
 
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
+
     if (!user || !user.consentAcceptedAt) {
-      const setupUrl = process.env.DISCORD_REDIRECT_URI?.replace('/callback', '/onboard')
-        || 'https://wabi.gg/onboard';
+      // Onboarding entry point: the OAuth route starts Discord login → explicit consent → dashboard.
+      // (There is no /onboard page; that was a dead link — issue #28.)
+      const setupUrl = `${baseUrl}/api/auth/discord`;
       await message.reply({
         content: `You'll need to finish setup before we can chat. Click here to get started: ${setupUrl}`,
       });
@@ -52,8 +55,9 @@ export class CoachingService {
 
     const access = await this.accessResolver.resolve(userId);
     if (!access.hasActiveAccess) {
-      const subscribeUrl = process.env.NEXT_PUBLIC_BASE_URL
-        || 'https://wabi.gg';
+      // The dashboard surfaces the Subscribe control (which starts Stripe checkout). Pointing at
+      // the bare landing page was a dead end — issue #28.
+      const subscribeUrl = `${baseUrl}/dashboard`;
       await message.reply({
         content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,
       });

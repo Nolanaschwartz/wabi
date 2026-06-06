@@ -2,14 +2,81 @@
 
 import { useState } from 'react';
 
+interface BillingState {
+  hasSubscription: boolean;
+  subscriptionStatus: string;
+  trialEndsAt: string | null;
+}
+
 interface DashboardViewProps {
   user: { discordId: string; email: string | null };
   moods: Array<{ rating: number; emoji: string; createdAt: Date }>;
   playtimes: Array<{ duration: number; createdAt: Date }>;
   streak: number;
+  billing: BillingState;
 }
 
-export default function DashboardView({ user, moods, playtimes, streak }: DashboardViewProps) {
+function BillingPanel({ billing }: { billing: BillingState }) {
+  const [busy, setBusy] = useState(false);
+
+  // POST to the billing endpoint and follow the Stripe-hosted URL it returns.
+  const go = async (endpoint: '/api/billing/checkout' | '/api/billing/portal') => {
+    setBusy(true);
+    try {
+      const res = await fetch(endpoint, { method: 'POST' });
+      if (!res.ok) {
+        setBusy(false);
+        return;
+      }
+      const { url } = await res.json();
+      if (url) window.location.href = url;
+      else setBusy(false);
+    } catch {
+      setBusy(false);
+    }
+  };
+
+  const trialMsLeft = billing.trialEndsAt
+    ? new Date(billing.trialEndsAt).getTime() - Date.now()
+    : 0;
+  const trialDaysLeft = Math.max(0, Math.ceil(trialMsLeft / (24 * 60 * 60 * 1000)));
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow mb-8 flex items-center justify-between">
+      <div>
+        <h2 className="text-sm font-medium text-gray-500 dark:text-gray-400">
+          Subscription
+        </h2>
+        <p className="text-lg font-semibold text-gray-900 dark:text-white mt-1 capitalize">
+          {billing.hasSubscription
+            ? 'Active'
+            : billing.trialEndsAt && trialMsLeft > 0
+              ? `Trial — ${trialDaysLeft} day${trialDaysLeft === 1 ? '' : 's'} left`
+              : 'Not subscribed'}
+        </p>
+      </div>
+      {billing.hasSubscription ? (
+        <button
+          onClick={() => go('/api/billing/portal')}
+          disabled={busy}
+          className="px-4 py-2 rounded-md bg-gray-700 text-white text-sm font-medium disabled:opacity-50"
+        >
+          {busy ? 'Opening…' : 'Manage billing'}
+        </button>
+      ) : (
+        <button
+          onClick={() => go('/api/billing/checkout')}
+          disabled={busy}
+          className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium disabled:opacity-50"
+        >
+          {busy ? 'Redirecting…' : 'Subscribe'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function DashboardView({ user, moods, playtimes, streak, billing }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<'mood' | 'playtime' | 'streak'>('mood');
 
   return (
@@ -18,6 +85,8 @@ export default function DashboardView({ user, moods, playtimes, streak }: Dashbo
         <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-8">
           Dashboard
         </h1>
+
+        <BillingPanel billing={billing} />
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow">

@@ -155,7 +155,8 @@ describe('CoachingService', () => {
     );
   });
 
-  it('shows setup link for unconsented user', async () => {
+  it('shows setup link pointing at the real onboarding route for unconsented user', async () => {
+    process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: null,
@@ -166,14 +167,19 @@ describe('CoachingService', () => {
 
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('finish setup'),
+        // Real OAuth entry, not the old dead /onboard link (issue #28).
+        content: expect.stringContaining('https://wabi.gg/api/auth/discord'),
       }),
+    );
+    expect(mockMessage.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.not.stringContaining('/onboard') }),
     );
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
     expect(classifier.classify).not.toHaveBeenCalled();
   });
 
-  it('shows subscribe link for lapsed access (before any classifier work)', async () => {
+  it('shows subscribe link pointing at the dashboard for lapsed access (before any classifier work)', async () => {
+    process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
@@ -189,7 +195,8 @@ describe('CoachingService', () => {
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: expect.stringContaining('Subscribe'),
+        // Dashboard carries the Subscribe control that starts checkout (issue #28).
+        content: expect.stringContaining('https://wabi.gg/dashboard'),
       }),
     );
     expect(coach.generate).not.toHaveBeenCalled();
