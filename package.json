@@ -1,0 +1,14 @@
+{
+  "name": "wabi",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "dev:bot": "pnpm -F bot start:dev",
+    "dev:web": "pnpm -F web dev",
+    "dev": "pnpm -r --parallel --filter=!community dev",
+    "build": "pnpm -r build",
+    "db:push": "pnpm -F shared db:push",
+    "db:generate": "pnpm -F shared db:generate",
+    "test": "pnpm -r test"
+  }
+}
