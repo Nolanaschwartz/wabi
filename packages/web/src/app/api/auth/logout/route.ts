@@ -9,7 +9,7 @@ export async function POST(request: NextRequest): Promise<Response> {
 
 	await lucia.invalidateSession(sessionId);
 	const sessionCookie = lucia.createBlankSessionCookie();
-	const response = NextResponse.redirect("/");
+	const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/`);
 	response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
 
 	return response;

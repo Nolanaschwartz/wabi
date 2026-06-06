@@ -1,18 +1,16 @@
-import { prisma } from '@wabi/shared';
-import { validateRequest } from '@/lib/session';
-import { lucia } from '@/lib/auth';
+import {
+  PENDING_CONSENT_COOKIE,
+  PENDING_CONSENT_COOKIE_OPTIONS,
+} from '@/lib/pending-consent';
 import { NextResponse } from 'next/server';
 
 export async function POST(): Promise<Response> {
-  const { user, session } = await validateRequest();
-  if (!user || !session) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
-  await lucia.invalidateSession(session.id);
-  await prisma.user.delete({ where: { id: user.id } });
-
-  const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/`);
-  response.cookies.set(lucia.sessionCookieName, '', { maxAge: -1, path: '/' });
+  // Nothing is persisted before consent (issue #29), so declining only drops the pending
+  // identity cookie. No User/Trial exists to delete — abandoning the page is equivalent.
+  const response = NextResponse.json({ ok: true });
+  response.cookies.set(PENDING_CONSENT_COOKIE, '', {
+    ...PENDING_CONSENT_COOKIE_OPTIONS,
+    maxAge: 0,
+  });
   return response;
 }

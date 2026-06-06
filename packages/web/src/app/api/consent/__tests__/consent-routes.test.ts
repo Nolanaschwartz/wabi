@@ -1,76 +1,95 @@
 import { POST as acceptPost } from '../accept/route';
 import { POST as declinePost } from '../decline/route';
-
-jest.mock('@/lib/session', () => ({
-  validateRequest: jest.fn(),
-}));
+import {
+  createPendingConsentToken,
+  PENDING_CONSENT_COOKIE,
+} from '@/lib/pending-consent';
 
 jest.mock('@/lib/auth', () => ({
   lucia: {
-    invalidateSession: jest.fn(),
-    createBlankSessionCookie: jest.fn(() => ({ name: 'session', value: '' })),
-    sessionCookieName: 'session',
+    createSession: jest.fn(async () => ({ id: 'sess1' })),
+    createSessionCookie: jest.fn(() => ({ name: 'session', value: 'sval', attributes: { path: '/' } })),
   },
 }));
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
     user: {
-      update: jest.fn(),
-      delete: jest.fn(),
+      upsert: jest.fn(),
     },
   },
 }));
 
-const { validateRequest } = require('@/lib/session');
 const { lucia } = require('@/lib/auth');
 const { prisma } = require('@wabi/shared');
 
-describe('Consent routes', () => {
+function reqWith(cookieValue?: string): any {
+  return {
+    cookies: {
+      get: (name: string) =>
+        name === PENDING_CONSENT_COOKIE && cookieValue ? { value: cookieValue } : undefined,
+    },
+  };
+}
+
+describe('Consent routes (deferred user creation — issue #29)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
     process.env.TRIAL_DAYS = '7';
+    process.env.LUCIA_SECRET = 'test-secret-for-signing';
   });
 
   describe('accept', () => {
-    it('returns 401 when not authenticated', async () => {
-      validateRequest.mockResolvedValue({ user: null, session: null });
-      expect(await (await acceptPost()).status).toBe(401);
+    it('returns 401 and persists nothing without a pending-consent cookie', async () => {
+      const res = await acceptPost(reqWith(undefined));
+      expect(res.status).toBe(401);
+      expect(prisma.user.upsert).not.toHaveBeenCalled();
+      expect(lucia.createSession).not.toHaveBeenCalled();
     });
 
-    it('sets consentAcceptedAt, trialEndsAt, and subscriptionStatus', async () => {
-      validateRequest.mockResolvedValue({ user: { id: 'u1' }, session: {} as any });
-      prisma.user.update.mockResolvedValue({});
+    it('returns 401 and persists nothing for a tampered token', async () => {
+      const res = await acceptPost(reqWith('forged-payload.forged-signature'));
+      expect(res.status).toBe(401);
+      expect(prisma.user.upsert).not.toHaveBeenCalled();
+    });
 
-      const res = await acceptPost();
-      expect(res.status).toBe(307);
-      expect(res.headers.get('location')).toContain('/dashboard');
-      expect(prisma.user.update).toHaveBeenCalledWith(
+    it('creates the User + Trial and a session only on valid affirmative consent', async () => {
+      prisma.user.upsert.mockResolvedValue({ id: 'u1' });
+      const token = createPendingConsentToken('discord-123', 'gamer@example.com', Date.now());
+
+      const res = await acceptPost(reqWith(token));
+
+      expect(res.status).toBe(200);
+      expect(prisma.user.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
+          where: { discordId: 'discord-123' },
+          create: expect.objectContaining({
+            discordId: 'discord-123',
+            email: 'gamer@example.com',
             consentAcceptedAt: expect.any(Date),
+            trialEndsAt: expect.any(Date),
             subscriptionStatus: 'trialing',
           }),
         }),
       );
+      expect(lucia.createSession).toHaveBeenCalledWith('u1', {});
+
+      const setCookie = res.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain('session=');
+      // The pending cookie is consumed (cleared) once the real session exists.
+      expect(setCookie).toContain(`${PENDING_CONSENT_COOKIE}=;`);
     });
   });
 
   describe('decline', () => {
-    it('returns 401 when not authenticated', async () => {
-      validateRequest.mockResolvedValue({ user: null, session: null });
-      expect(await (await declinePost()).status).toBe(401);
-    });
-
-    it('invalidates session, deletes user, clears cookie', async () => {
-      validateRequest.mockResolvedValue({ user: { id: 'u1' }, session: { id: 's1' } });
-      prisma.user.delete.mockResolvedValue({});
-
+    it('persists nothing and clears the pending cookie (no decline-time delete)', async () => {
       const res = await declinePost();
-      expect(res.status).toBe(307);
-      expect(lucia.invalidateSession).toHaveBeenCalledWith('s1');
-      expect(prisma.user.delete).toHaveBeenCalledWith({ where: { id: 'u1' } });
+
+      expect(res.status).toBe(200);
+      expect(prisma.user.upsert).not.toHaveBeenCalled();
+      const setCookie = res.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain(`${PENDING_CONSENT_COOKIE}=;`);
     });
   });
 });

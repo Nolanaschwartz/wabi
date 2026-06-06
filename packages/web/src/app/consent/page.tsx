@@ -6,7 +6,12 @@ export default function ConsentPage() {
   const router = useRouter();
 
   const accept = async () => {
-    await fetch('/api/consent/accept', { method: 'POST' });
+    const res = await fetch('/api/consent/accept', { method: 'POST' });
+    if (!res.ok) {
+      // Pending-consent cookie missing/expired — restart the OAuth flow.
+      router.push('/api/auth/discord');
+      return;
+    }
     router.push('/dashboard');
   };
 
