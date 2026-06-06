@@ -1,22 +1,12 @@
-import { Module, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { MemoryStoreService } from './memory-store.service';
-import { MemorySweeperService } from './memory-sweeper.service';
-import { SessionBufferModule } from '../session-buffer/session-buffer.module';
-import { SessionBufferService } from '../session-buffer/session-buffer.service';
 
+// Mining is handled by SessionSweeper (session-buffer module), which iterates the
+// CoachingSession table by Discord ID and honors do-not-mine. The old MemorySweeperService
+// (wrong table, MEM0_API_KEY gate, raw-text persistence to aiConversation) was removed — see
+// issue #22. MemoryModule now only provides the self-hosted MemoryStore client.
 @Module({
-  imports: [SessionBufferModule],
-  providers: [MemoryStoreService, MemorySweeperService],
+  providers: [MemoryStoreService],
   exports: [MemoryStoreService],
 })
-export class MemoryModule implements OnModuleInit, OnModuleDestroy {
-  constructor(private readonly sweeper: MemorySweeperService) {}
-
-  async onModuleInit(): Promise<void> {
-    await this.sweeper.init();
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.sweeper.destroy();
-  }
-}
+export class MemoryModule {}
