@@ -53,7 +53,6 @@ export class SessionBufferService {
     };
 
     await this.client.hSet(key, data);
-    await this.client.expire(key, SESSION_TTL_SECONDS);
   }
 
   async getContext(userId: string): Promise<SessionContext | null> {

@@ -4,6 +4,7 @@ import { CoachService } from './coach.service';
 import { splitMessage } from './message-splitter';
 import { Message, DMChannel } from 'discord.js';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
+import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
@@ -15,6 +16,7 @@ export class CoachingService {
     private readonly classifier: ClassifierService,
     private readonly coach: CoachService,
     private readonly sessionBuffer: SessionBufferService,
+    private readonly coachingSession: CoachingSessionService,
     private readonly strategyRetrieval: StrategyRetrievalService,
     private readonly burstCoalescer: BurstCoalescer,
     private readonly langfuseTracer: LangfuseTracer,
@@ -55,6 +57,8 @@ export class CoachingService {
     if (message.channel instanceof DMChannel) {
       await message.channel.sendTyping();
     }
+
+    await this.coachingSession.touch(userId);
 
     const batch = await this.burstCoalescer.coalesce(userId, message.content);
     if (!batch || batch === '__canceled__') {

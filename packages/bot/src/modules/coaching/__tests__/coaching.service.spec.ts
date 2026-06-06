@@ -3,6 +3,7 @@ import { ClassifierService } from '../classifier.service';
 import { CoachService } from '../coach.service';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
+import { CoachingSessionService } from '../../session-buffer/coaching-session.service';
 import { StrategyRetrievalService } from '../../strategy-retrieval/strategy-retrieval.service';
 import { BurstCoalescer } from '../../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../../langfuse/langfuse-tracer.service';
@@ -77,6 +78,12 @@ jest.mock('../../memory/memory-store.service', () => ({
   })),
 }));
 
+jest.mock('../../session-buffer/coaching-session.service', () => ({
+  CoachingSessionService: jest.fn().mockImplementation(() => ({
+    touch: jest.fn(),
+  })),
+}));
+
 describe('CoachingService', () => {
   let service: CoachingService;
   let classifier: jest.Mocked<ClassifierService>;
@@ -86,6 +93,7 @@ describe('CoachingService', () => {
   let burstCoalescer: jest.Mocked<BurstCoalescer>;
   let langfuseTracer: jest.Mocked<LangfuseTracer>;
   let accessResolver: jest.Mocked<AccessResolver>;
+  let coachingSession: jest.Mocked<CoachingSessionService>;
   let memoryStore: jest.Mocked<MemoryStoreService>;
 
   const mockMessage = {
@@ -106,11 +114,13 @@ describe('CoachingService', () => {
     burstCoalescer = new BurstCoalescer() as any;
     langfuseTracer = new LangfuseTracer() as any;
     accessResolver = new AccessResolver() as any;
+    coachingSession = new CoachingSessionService() as any;
     memoryStore = new MemoryStoreService() as any;
     service = new CoachingService(
       classifier,
       coach,
       sessionBuffer,
+      coachingSession,
       strategyRetrieval,
       burstCoalescer,
       langfuseTracer,

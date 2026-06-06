@@ -14,7 +14,6 @@ describe('SessionBufferService', () => {
 
     const mockClient = {
       hSet: jest.fn().mockResolvedValue(true),
-      expire: jest.fn().mockResolvedValue(true),
       connect: jest.fn().mockResolvedValue(undefined),
       quit: jest.fn().mockResolvedValue(undefined),
       on: jest.fn(),
@@ -30,7 +29,6 @@ describe('SessionBufferService', () => {
 
     const mockClient = {
       hSet: jest.fn().mockResolvedValue(true),
-      expire: jest.fn().mockResolvedValue(true),
     };
     (service as any).client = mockClient;
 
@@ -39,6 +37,21 @@ describe('SessionBufferService', () => {
     const call = mockClient.hSet.mock.calls[0];
     const data = call[1];
     expect(data.sessionId).toBeDefined();
+  });
+
+  it('does NOT set self-expiring TTL (sweeper-driven expiry)', async () => {
+    jest.spyOn(service as any, 'getRaw').mockResolvedValue(null);
+
+    const mockClient = {
+      hSet: jest.fn().mockResolvedValue(true),
+      expire: jest.fn().mockResolvedValue(true),
+    };
+    (service as any).client = mockClient;
+
+    await service.append('123', 'user', 'hello');
+
+    expect(mockClient.hSet).toHaveBeenCalled();
+    expect(mockClient.expire).not.toHaveBeenCalled();
   });
 
   it('clearAndQuarantine deletes session and sets quarantine flag', async () => {

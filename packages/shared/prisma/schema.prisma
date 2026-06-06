@@ -46,6 +46,21 @@ model Session {
   @@index([lastActivity])
 }
 
+model CoachingSession {
+  id          String   @id @default(uuid())
+  discordId   String   @unique
+  expiresAt   DateTime
+  lastActivity DateTime @default(now())
+  mined       Boolean  @default(false)
+  doNotMine   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([discordId])
+  @@index([lastActivity])
+  @@index([mined])
+}
+
 model AiConversation {
   id        String   @id @default(uuid())
   userId    String
