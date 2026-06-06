@@ -20,6 +20,18 @@ model User {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  sessions Session[]
+
   @@index([discordId])
   @@index([hasActiveAccess])
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

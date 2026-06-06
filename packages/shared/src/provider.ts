@@ -19,7 +19,7 @@ const providerConfig: Record<ProviderRole, ProviderConfig> = {
   },
   embedding: {
     baseUrl: process.env.EMBEDDING_BASE_URL || 'http://localhost:8080',
-    model: process.env.EMBEDDING_MODEL || 'bge-base-en-v1.5',
+    model: process.env.EMBEDDING_MODEL || 'nomic-embed-text-v2-moe.Q4_K_M.gguf',
     apiKey: process.env.EMBEDDING_API_KEY || '',
   },
 };
