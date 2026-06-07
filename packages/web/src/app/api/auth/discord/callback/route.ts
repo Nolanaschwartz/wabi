@@ -18,10 +18,10 @@ export async function GET(request: NextRequest): Promise<Response> {
 	}
 
 	try {
-		const tokens = await discordAuth.validateAuthorizationCode(code, process.env.NEXT_PUBLIC_BASE_URL + "/api/auth/discord/callback");
+		const tokens = await discordAuth.validateAuthorizationCode(code, null);
 		const discordUserRes = await fetch("https://discord.com/api/users/@me", {
 			headers: {
-				Authorization: `Bearer ${tokens.accessToken}`,
+				Authorization: `Bearer ${tokens.accessToken()}`,
 			},
 		});
 		const discordUser = await discordUserRes.json();
@@ -55,6 +55,7 @@ export async function GET(request: NextRequest): Promise<Response> {
 
 		return response;
 	} catch (e) {
+		console.error("[oauth:callback] error:", e);
 		if (e instanceof OAuth2RequestError) {
 			return new Response(null, { status: 400 });
 		}

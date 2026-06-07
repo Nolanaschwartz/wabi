@@ -3,7 +3,7 @@ import { PENDING_CONSENT_COOKIE } from '@/lib/pending-consent';
 
 jest.mock('@/lib/auth', () => ({
   discordAuth: {
-    validateAuthorizationCode: jest.fn(async () => ({ accessToken: 'access-token' })),
+    validateAuthorizationCode: jest.fn(async () => ({ accessToken: () => 'access-token' })),
   },
   lucia: {
     createSession: jest.fn(async () => ({ id: 'sess1' })),

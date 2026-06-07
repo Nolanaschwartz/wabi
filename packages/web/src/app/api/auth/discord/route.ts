@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 
 export async function GET(): Promise<Response> {
 	const state = generateState();
-	const url = await discordAuth.createAuthorizationURL(state, "identify email", [process.env.NEXT_PUBLIC_BASE_URL + "/api/auth/discord/callback"]);
+	const url = discordAuth.createAuthorizationURL(state, null, ["identify", "email"]);
 
 	const response = NextResponse.redirect(url);
 	response.cookies.set("discord_oauth_state", state, {
