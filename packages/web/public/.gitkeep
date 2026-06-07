@@ -1,0 +1,2 @@
+# Keeps packages/web/public present so Dockerfile.web's `COPY ... public` step succeeds.
+# Next.js serves static assets placed in this directory at the site root.
