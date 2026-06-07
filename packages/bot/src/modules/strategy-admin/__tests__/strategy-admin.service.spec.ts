@@ -1,5 +1,6 @@
 import { StrategyAdminService } from '../strategy-admin.service';
 import { StrategyTrustGate } from '../strategy-trust-gate';
+import { StrategyRetrievalService } from '../../strategy-retrieval/strategy-retrieval.service';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
@@ -13,6 +14,20 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
+jest.mock('pg-boss', () => ({
+  PgBoss: jest.fn().mockImplementation(() => ({
+    start: jest.fn().mockResolvedValue(undefined),
+    createQueue: jest.fn().mockResolvedValue(undefined),
+    work: jest.fn().mockResolvedValue(undefined),
+    send: jest.fn().mockResolvedValue('job_1'),
+    stop: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+jest.mock('@qdrant/qdrant-js', () => ({
+  QdrantClient: jest.fn().mockImplementation(() => ({})),
+}));
+
 jest.mock('../strategy-trust-gate', () => ({
   StrategyTrustGate: jest.fn().mockImplementation(() => ({
     evaluate: jest.fn(),
@@ -23,11 +38,16 @@ jest.mock('../strategy-trust-gate', () => ({
 describe('StrategyAdminService', () => {
   let service: StrategyAdminService;
   let trustGate: jest.Mocked<StrategyTrustGate>;
+  let retrieval: jest.Mocked<StrategyRetrievalService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     trustGate = new StrategyTrustGate() as any;
-    service = new StrategyAdminService(trustGate);
+    retrieval = {
+      upsert: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    service = new StrategyAdminService(trustGate, retrieval);
   });
 
   it('publishes draft when decision is publish', async () => {
@@ -61,6 +81,11 @@ describe('StrategyAdminService', () => {
 
     expect(result.status).toBe('published');
     expect(prisma.strategyDraft.create).toHaveBeenCalled();
+    expect(retrieval.upsert).toHaveBeenCalledWith(
+      '1',
+      expect.stringContaining('Test technique'),
+      'Test evidence',
+    );
   });
 
   it('queues draft when decision is queue', async () => {
@@ -93,6 +118,7 @@ describe('StrategyAdminService', () => {
     });
 
     expect(result.status).toBe('pending-review');
+    expect(retrieval.upsert).not.toHaveBeenCalled();
   });
 
   it('persists draft in Postgres and survives restart', async () => {
@@ -171,6 +197,7 @@ describe('StrategyAdminService', () => {
 
     const result = await service.approveDraft('1');
     expect(result?.status).toBe('published');
+    expect(retrieval.upsert).toHaveBeenCalledWith('1', expect.any(String), 'Test');
   });
 
   it('rejects draft', async () => {
@@ -189,6 +216,7 @@ describe('StrategyAdminService', () => {
 
     const result = await service.rejectDraft('1');
     expect(result?.status).toBe('quarantined');
+    expect(retrieval.delete).toHaveBeenCalledWith('1');
   });
 
   it('adjusts evidence level and persists the change', async () => {
@@ -226,7 +254,7 @@ describe('StrategyAdminService', () => {
     expect(result).toBeNull();
   });
 
-  it('accumulates negative feedback and auto-quarantines at threshold', async () => {
+  it('auto-quarantines at threshold synchronously when no durable queue is available', async () => {
     (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
       id: '1',
       status: 'published',
@@ -241,6 +269,37 @@ describe('StrategyAdminService', () => {
       where: { id: '1' },
       data: { status: 'quarantined', negativeCount: 0 },
     });
+    expect(retrieval.delete).toHaveBeenCalledWith('1');
+  });
+
+  it('enqueues a durable demote job at threshold when the queue is available', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'published',
+      negativeCount: 2,
+    });
+    (trustGate.shouldQuarantine as jest.Mock).mockReturnValue(true);
+    const send = jest.fn().mockResolvedValue('job_1');
+    (service as any).bossClient = { send };
+
+    await service.recordNegativeFeedback('1');
+
+    expect(send).toHaveBeenCalledWith('strategy-demote', { draftId: '1' });
+    // Demotion is deferred to the worker — no synchronous quarantine write.
+    expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+    expect(retrieval.delete).not.toHaveBeenCalled();
+  });
+
+  it('applyDemote quarantines in Postgres and removes from Qdrant', async () => {
+    (prisma.strategyDraft.update as jest.Mock).mockResolvedValue({});
+
+    await service.applyDemote('1');
+
+    expect(prisma.strategyDraft.update).toHaveBeenCalledWith({
+      where: { id: '1' },
+      data: { status: 'quarantined', negativeCount: 0 },
+    });
+    expect(retrieval.delete).toHaveBeenCalledWith('1');
   });
 
   it('increments negative count below threshold', async () => {

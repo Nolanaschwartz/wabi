@@ -1,12 +1,34 @@
 import { Injectable } from '@nestjs/common';
+import { PgBoss } from 'pg-boss';
 import { prisma } from '@wabi/shared';
 import { StrategyTrustGate, StrategyDraft, EvaluationDecision } from './strategy-trust-gate';
+import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
+
+const DEMOTE_QUEUE = 'strategy-demote';
 
 @Injectable()
 export class StrategyAdminService {
+  private bossClient: PgBoss | null = null;
+
   constructor(
     private readonly trustGate: StrategyTrustGate,
+    private readonly retrieval: StrategyRetrievalService,
   ) {}
+
+  async init(): Promise<void> {
+    if (!process.env.DATABASE_URL) return;
+
+    try {
+      this.bossClient = new PgBoss({
+        connectionString: process.env.DATABASE_URL,
+      });
+      await this.bossClient.start();
+      await this.bossClient.createQueue(DEMOTE_QUEUE);
+      await this.bossClient.work(DEMOTE_QUEUE, this.demoteJob.bind(this));
+    } catch {
+      // Graceful degradation — demotion falls back to synchronous processing
+    }
+  }
 
   async submitDraft(draft: StrategyDraft): Promise<StrategyDraft> {
     const result = await this.trustGate.evaluate(draft);
@@ -27,7 +49,11 @@ export class StrategyAdminService {
       },
     });
 
-    return this.toDraft(persisted);
+    const persistedDraft = this.toDraft(persisted);
+    if (status === 'published') {
+      await this.publishToQdrant(persistedDraft);
+    }
+    return persistedDraft;
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {
@@ -45,7 +71,11 @@ export class StrategyAdminService {
       data: { status: 'published' },
     }).catch(() => null);
 
-    return updated ? this.toDraft(updated) : null;
+    if (!updated) return null;
+
+    const draft = this.toDraft(updated);
+    await this.publishToQdrant(draft);
+    return draft;
   }
 
   async rejectDraft(id: string): Promise<StrategyDraft | null> {
@@ -54,7 +84,10 @@ export class StrategyAdminService {
       data: { status: 'quarantined' },
     }).catch(() => null);
 
-    return updated ? this.toDraft(updated) : null;
+    if (!updated) return null;
+
+    await this.retrieval.delete(id);
+    return this.toDraft(updated);
   }
 
   async setEvidenceLevel(id: string, evidence: string): Promise<StrategyDraft | null> {
@@ -73,16 +106,54 @@ export class StrategyAdminService {
     const newCount = draft.negativeCount + 1;
 
     if (this.trustGate.shouldQuarantine(newCount)) {
-      await prisma.strategyDraft.update({
-        where: { id: draftId },
-        data: { status: 'quarantined', negativeCount: 0 },
-      });
+      await this.enqueueDemote(draftId);
     } else {
       await prisma.strategyDraft.update({
         where: { id: draftId },
         data: { negativeCount: newCount },
       });
     }
+  }
+
+  /**
+   * Hand the demotion to the durable pg-boss queue so it is retried reliably
+   * (ADR-0012). If the queue is unavailable (no DATABASE_URL / boss down), fall
+   * back to processing it synchronously so feedback is never lost.
+   */
+  private async enqueueDemote(draftId: string): Promise<void> {
+    if (this.bossClient) {
+      try {
+        await this.bossClient.send(DEMOTE_QUEUE, { draftId });
+        return;
+      } catch {
+        // Fall through to synchronous demotion
+      }
+    }
+    await this.applyDemote(draftId);
+  }
+
+  private async demoteJob(job: unknown[]): Promise<void> {
+    const data = job[0] as { draftId: string };
+    if (data?.draftId) {
+      await this.applyDemote(data.draftId);
+    }
+  }
+
+  /** Quarantine the Draft in Postgres and remove it from the Qdrant index. */
+  async applyDemote(draftId: string): Promise<void> {
+    await prisma.strategyDraft.update({
+      where: { id: draftId },
+      data: { status: 'quarantined', negativeCount: 0 },
+    });
+    await this.retrieval.delete(draftId);
+  }
+
+  private async publishToQdrant(draft: StrategyDraft): Promise<void> {
+    await this.retrieval.upsert(
+      draft.id,
+      `${draft.title}: ${draft.technique}`,
+      draft.evidence,
+    );
   }
 
   async getPublishedDrafts(): Promise<StrategyDraft[]> {
@@ -92,6 +163,12 @@ export class StrategyAdminService {
     });
 
     return drafts.map(this.toDraft);
+  }
+
+  async destroy(): Promise<void> {
+    if (this.bossClient) {
+      await this.bossClient.stop();
+    }
   }
 
   private toDraft(row: any): StrategyDraft {

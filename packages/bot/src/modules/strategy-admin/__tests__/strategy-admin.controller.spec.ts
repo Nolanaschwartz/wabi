@@ -1,6 +1,25 @@
 import { StrategyAdminController } from '../strategy-admin.controller';
 import { StrategyAdminService } from '../strategy-admin.service';
 
+jest.mock('pg-boss', () => ({
+  PgBoss: jest.fn().mockImplementation(() => ({
+    start: jest.fn().mockResolvedValue(undefined),
+    createQueue: jest.fn().mockResolvedValue(undefined),
+    work: jest.fn().mockResolvedValue(undefined),
+    send: jest.fn().mockResolvedValue('job_1'),
+    stop: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+jest.mock('@qdrant/qdrant-js', () => ({
+  QdrantClient: jest.fn().mockImplementation(() => ({})),
+}));
+
+jest.mock('@wabi/shared', () => ({
+  prisma: {},
+  getProvider: jest.fn().mockReturnValue({ baseUrl: '', model: '', apiKey: '' }),
+}));
+
 describe('StrategyAdminController', () => {
   let controller: StrategyAdminController;
   let service: jest.Mocked<StrategyAdminService>;
