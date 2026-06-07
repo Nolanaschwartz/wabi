@@ -1,7 +1,8 @@
 import { GenericContainer, Wait } from 'testcontainers';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@wabi/shared';
 import { execSync } from 'child_process';
 import { randomUUID } from 'crypto';
+import { resolve } from 'path';
 
 const POSTGRES_IMAGE = 'postgres:17-alpine';
 const REDIS_IMAGE = 'redis:7-alpine';
@@ -49,10 +50,12 @@ export async function startInfra(): Promise<IntegrationEnv & { stop: () => Promi
   const qdrantPort = qdrant.getMappedPort(6333);
   const qdrantUrl = `http://${qdrantHost}:${qdrantPort}`;
 
-  // Push schema to the test database
+  // Push schema to the test database. Resolve the shared package dir from this
+  // file's location so it works regardless of the process working directory.
+  const sharedDir = resolve(__dirname, '../../shared');
   const tmpEnv = { DATABASE_URL: postgresUrl };
-  execSync('npx prisma db push --accept-data-loss', {
-    cwd: '../../shared',
+  execSync('npx prisma db push --accept-data-loss --skip-generate', {
+    cwd: sharedDir,
     env: { ...process.env, ...tmpEnv },
   });
 

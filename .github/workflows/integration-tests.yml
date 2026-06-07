@@ -29,6 +29,9 @@ jobs:
 
       - run: pnpm -F shared db:generate
 
+      # The integration harness imports the real @wabi/shared (dist), so it must be built.
+      - run: pnpm -F shared build
+
       - run: pnpm -F bot test:integration
         env:
           DOCKER_HOST: unix:///var/run/docker.sock
