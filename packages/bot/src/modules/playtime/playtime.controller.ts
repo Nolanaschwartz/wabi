@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { PlaytimeService } from './playtime.service';
 import { MemoryStoreService } from '../memory/memory-store.service';
@@ -12,7 +12,7 @@ export class PlaytimeController {
     private readonly memoryStore: MemoryStoreService,
   ) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply();
 
     const opts = (interaction as any).options;

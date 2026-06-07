@@ -25,6 +25,8 @@ import { TiltModule } from '../tilt/tilt.module';
     TiltModule,
   ],
   providers: [ClassifierService, CoachService, CoachingService],
-  exports: [CoachingService],
+  // ClassifierService and CoachService are exported so importing modules (e.g. JournalModule)
+  // can inject them and share these singletons instead of failing DI resolution at boot.
+  exports: [CoachingService, ClassifierService, CoachService],
 })
 export class CoachingModule {}

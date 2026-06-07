@@ -6,12 +6,20 @@ import Stripe from 'stripe';
 
 @Controller('webhooks/stripe')
 export class StripeWebhookController {
-  private stripe: InstanceType<typeof Stripe>;
+  private stripe: InstanceType<typeof Stripe> | null = null;
 
-  constructor(private readonly accessResolver: AccessResolver) {
-    this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? '', {
-      typescript: true,
-    });
+  constructor(private readonly accessResolver: AccessResolver) {}
+
+  // Lazily build the Stripe client. Constructing it eagerly with an empty key throws and would
+  // crash the whole bot at boot when Stripe is unconfigured (e.g. local dev). Returns null when
+  // no key is set, so the webhook handler degrades to a graceful "missing config" response.
+  private getStripe(): InstanceType<typeof Stripe> | null {
+    const apiKey = process.env.STRIPE_SECRET_KEY;
+    if (!apiKey) return null;
+    if (!this.stripe) {
+      this.stripe = new Stripe(apiKey, { typescript: true });
+    }
+    return this.stripe;
   }
 
   @Post()
@@ -23,14 +31,15 @@ export class StripeWebhookController {
     const rawBody = req.rawBody ?? Buffer.from('');
 
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!webhookSecret || !signature) {
+    const stripe = this.getStripe();
+    if (!webhookSecret || !signature || !stripe) {
       res.status(400).send('Missing webhook config');
       return;
     }
 
     let event: any;
     try {
-      event = this.stripe.webhooks.constructEvent(
+      event = stripe.webhooks.constructEvent(
         rawBody.toString(),
         signature,
         webhookSecret,

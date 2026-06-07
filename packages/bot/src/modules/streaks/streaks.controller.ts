@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { StreaksService } from './streaks.service';
 
@@ -8,7 +8,7 @@ import { StreaksService } from './streaks.service';
 export class StreaksController {
   constructor(private readonly streaksService: StreaksService) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     try {

@@ -4,6 +4,10 @@ import { createClient, RedisClientType } from 'redis';
 const SESSION_KEY_PREFIX = 'wabi:sess:';
 const SESSION_TTL_SECONDS = 30 * 60;
 const MAX_TURNS = 10;
+// Cap the startup Redis connect so a down/slow Redis can't block bootstrap — and the Discord
+// gateway login that runs after all module init hooks. node-redis keeps retrying in the
+// background and recovers when Redis returns; session features degrade until then.
+const REDIS_CONNECT_TIMEOUT_MS = 5000;
 
 export interface SessionContext {
   sessionId: string;
@@ -32,9 +36,21 @@ export class SessionBufferService {
 
   async init(): Promise<void> {
     if (this.initialized) return;
-    this.client.on('error', () => {});
-    await this.client.connect();
     this.initialized = true;
+    // A dropped/failed Redis connection must never crash the bot.
+    this.client.on('error', () => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        // Swallow connect rejection here so a failed initial connect degrades rather than throws.
+        this.client.connect().catch(() => {}),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, REDIS_CONNECT_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async append(userId: string, role: string, content: string): Promise<void> {

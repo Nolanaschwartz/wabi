@@ -48,6 +48,28 @@ describe('StripeWebhookController', () => {
     controller = new StripeWebhookController(accessResolver);
   });
 
+  it('does not construct Stripe eagerly and returns 400 when STRIPE_SECRET_KEY is unset', async () => {
+    // Boot-safety: an unconfigured bot (no Stripe key) must still start. The controller must
+    // not call `new Stripe()` with an empty key at construction (the real library throws).
+    delete process.env.STRIPE_SECRET_KEY;
+    const Stripe = require('stripe');
+    Stripe.mockClear();
+
+    const c = new StripeWebhookController(accessResolver);
+    expect(Stripe).not.toHaveBeenCalled();
+
+    const sendMock = jest.fn();
+    const res = { status: jest.fn().mockReturnValue({ send: sendMock }) };
+    const req = {
+      headers: { 'stripe-signature': 'test' },
+      rawBody: Buffer.from('{}'),
+    } as any;
+
+    await c.handle(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
   it('returns 400 on missing webhook config', async () => {
     const res = {
       status: jest.fn().mockReturnValue({ send: jest.fn() }),

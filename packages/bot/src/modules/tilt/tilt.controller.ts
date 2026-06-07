@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { TiltService } from './tilt.service';
 
@@ -8,7 +8,7 @@ import { TiltService } from './tilt.service';
 export class TiltController {
   constructor(private readonly tiltService: TiltService) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply();
 
     const opts = (interaction as any).options;

@@ -8,6 +8,45 @@ describe('SessionBufferService', () => {
     service.init = jest.fn().mockResolvedValue(undefined);
   });
 
+  describe('init() resilience (bot must come online even if Redis is down)', () => {
+    let svc: SessionBufferService;
+    beforeEach(() => {
+      svc = new SessionBufferService();
+    });
+
+    it('resolves without throwing when Redis connect rejects', async () => {
+      (svc as any).client = {
+        on: jest.fn(),
+        connect: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+      };
+
+      await expect(svc.init()).resolves.toBeUndefined();
+    });
+
+    it('does not block bootstrap when Redis connect hangs', async () => {
+      jest.useFakeTimers();
+      (svc as any).client = {
+        on: jest.fn(),
+        connect: jest.fn(() => new Promise(() => {})), // never resolves
+      };
+
+      const p = svc.init();
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      await expect(p).resolves.toBeUndefined();
+      jest.useRealTimers();
+    });
+
+    it('attaches an error handler so a dropped connection never crashes the process', async () => {
+      const on = jest.fn();
+      (svc as any).client = { on, connect: jest.fn().mockResolvedValue(undefined) };
+
+      await svc.init();
+
+      expect(on).toHaveBeenCalledWith('error', expect.any(Function));
+    });
+  });
+
   it('creates new session with unique sessionId', async () => {
     jest.spyOn(service as any, 'getRaw').mockResolvedValue(null);
     jest.spyOn(service as any, 'sessionKey').mockReturnValue('wabi:sess:123');

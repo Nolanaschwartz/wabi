@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { On } from 'necord';
+import { Context, ContextOf, On } from 'necord';
 import { Message } from 'discord.js';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
 import { CrisisResourcesService } from '../crisis/crisis-resources.service';
@@ -17,7 +17,9 @@ export class EchoController {
   ) {}
 
   @On('messageCreate')
-  async handleMessage(message: Message): Promise<void> {
+  async handleMessage(
+    @Context() [message]: ContextOf<'messageCreate'>,
+  ): Promise<void> {
     if (message.author.bot) return;
     if (!message.channel.isDMBased()) return;
 

@@ -23,6 +23,11 @@ import { WelcomeModule } from './modules/welcome/welcome.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      // Local dev runs each package from its own dir (cwd = packages/bot), where there is no
+      // .env. Fall back to the repo-root .env so the bot finds DISCORD_TOKEN, DATABASE_URL,
+      // DISCORD_HUB_GUILD_ID, etc. A packages/bot/.env (first) still wins if one is ever added.
+      // In Docker/Railway these files are absent and config comes from injected process.env.
+      envFilePath: ['.env', '../../.env'],
     }),
     NecordModule.forRootAsync({
       imports: [ConfigModule],

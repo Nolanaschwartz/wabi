@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { On } from 'necord';
-import { GuildMember } from 'discord.js';
+import { Context, ContextOf, On } from 'necord';
 import { WelcomeService } from './welcome.service';
 
 /**
@@ -13,7 +12,9 @@ export class WelcomeController {
   constructor(private readonly welcome: WelcomeService) {}
 
   @On('guildMemberAdd')
-  async handleGuildMemberAdd(member: GuildMember): Promise<void> {
+  async handleGuildMemberAdd(
+    @Context() [member]: ContextOf<'guildMemberAdd'>,
+  ): Promise<void> {
     const hubGuildId = process.env.DISCORD_HUB_GUILD_ID;
     if (!hubGuildId || member.guild.id !== hubGuildId) return;
 

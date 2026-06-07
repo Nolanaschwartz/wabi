@@ -18,7 +18,7 @@ describe('WelcomeController (guildMemberAdd)', () => {
   it('delegates a join to the configured hub guild to WelcomeService', async () => {
     const { controller, welcome } = makeController();
 
-    await controller.handleGuildMemberAdd(member('hub-guild', 'joiner'));
+    await controller.handleGuildMemberAdd([member('hub-guild', 'joiner')]);
 
     expect(welcome).toHaveBeenCalledTimes(1);
     expect(welcome).toHaveBeenCalledWith('joiner');
@@ -27,7 +27,7 @@ describe('WelcomeController (guildMemberAdd)', () => {
   it('ignores a join to a non-hub guild', async () => {
     const { controller, welcome } = makeController();
 
-    await controller.handleGuildMemberAdd(member('some-other-guild'));
+    await controller.handleGuildMemberAdd([member('some-other-guild')]);
 
     expect(welcome).not.toHaveBeenCalled();
   });
@@ -36,7 +36,7 @@ describe('WelcomeController (guildMemberAdd)', () => {
     delete process.env.DISCORD_HUB_GUILD_ID;
     const { controller, welcome } = makeController();
 
-    await controller.handleGuildMemberAdd(member('hub-guild'));
+    await controller.handleGuildMemberAdd([member('hub-guild')]);
 
     expect(welcome).not.toHaveBeenCalled();
   });

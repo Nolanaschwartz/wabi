@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { JournalService } from './journal.service';
 import { XpService } from '../xp/xp.service';
@@ -12,7 +12,7 @@ export class JournalController {
     private readonly xpService: XpService,
   ) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply();
 
     const opts = (interaction as any).options;

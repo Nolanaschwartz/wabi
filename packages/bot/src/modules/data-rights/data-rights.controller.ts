@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { DataRightsService } from './data-rights.service';
 
@@ -8,7 +8,7 @@ import { DataRightsService } from './data-rights.service';
 export class DataRightsController {
   constructor(private readonly dataRightsService: DataRightsService) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const opts = (interaction as any).options;

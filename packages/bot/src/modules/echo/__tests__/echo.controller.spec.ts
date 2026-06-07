@@ -89,7 +89,7 @@ describe('EchoController', () => {
         content: 'hello',
       } as any;
 
-      await controller.handleMessage(message);
+      await controller.handleMessage([message]);
       expect(mockTripwire).not.toHaveBeenCalled();
       expect(mockHandle).not.toHaveBeenCalled();
     });
@@ -111,7 +111,7 @@ describe('EchoController', () => {
         content: 'hello',
       } as any;
 
-      await controller.handleMessage(message);
+      await controller.handleMessage([message]);
       expect(mockTripwire).not.toHaveBeenCalled();
       expect(mockHandle).not.toHaveBeenCalled();
     });
@@ -133,7 +133,7 @@ describe('EchoController', () => {
         content: 'i played ranked all night',
       } as any;
 
-      await controller.handleMessage(message);
+      await controller.handleMessage([message]);
       expect(mockTripwire).toHaveBeenCalledWith('i played ranked all night');
       expect(mockHandle).toHaveBeenCalledWith(message, expect.any(Function));
     });
@@ -155,7 +155,7 @@ describe('EchoController', () => {
         reply: jest.fn().mockResolvedValue({}),
       } as any;
 
-      await controller.handleMessage(message);
+      await controller.handleMessage([message]);
 
       // Pending coach turn is canceled (no cheerful reply), and we don't run the coach pipeline.
       expect(cancelPending).toHaveBeenCalledWith('123');

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { MoodService } from './mood.service';
 
@@ -8,7 +8,7 @@ import { MoodService } from './mood.service';
 export class MoodController {
   constructor(private readonly moodService: MoodService) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply();
 
     const opts = (interaction as any).options;
@@ -44,7 +44,7 @@ export class MoodController {
 export class FeelingController {
   constructor(private readonly moodService: MoodService) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const opts = (interaction as any).options;

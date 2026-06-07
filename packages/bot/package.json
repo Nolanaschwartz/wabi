@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "dev": "PORT=3001 nest start --watch",
     "start:dev": "nest start --watch",
     "start": "nest start",
     "build": "nest build",

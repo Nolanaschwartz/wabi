@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SlashCommand } from 'necord';
+import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { CheckInService } from './checkin.service';
 import { CHECK_IN_CADENCES, CheckInCadence } from './checkin-timing';
@@ -9,7 +9,7 @@ import { CHECK_IN_CADENCES, CheckInCadence } from './checkin-timing';
 export class CheckInController {
   constructor(private readonly checkInService: CheckInService) {}
 
-  async execute(interaction: CommandInteraction): Promise<void> {
+  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
 
     const opts = (interaction as any).options;
