@@ -18,6 +18,16 @@ jest.mock('../../strategy-retrieval/strategy-retrieval.service', () => ({
   })),
 }));
 
+jest.mock('pg-boss', () => ({
+  PgBoss: jest.fn().mockImplementation(() => ({
+    start: jest.fn().mockResolvedValue(undefined),
+    createQueue: jest.fn().mockResolvedValue(undefined),
+    schedule: jest.fn().mockResolvedValue(undefined),
+    work: jest.fn().mockResolvedValue(undefined),
+    stop: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
+
 describe('TiltService', () => {
   let service: TiltService;
   let strategyRetrieval: jest.Mocked<StrategyRetrievalService>;
@@ -32,6 +42,40 @@ describe('TiltService', () => {
     expect(service.isTiltLanguage("I'm so frustrated")).toBe(true);
     expect(service.isTiltLanguage('tilt is real')).toBe(true);
     expect(service.isTiltLanguage('good game')).toBe(false);
+  });
+
+  it('detects the specific trigger keyword in text', () => {
+    expect(service.detectTrigger('my teammates are feeding so hard')).toBe('feeding');
+    expect(service.detectTrigger('what a good game')).toBeNull();
+  });
+
+  it('stores, reads, and clears a pending offer', () => {
+    expect(service.getPendingOffer('123')).toBeNull();
+    service.setPendingOffer('123', 'raging');
+    expect(service.getPendingOffer('123')).toBe('raging');
+    service.clearPendingOffer('123');
+    expect(service.getPendingOffer('123')).toBeNull();
+  });
+
+  it('acceptPendingOffer starts a session at default severity and clears the offer', async () => {
+    (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
+    (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
+    service.setPendingOffer('123', 'feeding');
+
+    const technique = await service.acceptPendingOffer('123');
+
+    expect(technique).toBeTruthy();
+    expect(prisma.tiltSession.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: '123', trigger: 'feeding', severity: 5 }),
+    });
+    // Offer is consumed.
+    expect(service.getPendingOffer('123')).toBeNull();
+  });
+
+  it('acceptPendingOffer returns null when there is no pending offer', async () => {
+    const technique = await service.acceptPendingOffer('nobody');
+    expect(technique).toBeNull();
+    expect(prisma.tiltSession.create).not.toHaveBeenCalled();
   });
 
   it('creates an offer for detected frustration', () => {

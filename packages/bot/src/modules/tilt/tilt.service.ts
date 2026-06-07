@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
+import { PgBoss } from 'pg-boss';
 import { prisma } from '@wabi/shared';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 
 const TILT_DURATION_MINUTES = 30;
+const OFFER_TTL_MS = 5 * 60 * 1000;
+const AUTO_RESOLVE_QUEUE = 'tilt-auto-resolve';
+const AUTO_RESOLVE_CRON = '*/5 * * * *';
+const OFFER_DEFAULT_SEVERITY = 5;
 const TILT_KEYWORDS = [
   'tilt',
   'frustrated',
@@ -31,13 +36,84 @@ export interface TiltOffer {
 
 @Injectable()
 export class TiltService {
+  private bossClient: PgBoss | null = null;
+  // Ephemeral accept/decline window for a detection-driven offer. Losing this on
+  // restart is acceptable — the offer simply lapses and the user can re-trigger.
+  private pendingOffers = new Map<string, { trigger: string; expiresAt: number }>();
+
   constructor(
     private readonly strategyRetrieval: StrategyRetrievalService,
   ) {}
 
+  async init(): Promise<void> {
+    if (!process.env.DATABASE_URL) return;
+
+    try {
+      this.bossClient = new PgBoss({
+        connectionString: process.env.DATABASE_URL,
+      });
+      await this.bossClient.start();
+      await this.bossClient.createQueue(AUTO_RESOLVE_QUEUE);
+      await this.bossClient.schedule(AUTO_RESOLVE_QUEUE, AUTO_RESOLVE_CRON);
+      await this.bossClient.work(AUTO_RESOLVE_QUEUE, async () => {
+        await this.autoResolveExpired();
+      });
+    } catch {
+      // Graceful degradation
+    }
+  }
+
+  async destroy(): Promise<void> {
+    if (this.bossClient) {
+      await this.bossClient.stop();
+    }
+  }
+
   isTiltLanguage(text: string): boolean {
     const lower = text.toLowerCase();
     return TILT_KEYWORDS.some((keyword) => lower.includes(keyword));
+  }
+
+  /** The first tilt keyword present in the text, used as the offer's trigger. */
+  detectTrigger(text: string): string | null {
+    const lower = text.toLowerCase();
+    return TILT_KEYWORDS.find((keyword) => lower.includes(keyword)) ?? null;
+  }
+
+  setPendingOffer(discordId: string, trigger: string): void {
+    this.pendingOffers.set(discordId, {
+      trigger,
+      expiresAt: Date.now() + OFFER_TTL_MS,
+    });
+  }
+
+  getPendingOffer(discordId: string): string | null {
+    const offer = this.pendingOffers.get(discordId);
+    if (!offer) return null;
+    if (offer.expiresAt < Date.now()) {
+      this.pendingOffers.delete(discordId);
+      return null;
+    }
+    return offer.trigger;
+  }
+
+  clearPendingOffer(discordId: string): void {
+    this.pendingOffers.delete(discordId);
+  }
+
+  /**
+   * Accept a detection-driven offer: starts a Tilt Session for the stored trigger
+   * at a default mid severity (the offer path doesn't ask the user for 1–10) and
+   * clears the pending offer. Returns the reset technique, or null if no offer.
+   */
+  async acceptPendingOffer(discordId: string): Promise<string | null> {
+    const trigger = this.getPendingOffer(discordId);
+    if (!trigger) return null;
+    this.clearPendingOffer(discordId);
+    return this.acceptOffer(discordId, {
+      trigger,
+      severity: OFFER_DEFAULT_SEVERITY,
+    });
   }
 
   createOffer(trigger: string): TiltOffer {
