@@ -1,0 +1,21 @@
+# Standalone uptime monitor — run this on a host that is NOT part of the Wabi stack
+# (a different machine/region than the bot). Per ADR-0022, a monitor co-located with the
+# bot dies with it. Do NOT merge this into the project's root docker-compose.yml.
+#
+#   docker compose -f docker-compose.uptime-kuma.yml up -d
+#
+# Then open http://<this-host>:3002, create the admin user, and add an HTTP(s) monitor
+# for https://<your-bot>.up.railway.app/health (interval 60s, accept only status 200).
+
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: wabi-uptime-kuma
+    ports:
+      - '3002:3001'
+    volumes:
+      - uptime_kuma_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  uptime_kuma_data:
