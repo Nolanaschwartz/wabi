@@ -96,6 +96,14 @@ export class StrategyRetrievalService {
     }
   }
 
+  async delete(id: string): Promise<void> {
+    try {
+      await this.qdrant.delete(COLLECTION_NAME, { points: [id] });
+    } catch {
+      // Qdrant unavailable — skip silently
+    }
+  }
+
   private async embed(text: string): Promise<number[]> {
     const response = await fetch(
       `${this.embeddingConfig.baseUrl}/api/embeddings`,
