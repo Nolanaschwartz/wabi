@@ -67,12 +67,14 @@ export class CheckInService {
     });
   }
 
-  async setTimezone(discordId: string, tz: string): Promise<void> {
-    const valid = VALID_TIMEZONES.includes(tz) ? tz : 'UTC';
+  /** Persist the user's timezone, falling back to UTC on an invalid/missing IANA name. */
+  async setTimezone(discordId: string, tz: string): Promise<string> {
+    const valid = tz && VALID_TIMEZONES.includes(tz) ? tz : 'UTC';
     await prisma.user.update({
       where: { discordId },
       data: { timezone: valid },
     });
+    return valid;
   }
 
   async destroy(): Promise<void> {

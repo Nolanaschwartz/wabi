@@ -4,7 +4,8 @@ const DEFAULT_QUIET_HOURS_START = 22;
 const DEFAULT_QUIET_HOURS_END = 8;
 const LATE_NIGHT_HOUR = 23;
 
-export type CheckInCadence = 'daily' | 'every-other' | 'weekly';
+export const CHECK_IN_CADENCES = ['daily', 'every-other', 'weekly'] as const;
+export type CheckInCadence = (typeof CHECK_IN_CADENCES)[number];
 
 export class CheckInTiming {
   static isWithinQuietHours(userTimezone: string): boolean {
