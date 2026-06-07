@@ -17,6 +17,7 @@ import { StreaksModule } from './modules/streaks/streaks.module';
 import { CheckInModule } from './modules/checkins/checkin.module';
 import { DataRightsModule } from './modules/data-rights/data-rights.module';
 import { StrategyAdminModule } from './modules/strategy-admin/strategy-admin.module';
+import { WelcomeModule } from './modules/welcome/welcome.module';
 
 @Module({
   imports: [
@@ -27,7 +28,10 @@ import { StrategyAdminModule } from './modules/strategy-admin/strategy-admin.mod
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({
         token: config.getOrThrow('DISCORD_TOKEN'),
-        intents: ['Guilds', 'DirectMessages', 'MessageContent'],
+        // GuildMembers is a PRIVILEGED intent (like MessageContent) — it must be enabled in the
+        // Discord developer portal and is subject to Discord approval at 100+ servers. It is
+        // required for the guildMemberAdd welcome DM on hub join (ADR-0015 Task 23).
+        intents: ['Guilds', 'GuildMembers', 'DirectMessages', 'MessageContent'],
         partials: [Partials.Channel],
       }),
       inject: [ConfigService],
@@ -47,6 +51,7 @@ import { StrategyAdminModule } from './modules/strategy-admin/strategy-admin.mod
     CheckInModule,
     DataRightsModule,
     StrategyAdminModule,
+    WelcomeModule,
   ],
 })
 export class AppModule {}

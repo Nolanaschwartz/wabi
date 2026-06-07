@@ -14,6 +14,7 @@ import { MemoryStoreService } from '../memory/memory-store.service';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { StreaksService } from '../streaks/streaks.service';
 import { TiltService } from '../tilt/tilt.service';
+import { setupLinkMessage } from '../../lib/setup-link';
 
 @Injectable()
 export class CoachingService {
@@ -46,11 +47,8 @@ export class CoachingService {
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
 
     if (!user || !user.consentAcceptedAt) {
-      // Onboarding entry point: the OAuth route starts Discord login → explicit consent → dashboard.
-      // (There is no /onboard page; that was a dead link — issue #28.)
-      const setupUrl = `${baseUrl}/api/auth/discord`;
       await message.reply({
-        content: `You'll need to finish setup before we can chat. Click here to get started: ${setupUrl}`,
+        content: setupLinkMessage(baseUrl),
       });
       return;
     }
