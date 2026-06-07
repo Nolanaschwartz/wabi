@@ -13,6 +13,7 @@ import { AccessResolver } from '../billing/access-resolver';
 import { MemoryStoreService } from '../memory/memory-store.service';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { StreaksService } from '../streaks/streaks.service';
+import { TiltService } from '../tilt/tilt.service';
 
 @Injectable()
 export class CoachingService {
@@ -28,6 +29,7 @@ export class CoachingService {
     private readonly memoryStore: MemoryStoreService,
     private readonly crisisAftermath: CrisisAftermathService,
     private readonly streaks: StreaksService,
+    private readonly tilt: TiltService,
   ) {}
 
   async handle(
@@ -64,6 +66,25 @@ export class CoachingService {
       return;
     }
 
+    // Tilt offer response: if we previously offered a Tilt Session, this turn may be
+    // the user's accept/decline. Handle it before normal coaching. (#31 / #12)
+    const pendingTrigger = this.tilt.getPendingOffer(userId);
+    if (pendingTrigger) {
+      const intent = message.content.trim().toLowerCase();
+      if (intent === 'accept' || intent.startsWith('accept')) {
+        const technique = await this.tilt.acceptPendingOffer(userId);
+        await message.reply(`Tilt session started. Reset technique: ${technique}`);
+        return;
+      }
+      if (intent === 'decline' || intent.startsWith('decline')) {
+        this.tilt.clearPendingOffer(userId);
+        await message.reply(this.tilt.createOffer(pendingTrigger).declineMessage);
+        return;
+      }
+      // Neither accept nor decline — let the offer lapse (TTL) and continue coaching,
+      // suppressing a duplicate offer this turn (see the detection block below).
+    }
+
     if (message.channel instanceof DMChannel) {
       await message.channel.sendTyping();
     }
@@ -94,6 +115,17 @@ export class CoachingService {
     this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
 
     const inAftermath = await this.crisisAftermath.isQuarantined(userId);
+
+    // Detected gameplay frustration → offer a Tilt Session (user stays in control),
+    // never auto-start one. Suppressed during crisis aftermath (#05) and when an offer
+    // is already pending this turn. (#31 / #12)
+    if (!inAftermath && !pendingTrigger && this.tilt.isTiltLanguage(batch)) {
+      const trigger = this.tilt.detectTrigger(batch) ?? 'tilt';
+      this.tilt.setPendingOffer(userId, trigger);
+      await message.reply(this.tilt.createOffer(trigger).acceptMessage);
+      return;
+    }
+
     const context = await this.buildContext(userId, batch, strategies, inAftermath);
 
     const coachStart = Date.now();

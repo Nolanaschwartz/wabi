@@ -11,6 +11,7 @@ import { AccessResolver } from '../../billing/access-resolver';
 import { MemoryStoreService } from '../../memory/memory-store.service';
 import { CrisisAftermathService } from '../../crisis-aftermath/crisis-aftermath.service';
 import { StreaksService } from '../../streaks/streaks.service';
+import { TiltService } from '../../tilt/tilt.service';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
@@ -104,6 +105,22 @@ jest.mock('../../streaks/streaks.service', () => ({
   })),
 }));
 
+jest.mock('../../tilt/tilt.service', () => ({
+  TiltService: jest.fn(() => ({
+    getPendingOffer: jest.fn().mockReturnValue(null),
+    setPendingOffer: jest.fn(),
+    clearPendingOffer: jest.fn(),
+    acceptPendingOffer: jest.fn().mockResolvedValue('Box breathing.'),
+    isTiltLanguage: jest.fn().mockReturnValue(false),
+    detectTrigger: jest.fn().mockReturnValue(null),
+    createOffer: jest.fn((trigger: string) => ({
+      acceptMessage: `offer for ${trigger} — accept or decline`,
+      declineMessage: 'No problem.',
+      trigger,
+    })),
+  })),
+}));
+
 describe('CoachingService', () => {
   let service: CoachingService;
   let classifier: jest.Mocked<ClassifierService>;
@@ -117,6 +134,7 @@ describe('CoachingService', () => {
   let memoryStore: jest.Mocked<MemoryStoreService>;
   let crisisAftermath: jest.Mocked<CrisisAftermathService>;
   let streaks: jest.Mocked<StreaksService>;
+  let tilt: jest.Mocked<TiltService>;
 
   const mockMessage = {
     author: { id: '123', bot: false },
@@ -140,6 +158,7 @@ describe('CoachingService', () => {
     memoryStore = new MemoryStoreService() as any;
     crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
     streaks = (StreaksService as jest.Mock)() as any;
+    tilt = (TiltService as jest.Mock)() as any;
     service = new CoachingService(
       classifier,
       coach,
@@ -152,6 +171,7 @@ describe('CoachingService', () => {
       memoryStore,
       crisisAftermath,
       streaks,
+      tilt,
     );
   });
 
@@ -312,6 +332,80 @@ describe('CoachingService', () => {
     await service.handle(mockMessage, jest.fn());
 
     expect(classifier.classify).not.toHaveBeenCalled();
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  const activeUser = () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+      timezone: 'UTC',
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+  };
+
+  it('offers a tilt session (not auto-start) when frustration is detected', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('teammates keep feeding ugh');
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    tilt.isTiltLanguage.mockReturnValue(true);
+    tilt.detectTrigger.mockReturnValue('feeding');
+
+    await service.handle(mockMessage, jest.fn());
+
+    expect(tilt.setPendingOffer).toHaveBeenCalledWith('123', 'feeding');
+    expect(mockMessage.reply).toHaveBeenCalledWith(
+      expect.stringContaining('accept or decline'),
+    );
+    // An offer, not an auto-started session, and no coach reply this turn.
+    expect(tilt.acceptPendingOffer).not.toHaveBeenCalled();
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a tilt session during crisis aftermath', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('teammates keep feeding ugh');
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue('Gentle reply.');
+    tilt.isTiltLanguage.mockReturnValue(true);
+    (crisisAftermath.isQuarantined as jest.Mock).mockResolvedValue(true);
+
+    await service.handle(mockMessage, jest.fn());
+
+    expect(tilt.setPendingOffer).not.toHaveBeenCalled();
+    expect(coach.generate).toHaveBeenCalled();
+  });
+
+  it('accepting a pending offer starts a tilt session', async () => {
+    activeUser();
+    tilt.getPendingOffer.mockReturnValue('feeding');
+    const acceptMsg = { ...mockMessage, content: 'accept', reply: jest.fn().mockResolvedValue({}) } as any;
+
+    await service.handle(acceptMsg, jest.fn());
+
+    expect(tilt.acceptPendingOffer).toHaveBeenCalledWith('123');
+    expect(acceptMsg.reply).toHaveBeenCalledWith(expect.stringContaining('Reset technique'));
+    // The accept short-circuits before classification/coaching.
+    expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('declining a pending offer does nothing but acknowledge', async () => {
+    activeUser();
+    tilt.getPendingOffer.mockReturnValue('feeding');
+    const declineMsg = { ...mockMessage, content: 'decline', reply: jest.fn().mockResolvedValue({}) } as any;
+
+    await service.handle(declineMsg, jest.fn());
+
+    expect(tilt.clearPendingOffer).toHaveBeenCalledWith('123');
+    expect(tilt.acceptPendingOffer).not.toHaveBeenCalled();
+    expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
   });
 

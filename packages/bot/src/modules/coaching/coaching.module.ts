@@ -10,6 +10,7 @@ import { BillingModule } from '../billing/billing.module';
 import { MemoryModule } from '../memory/memory.module';
 import { CrisisAftermathModule } from '../crisis-aftermath/crisis-aftermath.module';
 import { StreaksModule } from '../streaks/streaks.module';
+import { TiltModule } from '../tilt/tilt.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { StreaksModule } from '../streaks/streaks.module';
     MemoryModule,
     CrisisAftermathModule,
     StreaksModule,
+    TiltModule,
   ],
   providers: [ClassifierService, CoachService, CoachingService],
   exports: [CoachingService],
