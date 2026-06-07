@@ -32,7 +32,9 @@ describe('LangfuseTracer', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('truncates input to 200 chars', () => {
+  // Non-crisis traces retain full coaching content for eval/quality data (ADR-0024):
+  // no truncation or redaction. Crisis content is dropped entirely (covered above).
+  it('retains full input content for non-crisis traces', () => {
     process.env.LANGFUSE_HOST = 'http://localhost:3000';
     process.env.LANGFUSE_PUBLIC_KEY = 'test-public';
     process.env.LANGFUSE_SECRET_KEY = 'test-secret';
@@ -42,11 +44,11 @@ describe('LangfuseTracer', () => {
     tracer.trace('test-1', 'classify', longInput, 'safe');
     expect(global.fetch).toHaveBeenCalled();
     const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1]!.body);
-    expect(body.input).toHaveLength(215); // 200 + "... [truncated]"
-    expect(body.input).toContain('[truncated]');
+    expect(body.input).toBe(longInput);
+    expect(body.input).not.toContain('[truncated]');
   });
 
-  it('truncates output to 200 chars', () => {
+  it('retains full output content for non-crisis traces', () => {
     process.env.LANGFUSE_HOST = 'http://localhost:3000';
     process.env.LANGFUSE_PUBLIC_KEY = 'test-public';
     process.env.LANGFUSE_SECRET_KEY = 'test-secret';
@@ -56,6 +58,7 @@ describe('LangfuseTracer', () => {
     tracer.trace('test-1', 'coach', 'short', longOutput);
     expect(global.fetch).toHaveBeenCalled();
     const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1]!.body);
-    expect(body.output).toContain('[truncated]');
+    expect(body.output).toBe(longOutput);
+    expect(body.output).not.toContain('[truncated]');
   });
 });

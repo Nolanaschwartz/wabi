@@ -31,8 +31,12 @@ export class LangfuseTracer {
     const payload = {
       id: `${traceId}-${step}`,
       name: step,
-      input: this.scrubInput(input),
-      output: this.scrubOutput(output),
+      // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024).
+      // This is a scoped exception to ADR-0013 (no durable transcript store), permitted only
+      // because Langfuse is self-hosted, single-tenant, and on-infra (ADR-0017). Crisis
+      // traces are dropped entirely above (never reach here).
+      input,
+      output,
       level,
       metadata: {
         latencyMs: options?.latencyMs ?? 0,
@@ -59,20 +63,6 @@ export class LangfuseTracer {
     };
 
     this.sendPayload(payload);
-  }
-
-  private scrubInput(input: string): string {
-    if (input.length > 200) {
-      return input.slice(0, 200) + '... [truncated]';
-    }
-    return input;
-  }
-
-  private scrubOutput(output: string): string {
-    if (output.length > 200) {
-      return output.slice(0, 200) + '... [truncated]';
-    }
-    return output;
   }
 
   private sendPayload(payload: Record<string, unknown>): void {
