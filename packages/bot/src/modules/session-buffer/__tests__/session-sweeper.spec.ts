@@ -23,6 +23,16 @@ jest.mock('../../memory/memory-store.service', () => ({
   })),
 }));
 
+jest.mock('pg-boss', () => ({
+  PgBoss: jest.fn().mockImplementation(() => ({
+    start: jest.fn().mockResolvedValue(undefined),
+    createQueue: jest.fn().mockResolvedValue(undefined),
+    schedule: jest.fn().mockResolvedValue(undefined),
+    work: jest.fn().mockResolvedValue(undefined),
+    stop: jest.fn().mockResolvedValue(undefined),
+  })),
+}));
+
 const mockSession = (id: string, discordId: string, doNotMine: boolean = false) => ({
   id,
   discordId,
