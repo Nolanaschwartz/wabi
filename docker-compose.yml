@@ -25,6 +25,19 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  # neo4j graph store for mem0 hybrid graph memory (ADR-0025). Self-controlled container;
+  # holds derived personal relationships. APOC is required by mem0's graph store.
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-wabi-local}
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - '7474:7474'
+      - '7687:7687'
+    volumes:
+      - neo4j_data:/data
+
   mem0:
     build:
       context: ./infra/mem0
@@ -39,15 +52,21 @@ services:
       MEM0_EMBEDDER_MODEL: ${EMBEDDING_MODEL}
       MEM0_EMBEDDER_API_KEY: ${EMBEDDING_API_KEY:-not-needed}
       MEM0_EMBEDDING_DIMS: '768'
-      # Vector store: self-hosted Qdrant (host+port; no api_key). Graph store disabled (no neo4j).
+      # Vector store: self-hosted Qdrant (host+port; no api_key).
       MEM0_QDRANT_HOST: qdrant
       MEM0_QDRANT_PORT: '6333'
       MEM0_QDRANT_COLLECTION: wabi_memories
+      # Graph store: self-controlled neo4j (ADR-0025). Graph memory is enabled because
+      # MEM0_GRAPH_PASSWORD is set; unset it to fall back to vector-only.
+      MEM0_GRAPH_URL: bolt://neo4j:7687
+      MEM0_GRAPH_USERNAME: neo4j
+      MEM0_GRAPH_PASSWORD: ${NEO4J_PASSWORD:-wabi-local}
       HISTORY_DB_PATH: /app/history/history.db
     ports:
       - '8081:8081'
     depends_on:
       - qdrant
+      - neo4j
     volumes:
       - mem0_history:/app/history
 
@@ -120,4 +139,5 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+  neo4j_data:
   mem0_history:
