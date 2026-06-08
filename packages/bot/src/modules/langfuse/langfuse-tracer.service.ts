@@ -28,13 +28,13 @@ export class LangfuseTracer {
     const isSampled = Math.random() < SAMPLE_RATE;
     const level = isSampled ? 'debug' : 'info';
 
-    const payload = {
+    // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024).
+    // This is a scoped exception to ADR-0013 (no durable transcript store), permitted only
+    // because Langfuse is self-hosted, single-tenant, and on-infra (ADR-0017). Crisis
+    // traces are dropped entirely above (never reach here).
+    this.ingest('trace-create', {
       id: `${traceId}-${step}`,
       name: step,
-      // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024).
-      // This is a scoped exception to ADR-0013 (no durable transcript store), permitted only
-      // because Langfuse is self-hosted, single-tenant, and on-infra (ADR-0017). Crisis
-      // traces are dropped entirely above (never reach here).
       input,
       output,
       level,
@@ -42,9 +42,7 @@ export class LangfuseTracer {
         latencyMs: options?.latencyMs ?? 0,
         sampled: isSampled,
       },
-    };
-
-    this.sendPayload(payload);
+    });
   }
 
   score(
@@ -56,27 +54,40 @@ export class LangfuseTracer {
     if (!this.enabled) return;
     if (isCrisis) return;
 
-    const payload = {
+    this.ingest('score-create', {
+      id: `${traceId}-${name}`,
       traceId,
       name,
       value,
-    };
-
-    this.sendPayload(payload);
+      dataType: 'NUMERIC',
+    });
   }
 
-  private sendPayload(payload: Record<string, unknown>): void {
+  // Langfuse ingestion API: POST /api/public/ingestion with HTTP Basic auth (public:secret) and a
+  // batch envelope. The prior implementation posted a flat object to /api/traces with an x-api-key
+  // header — a 404 that silently dropped every trace.
+  private ingest(type: 'trace-create' | 'score-create', body: Record<string, unknown>): void {
     try {
       const host = process.env.LANGFUSE_HOST;
-      if (!host) return;
+      const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
+      const secretKey = process.env.LANGFUSE_SECRET_KEY;
+      if (!host || !publicKey || !secretKey) return;
 
-      fetch(`${host}/api/traces`, {
+      const auth = Buffer.from(`${publicKey}:${secretKey}`).toString('base64');
+      const event = {
+        id: crypto.randomUUID(),
+        type,
+        timestamp: new Date().toISOString(),
+        body,
+      };
+
+      fetch(`${host}/api/public/ingestion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': process.env.LANGFUSE_PUBLIC_KEY ?? '',
+          Authorization: `Basic ${auth}`,
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ batch: [event] }),
       }).catch(() => {});
     } catch {
       // Best-effort tracing
