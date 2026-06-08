@@ -1,37 +1,76 @@
 import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
+import {
+  Context,
+  Options,
+  IntegerOption,
+  StringOption,
+  SlashCommandContext,
+  Subcommand,
+  createCommandGroupDecorator,
+} from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { TiltService } from './tilt.service';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
+
+export const TiltCommandGroup = createCommandGroupDecorator({
+  name: 'tilt',
+  description: 'Manage tilt sessions',
+  ...COMMAND_CONTEXTS,
+});
+
+export class TiltStartDto {
+  @StringOption({
+    name: 'trigger',
+    description: 'What set you off',
+    required: false,
+  })
+  trigger?: string;
+
+  @IntegerOption({
+    name: 'severity',
+    description: 'How bad it feels, 1-10',
+    required: false,
+    min_value: 1,
+    max_value: 10,
+  })
+  severity?: number;
+}
 
 @Injectable()
-@SlashCommand({ name: 'tilt', description: 'Manage tilt sessions' })
+@TiltCommandGroup()
 export class TiltController {
   constructor(private readonly tiltService: TiltService) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
+  @Subcommand({ name: 'start', description: 'Start a tilt session' })
+  async start(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() { trigger, severity }: TiltStartDto,
+  ): Promise<void> {
     await interaction.deferReply();
-
-    const opts = (interaction as any).options;
-    const subcommand = opts?.getSubcommand();
-
-    if (subcommand === 'start') {
-      await this.handleStart(interaction);
-    } else if (subcommand === 'resolve') {
-      await this.handleResolve(interaction);
-    } else if (subcommand === 'stats') {
-      await this.handleStats(interaction);
-    } else {
-      await interaction.editReply({
-        content: "Usage: `/tilt start trigger:... severity:1-10`, `/tilt resolve`, or `/tilt stats`",
-      });
-    }
+    await this.handleStart(
+      interaction,
+      trigger ?? 'unknown',
+      Math.max(1, Math.min(10, severity ?? 5)),
+    );
   }
 
-  private async handleStart(interaction: CommandInteraction): Promise<void> {
-    const opts = (interaction as any).options;
-    const trigger = opts?.getString('trigger') ?? 'unknown';
-    const severity = Math.max(1, Math.min(10, opts?.getInteger('severity') ?? 5));
+  @Subcommand({ name: 'resolve', description: 'Resolve your current tilt session' })
+  async resolve(@Context() [interaction]: SlashCommandContext): Promise<void> {
+    await interaction.deferReply();
+    await this.handleResolve(interaction);
+  }
 
+  @Subcommand({ name: 'stats', description: 'View your tilt stats' })
+  async stats(@Context() [interaction]: SlashCommandContext): Promise<void> {
+    await interaction.deferReply();
+    await this.handleStats(interaction);
+  }
+
+  private async handleStart(
+    interaction: CommandInteraction,
+    trigger: string,
+    severity: number,
+  ): Promise<void> {
     const technique = await this.tiltService.start(interaction.user.id, {
       trigger,
       severity,

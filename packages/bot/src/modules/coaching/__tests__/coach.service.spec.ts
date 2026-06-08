@@ -35,9 +35,48 @@ describe('CoachService', () => {
     expect(result).toBe("That sounds tough. Take a deep breath — you'll find your footing.");
   });
 
-  it('throws on API error', async () => {
+  it('returns empty string on API error', async () => {
     (generateText as jest.Mock).mockRejectedValue(new Error('500'));
 
-    await expect(service.generate('test')).rejects.toThrow('500');
+    const result = await service.generate('test');
+    expect(result).toBe('');
+  });
+
+  it('retries on empty response with lower temperature', async () => {
+    (generateText as jest.Mock)
+      .mockResolvedValueOnce({ text: '   ' })
+      .mockResolvedValueOnce({ text: 'Retry works.' });
+
+    const result = await service.generate('test');
+
+    expect(result).toBe('Retry works.');
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateText).toHaveBeenLastCalledWith(
+      expect.objectContaining({ temperature: 0.3 }),
+    );
+  });
+
+  it('returns empty after failed retry', async () => {
+    (generateText as jest.Mock).mockResolvedValue({ text: '' });
+
+    const result = await service.generate('test');
+
+    expect(result).toBe('');
+    expect(generateText).toHaveBeenCalledTimes(2);
+  });
+
+  // The coach model (qwopus-3.6) is a reasoning model: a 500-token budget got truncated
+  // mid-sentence and sometimes left content empty (all budget spent reasoning). Both the initial
+  // attempt and the retry need enough room to finish reasoning and emit a full <400-char reply.
+  it('requests a large enough output budget on every attempt', async () => {
+    (generateText as jest.Mock)
+      .mockResolvedValueOnce({ text: '' })
+      .mockResolvedValueOnce({ text: 'ok' });
+
+    await service.generate('test');
+
+    for (const call of (generateText as jest.Mock).mock.calls) {
+      expect(call[0].maxOutputTokens).toBeGreaterThanOrEqual(2048);
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { ClassifierService } from './classifier.service';
 import { CoachService } from './coach.service';
@@ -18,6 +18,8 @@ import { setupLinkMessage } from '../../lib/setup-link';
 
 @Injectable()
 export class CoachingService {
+  private readonly logger = new Logger(CoachingService.name);
+
   constructor(
     private readonly classifier: ClassifierService,
     private readonly coach: CoachService,
@@ -83,73 +85,85 @@ export class CoachingService {
       // suppressing a duplicate offer this turn (see the detection block below).
     }
 
-    if (message.channel instanceof DMChannel) {
-      await message.channel.sendTyping();
+    let typingInterval: ReturnType<typeof setInterval> | null = null;
+    const dmChannel = message.channel instanceof DMChannel ? message.channel : null;
+    if (dmChannel) {
+      await dmChannel.sendTyping();
+      typingInterval = setInterval(() => dmChannel.sendTyping(), 7000);
     }
 
-    await this.coachingSession.touch(userId);
+    try {
+      await this.coachingSession.touch(userId);
 
-    const batch = await this.burstCoalescer.coalesce(userId, message.content);
-    if (!batch || batch === '__canceled__') {
-      return;
-    }
+      const batch = await this.burstCoalescer.coalesce(userId, message.content);
+      if (!batch || batch === '__canceled__') {
+        return;
+      }
 
-    const [classification, strategies] = await Promise.all([
-      this.classifier.classify(batch),
-      this.strategyRetrieval.search(batch).catch(() => []),
-    ]);
+      const [classification, strategies] = await Promise.all([
+        this.classifier.classify(batch),
+        this.strategyRetrieval.search(batch).catch(() => []),
+      ]);
 
-    if (classification === 'crisis') {
-      this.burstCoalescer.cancel(userId);
-      await this.sessionBuffer.clearAndQuarantine(userId);
-      await this.coachingSession.quarantine(userId);
-      await this.logEscalation(userId, 'classifier');
-      this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
-      await this.crisisAftermath.onEscalation(userId);
-      await onCrisis();
-      return;
-    }
+      if (classification === 'crisis') {
+        this.burstCoalescer.cancel(userId);
+        await this.sessionBuffer.clearAndQuarantine(userId);
+        await this.coachingSession.quarantine(userId);
+        await this.logEscalation(userId, 'classifier');
+        this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
+        await this.crisisAftermath.onEscalation(userId);
+        await onCrisis();
+        return;
+      }
 
-    this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
+      this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
 
-    const inAftermath = await this.crisisAftermath.isQuarantined(userId);
+      const inAftermath = await this.crisisAftermath.isQuarantined(userId);
 
-    // Detected gameplay frustration → offer a Tilt Session (user stays in control),
-    // never auto-start one. Suppressed during crisis aftermath (#05) and when an offer
-    // is already pending this turn. (#31 / #12)
-    if (!inAftermath && !pendingTrigger && this.tilt.isTiltLanguage(batch)) {
-      const trigger = this.tilt.detectTrigger(batch) ?? 'tilt';
-      this.tilt.setPendingOffer(userId, trigger);
-      await message.reply(this.tilt.createOffer(trigger).acceptMessage);
-      return;
-    }
+      // Detected gameplay frustration → offer a Tilt Session (user stays in control),
+      // never auto-start one. Suppressed during crisis aftermath (#05) and when an offer
+      // is already pending this turn. (#31 / #12)
+      if (!inAftermath && !pendingTrigger && this.tilt.isTiltLanguage(batch)) {
+        const trigger = this.tilt.detectTrigger(batch) ?? 'tilt';
+        this.tilt.setPendingOffer(userId, trigger);
+        await message.reply(this.tilt.createOffer(trigger).acceptMessage);
+        return;
+      }
 
-    const context = await this.buildContext(userId, batch, strategies, inAftermath);
+      const context = await this.buildContext(userId, batch, strategies, inAftermath);
 
-    const coachStart = Date.now();
-    const reply = await this.coach.generate(context, inAftermath);
-    const coachLatency = Date.now() - coachStart;
+      const coachStart = Date.now();
+      const reply = await this.coach.generate(context, inAftermath);
+      const coachLatency = Date.now() - coachStart;
 
     if (!reply) {
-      await message.reply("I'm not sure how to respond to that right now. Want to try again?");
-      return;
-    }
+        this.logger.warn('coach returned empty, sending fallback', { userId });
+        await message.reply("I'm not sure how to respond to that right now. Want to try again?");
+        return;
+      }
 
-    await this.sessionBuffer.append(userId, 'user', message.content);
-    await this.sessionBuffer.append(userId, 'assistant', reply);
+      await this.sessionBuffer.append(userId, 'user', message.content);
+      await this.sessionBuffer.append(userId, 'assistant', reply);
 
-    const streakResult = await this.streaks.checkAndAward(userId, user.timezone ?? 'UTC').catch(() => null);
+      const streakResult = await this.streaks.checkAndAward(userId, user.timezone ?? 'UTC').catch(() => null);
 
-    await this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
+      this.langfuseTracer.trace(traceId, 'coach', context, reply, { latencyMs: coachLatency });
 
-    this.langfuseTracer.trace(traceId, 'coach', context, reply, { latencyMs: coachLatency });
+      // Send the reply BEFORE persisting long-term memory. deriveAndStore runs mem0's hybrid
+      // vector+graph extraction (~20s+ since ADR-0025), which must never delay the user-visible reply.
+      const parts = splitMessage(reply);
+      for (const part of parts) {
+        await message.reply(part);
+      }
+      if (streakResult && streakResult.message) {
+        await message.reply(streakResult.message);
+      }
 
-    const parts = splitMessage(reply);
-    for (const part of parts) {
-      await message.reply(part);
-    }
-    if (streakResult && streakResult.message) {
-      await message.reply(streakResult.message);
+      // Fire-and-forget: persistence failures are already logged inside deriveAndStore, and memory is
+      // not needed to answer this turn. Awaiting it here previously starved the reply.
+      void this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
+    } finally {
+      if (typingInterval) clearInterval(typingInterval);
     }
   }
 

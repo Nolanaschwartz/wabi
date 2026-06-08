@@ -1,62 +1,106 @@
 import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
-import { CommandInteraction } from 'discord.js';
+import {
+  Context,
+  Options,
+  IntegerOption,
+  NumberOption,
+  StringOption,
+  SlashCommand,
+  SlashCommandContext,
+  Subcommand,
+  createCommandGroupDecorator,
+} from 'necord';
+import { MessageFlags } from 'discord.js';
 import { MoodService } from './mood.service';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
+
+export const MoodCommandGroup = createCommandGroupDecorator({
+  name: 'mood',
+  description: 'Log your mood',
+  ...COMMAND_CONTEXTS,
+});
+
+export class MoodLogDto {
+  @IntegerOption({
+    name: 'rating',
+    description: 'How you feel, 1 (low) to 5 (great)',
+    required: true,
+    min_value: 1,
+    max_value: 5,
+  })
+  rating!: number;
+
+  @StringOption({
+    name: 'note',
+    description: 'Optional note about how you feel',
+    required: false,
+  })
+  note?: string;
+}
 
 @Injectable()
-@SlashCommand({ name: 'mood', description: 'Log your mood' })
+@MoodCommandGroup()
 export class MoodController {
   constructor(private readonly moodService: MoodService) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
+  @Subcommand({ name: 'log', description: 'Log your mood with a rating' })
+  async log(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() { rating, note }: MoodLogDto,
+  ): Promise<void> {
     await interaction.deferReply();
 
-    const opts = (interaction as any).options;
-    const subcommand = opts?.getSubcommand();
+    const clamped = Math.max(1, Math.min(5, rating ?? 3));
+    const emoji = MoodService.ratingToEmoji(clamped);
 
-    if (subcommand === 'log') {
-      const rating = Math.max(1, Math.min(5, opts?.getInteger('rating') ?? 3));
-      const note = opts?.getString('note') ?? undefined;
-      const emoji = MoodService.ratingToEmoji(rating);
+    await this.moodService.log(interaction.user.id, {
+      rating: clamped,
+      emoji,
+      note: note ?? undefined,
+    });
 
-      await this.moodService.log(interaction.user.id, { rating, emoji, note });
+    const trend = await this.moodService.trend(interaction.user.id);
+    const trendText = trend > 0 ? `\nYour ${Math.round(trend * 10) / 10}-day average: ${'⭐'.repeat(Math.round(trend))}` : '';
 
-      const trend = await this.moodService.trend(interaction.user.id);
-      const trendText = trend > 0 ? `\nYour ${Math.round(trend * 10) / 10}-day average: ${'⭐'.repeat(Math.round(trend))}` : '';
-
-      const followUp = MoodService.isLowMood(rating)
-        ? "I'm sorry you're feeling down. Want to talk about it?"
-        : "Thanks for checking in.";
-
-      await interaction.editReply({
-        content: `${emoji} Mood logged.${trendText}\n${followUp}`,
-      });
-      return;
-    }
+    const followUp = MoodService.isLowMood(clamped)
+      ? "I'm sorry you're feeling down. Want to talk about it?"
+      : "Thanks for checking in.";
 
     await interaction.editReply({
-      content: "Usage: `/mood log rating:1-5 note:optional`",
+      content: `${emoji} Mood logged.${trendText}\n${followUp}`,
     });
   }
 }
 
-@SlashCommand({ name: 'feeling', description: 'Quick mood check-in' })
+export class FeelingDto {
+  @NumberOption({
+    name: 'rating',
+    description: 'How you feel right now, 1 (low) to 5 (great)',
+    required: false,
+  })
+  rating?: number;
+}
+
+@Injectable()
 export class FeelingController {
   constructor(private readonly moodService: MoodService) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  @SlashCommand({ name: 'feeling', description: 'Quick mood check-in', ...COMMAND_CONTEXTS })
+  async execute(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() { rating }: FeelingDto,
+  ): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const opts = (interaction as any).options;
-    const rating = opts?.getNumber('rating') ?? 3;
-    const emoji = MoodService.ratingToEmoji(rating);
+    const value = rating ?? 3;
+    const emoji = MoodService.ratingToEmoji(value);
 
     await this.moodService.log(interaction.user.id, {
-      rating,
+      rating: value,
       emoji,
     });
 
-    const followUp = MoodService.isLowMood(rating)
+    const followUp = MoodService.isLowMood(value)
       ? "I'm sorry you're feeling down. Want to talk about it?"
       : "Thanks for sharing how you feel. I'm here if you want to chat.";
 

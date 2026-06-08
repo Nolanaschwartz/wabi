@@ -1,39 +1,69 @@
 import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
+import {
+  Context,
+  Options,
+  IntegerOption,
+  StringOption,
+  SlashCommandContext,
+  Subcommand,
+  createCommandGroupDecorator,
+} from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { PlaytimeService } from './playtime.service';
 import { MemoryStoreService } from '../memory/memory-store.service';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
+
+export const PlaytimeCommandGroup = createCommandGroupDecorator({
+  name: 'playtime',
+  description: 'Log and track playtime',
+  ...COMMAND_CONTEXTS,
+});
+
+export class PlaytimeLogDto {
+  @IntegerOption({
+    name: 'duration',
+    description: 'How many minutes you played',
+    required: true,
+    min_value: 1,
+  })
+  duration!: number;
+
+  @StringOption({
+    name: 'game',
+    description: 'What you played (optional)',
+    required: false,
+  })
+  game?: string;
+}
 
 @Injectable()
-@SlashCommand({ name: 'playtime', description: 'Log and track playtime' })
+@PlaytimeCommandGroup()
 export class PlaytimeController {
   constructor(
     private readonly playtimeService: PlaytimeService,
     private readonly memoryStore: MemoryStoreService,
   ) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
+  @Subcommand({ name: 'log', description: 'Log a play session' })
+  async log(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() { duration, game }: PlaytimeLogDto,
+  ): Promise<void> {
     await interaction.deferReply();
-
-    const opts = (interaction as any).options;
-    const subcommand = opts?.getSubcommand();
-
-    if (subcommand === 'log') {
-      await this.handleLog(interaction);
-    } else if (subcommand === 'stats') {
-      await this.handleStats(interaction);
-    } else {
-      await interaction.editReply({
-        content: "Usage: `/playtime log duration:minutes game:optional` or `/playtime stats`",
-      });
-    }
+    await this.handleLog(interaction, Math.max(1, duration ?? 0), game ?? undefined);
   }
 
-  private async handleLog(interaction: CommandInteraction): Promise<void> {
-    const opts = (interaction as any).options;
-    const duration = Math.max(1, opts?.getInteger('duration') ?? 0);
-    const game = opts?.getString('game') ?? undefined;
+  @Subcommand({ name: 'stats', description: 'View your 7-day playtime stats' })
+  async stats(@Context() [interaction]: SlashCommandContext): Promise<void> {
+    await interaction.deferReply();
+    await this.handleStats(interaction);
+  }
 
+  private async handleLog(
+    interaction: CommandInteraction,
+    duration: number,
+    game: string | undefined,
+  ): Promise<void> {
     await this.playtimeService.log(interaction.user.id, { duration, game });
 
     const headsUp = PlaytimeService.isLongSession(duration)

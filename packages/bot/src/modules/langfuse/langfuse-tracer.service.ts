@@ -1,14 +1,27 @@
-import { Injectable } from '@nestjs/common';
-const SAMPLE_RATE = 0.1;
+import { Injectable, Logger } from '@nestjs/common';
 
 export type TraceStep = 'classify' | 'coach' | 'retrieval';
 
+// Dev keeps full visibility (sample everything); prod samples 10%. Read per-call from env so it
+// tracks the running environment rather than import-time state. LANGFUSE_SAMPLE_RATE overrides both.
+function sampleRate(): number {
+  const override = process.env.LANGFUSE_SAMPLE_RATE;
+  if (override !== undefined && override !== '') {
+    const parsed = Number(override);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return process.env.NODE_ENV === 'production' ? 0.1 : 1.0;
+}
+
 @Injectable()
 export class LangfuseTracer {
-  private enabled: boolean;
+  private readonly logger = new Logger(LangfuseTracer.name);
 
-  constructor() {
-    this.enabled = !!(
+  // Evaluated per-call, NOT cached in the constructor: the tracer can be constructed before
+  // ConfigModule populates process.env, which froze `enabled` to false and silently disabled
+  // tracing forever (same load-order trap as @wabi/shared getProvider).
+  private get enabled(): boolean {
+    return !!(
       process.env.LANGFUSE_HOST &&
       process.env.LANGFUSE_PUBLIC_KEY &&
       process.env.LANGFUSE_SECRET_KEY
@@ -25,16 +38,16 @@ export class LangfuseTracer {
     if (!this.enabled) return;
     if (options?.isCrisis) return;
 
-    const isSampled = Math.random() < SAMPLE_RATE;
+    const isSampled = Math.random() < sampleRate();
     const level = isSampled ? 'debug' : 'info';
 
-    const payload = {
+    // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024).
+    // This is a scoped exception to ADR-0013 (no durable transcript store), permitted only
+    // because Langfuse is self-hosted, single-tenant, and on-infra (ADR-0017). Crisis
+    // traces are dropped entirely above (never reach here).
+    this.ingest('trace-create', {
       id: `${traceId}-${step}`,
       name: step,
-      // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024).
-      // This is a scoped exception to ADR-0013 (no durable transcript store), permitted only
-      // because Langfuse is self-hosted, single-tenant, and on-infra (ADR-0017). Crisis
-      // traces are dropped entirely above (never reach here).
       input,
       output,
       level,
@@ -42,9 +55,7 @@ export class LangfuseTracer {
         latencyMs: options?.latencyMs ?? 0,
         sampled: isSampled,
       },
-    };
-
-    this.sendPayload(payload);
+    });
   }
 
   score(
@@ -56,30 +67,51 @@ export class LangfuseTracer {
     if (!this.enabled) return;
     if (isCrisis) return;
 
-    const payload = {
+    this.ingest('score-create', {
+      id: `${traceId}-${name}`,
       traceId,
       name,
       value,
-    };
-
-    this.sendPayload(payload);
+      dataType: 'NUMERIC',
+    });
   }
 
-  private sendPayload(payload: Record<string, unknown>): void {
+  // Langfuse ingestion API: POST /api/public/ingestion with HTTP Basic auth (public:secret) and a
+  // batch envelope. The prior implementation posted a flat object to /api/traces with an x-api-key
+  // header — a 404 that silently dropped every trace.
+  private ingest(type: 'trace-create' | 'score-create', body: Record<string, unknown>): void {
     try {
       const host = process.env.LANGFUSE_HOST;
-      if (!host) return;
+      const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
+      const secretKey = process.env.LANGFUSE_SECRET_KEY;
+      if (!host || !publicKey || !secretKey) return;
 
-      fetch(`${host}/api/traces`, {
+      const auth = Buffer.from(`${publicKey}:${secretKey}`).toString('base64');
+      const event = {
+        id: crypto.randomUUID(),
+        type,
+        timestamp: new Date().toISOString(),
+        body,
+      };
+
+      fetch(`${host}/api/public/ingestion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': process.env.LANGFUSE_PUBLIC_KEY ?? '',
+          Authorization: `Basic ${auth}`,
         },
-        body: JSON.stringify(payload),
-      }).catch(() => {});
-    } catch {
-      // Best-effort tracing
+        body: JSON.stringify({ batch: [event] }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            this.logger.warn(
+              `Langfuse ingest ${type} -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+            );
+          }
+        })
+        .catch((err) => this.logger.warn(`Langfuse ingest ${type} failed: ${err}`));
+    } catch (err) {
+      this.logger.warn(`Langfuse ingest ${type} threw: ${err}`);
     }
   }
 }

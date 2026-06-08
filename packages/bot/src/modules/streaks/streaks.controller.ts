@@ -1,15 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { Context, SlashCommand, SlashCommandContext } from 'necord';
-import { CommandInteraction } from 'discord.js';
+import { MessageFlags } from 'discord.js';
 import { StreaksService } from './streaks.service';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 @Injectable()
-@SlashCommand({ name: 'profile', description: 'View your wellness profile' })
 export class StreaksController {
   constructor(private readonly streaksService: StreaksService) {}
 
+  @SlashCommand({ name: 'profile', description: 'View your wellness profile', ...COMMAND_CONTEXTS })
   async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
       const profile = await this.streaksService.profile(interaction.user.id);
