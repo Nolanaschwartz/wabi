@@ -16,26 +16,16 @@ function sampleRate(): number {
 @Injectable()
 export class LangfuseTracer {
   private readonly logger = new Logger(LangfuseTracer.name);
-  private enabled: boolean;
 
-  constructor() {
-    this.enabled = !!(
+  // Evaluated per-call, NOT cached in the constructor: the tracer can be constructed before
+  // ConfigModule populates process.env, which froze `enabled` to false and silently disabled
+  // tracing forever (same load-order trap as @wabi/shared getProvider).
+  private get enabled(): boolean {
+    return !!(
       process.env.LANGFUSE_HOST &&
       process.env.LANGFUSE_PUBLIC_KEY &&
       process.env.LANGFUSE_SECRET_KEY
     );
-    if (this.enabled) {
-      this.logger.log(`Langfuse tracing enabled -> ${process.env.LANGFUSE_HOST}`);
-    } else {
-      const missing = [
-        ['LANGFUSE_HOST', process.env.LANGFUSE_HOST],
-        ['LANGFUSE_PUBLIC_KEY', process.env.LANGFUSE_PUBLIC_KEY],
-        ['LANGFUSE_SECRET_KEY', process.env.LANGFUSE_SECRET_KEY],
-      ]
-        .filter(([, v]) => !v)
-        .map(([k]) => k);
-      this.logger.warn(`Langfuse tracing disabled; missing env: ${missing.join(', ')}`);
-    }
   }
 
   trace(
@@ -117,8 +107,6 @@ export class LangfuseTracer {
             this.logger.warn(
               `Langfuse ingest ${type} -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
             );
-          } else {
-            this.logger.debug(`Langfuse ingest ${type} ok (HTTP ${res.status})`);
           }
         })
         .catch((err) => this.logger.warn(`Langfuse ingest ${type} failed: ${err}`));

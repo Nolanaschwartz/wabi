@@ -14,22 +14,44 @@ describe('LangfuseTracer', () => {
     jest.restoreAllMocks();
     jest.resetModules();
     delete process.env.LANGFUSE_SAMPLE_RATE;
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    delete process.env.LANGFUSE_SECRET_KEY;
   });
 
   it('does not trace when disabled', () => {
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    delete process.env.LANGFUSE_SECRET_KEY;
+    tracer = new LangfuseTracer();
     tracer.trace('test-1', 'classify', 'input', 'safe');
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  // Load-order regression: the tracer may be constructed BEFORE ConfigModule populates process.env
+  // (exactly what disabled Langfuse in dev). enablement must be evaluated per-call, not frozen in
+  // the constructor — otherwise an early construction disables tracing forever.
+  it('traces when env appears AFTER construction', () => {
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    delete process.env.LANGFUSE_SECRET_KEY;
+    const lateTracer = new LangfuseTracer();
+
+    process.env.LANGFUSE_HOST = 'http://localhost:3000';
+    process.env.LANGFUSE_PUBLIC_KEY = 'test-public';
+    process.env.LANGFUSE_SECRET_KEY = 'test-secret';
+
+    lateTracer.trace('test-1', 'classify', 'input', 'safe');
+    expect(global.fetch).toHaveBeenCalled();
+  });
+
   it('skips crisis traces', () => {
-    (tracer as any).enabled = true;
-    tracer.trace('test-1', 'classify', 'input', 'crisis', { isCrisis: true });
+    enabledTracer().trace('test-1', 'classify', 'input', 'crisis', { isCrisis: true });
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('skips crisis scores', () => {
-    (tracer as any).enabled = true;
-    tracer.score('test-1', 'safety', 0.5, true);
+    enabledTracer().score('test-1', 'safety', 0.5, true);
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
