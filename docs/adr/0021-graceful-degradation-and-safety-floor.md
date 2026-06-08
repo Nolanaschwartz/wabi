@@ -30,3 +30,9 @@ A mental-health companion must keep its one hard promise (surface help in a cris
 
 - An LLM-provider outage means the bot **stops coaching** (benign messages included) rather than coaching unscreened — an accepted availability cost.
 - `crisis-resources.json` must ship in the bot image (not fetched at runtime) so it survives total backend outage.
+
+## Amendment (2026-06-07): neo4j joins the Mem0 degradation set (ADR-0025)
+
+Memory is now **hybrid** (ADR-0025): a self-controlled **neo4j** graph runs alongside the Qdrant vectors. The "Mem0 / Qdrant / embeddings down → coach proceeds buffer-only" line above now reads **"Mem0 / Qdrant / neo4j / embeddings down."** neo4j is a **hard Mem0 dependency**, so a neo4j outage can take *all* of Mem0 down — losing both vector and graph personalization, a small regression from vector-only resilience. This stays a non-fatal degradation: the bot's `MemoryStoreService` catches Mem0 errors and returns `[]`, so the coach still degrades gracefully to **buffer-only**.
+
+The **zero-dependency crisis safety floor is unaffected.** The tripwire → resources path never touches Mem0, Qdrant, **neo4j**, embeddings, or the chat LLM; adding neo4j changes nothing about the safety floor. "Safety over availability" holds: a personalization dependency can fail; the one hard promise cannot.
