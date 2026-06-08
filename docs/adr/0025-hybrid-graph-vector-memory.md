@@ -19,5 +19,3 @@ The three-store model (ADR-0004: Record / Memory / Strategy) is **conceptually u
 - **Crisis content is still never mined** (ADR-0010/0016), so it never reaches the graph.
 - **neo4j is now a hard Mem0 dependency** (honest tradeoff). A neo4j outage can take *all* of Mem0 down — losing **both** vector and graph personalization, a small regression from vector-only resilience. This is accepted because: the **zero-dependency crisis safety floor is unaffected** (ADR-0021) — the tripwire → resources path never touches Mem0, Qdrant, neo4j, or embeddings; and the bot's `MemoryStoreService` already catches Mem0 errors and returns `[]`, so the coach degrades gracefully to **buffer-only** when Mem0 (now including neo4j) is unavailable. ADR-0021's degradation list adds neo4j alongside Mem0/Qdrant/embeddings.
 - The graph **builds forward** from new sessions; existing vector memories are not backfilled into it. Like Qdrant Memory, neo4j is rebuildable from Records/conversation and is **not authoritative** — it needs no formal backup (ADR-0020).
-
-See the design spec `docs/superpowers/specs/2026-06-07-hybrid-graph-vector-memory-design.md`.
