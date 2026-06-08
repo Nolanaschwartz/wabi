@@ -1,21 +1,55 @@
 import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
-import { CommandInteraction } from 'discord.js';
+import {
+  Context,
+  Options,
+  BooleanOption,
+  StringOption,
+  SlashCommand,
+  SlashCommandContext,
+} from 'necord';
+import { MessageFlags } from 'discord.js';
 import { CheckInService } from './checkin.service';
 import { CHECK_IN_CADENCES, CheckInCadence } from './checkin-timing';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
+
+export class CheckinDto {
+  @BooleanOption({
+    name: 'enabled',
+    description: 'Turn check-ins on or off',
+    required: false,
+  })
+  enabled?: boolean;
+
+  @StringOption({
+    name: 'cadence',
+    description: 'How often I check in',
+    required: false,
+    choices: CHECK_IN_CADENCES.map((c) => ({ name: c, value: c })),
+  })
+  cadence?: string;
+
+  @StringOption({
+    name: 'timezone',
+    description: 'Your IANA timezone, e.g. America/New_York',
+    required: false,
+  })
+  timezone?: string;
+}
 
 @Injectable()
-@SlashCommand({ name: 'checkins', description: 'Manage your check-in preferences' })
 export class CheckInController {
   constructor(private readonly checkInService: CheckInService) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  @SlashCommand({ name: 'checkins', description: 'Manage your check-in preferences', ...COMMAND_CONTEXTS })
+  async execute(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() options: CheckinDto,
+  ): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-    const opts = (interaction as any).options;
-    const enabled = opts?.getBoolean('enabled') ?? undefined;
-    const cadence = opts?.getString('cadence') ?? undefined;
-    const timezone = opts?.getString('timezone') ?? undefined;
+    const enabled = options.enabled ?? undefined;
+    const cadence = options.cadence ?? undefined;
+    const timezone = options.timezone ?? undefined;
 
     if (enabled === undefined && cadence === undefined && timezone === undefined) {
       await interaction.editReply({
