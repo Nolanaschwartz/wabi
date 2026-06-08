@@ -12,6 +12,12 @@ A person's "delete my data" request must purge **Postgres rows, all Mem0 memorie
 
 > **Amendment (post-ADR-0015/0017):** the original wording "Qdrant is never touched — it holds no personal data" predates self-hosting Mem0 *on Qdrant*. Mem0 personal vectors live in Qdrant and **are** deleted; only the shared Strategy collection is exempt. Verify Mem0's delete path actually evicts vectors from Qdrant (drop `mem0_<userId>`); if per-user collections prove unsupported, fall back to `Mem0.deleteAll({user_id})` against a shared collection.
 
+## Amendment (2026-06-07): Memory now has two physical backends — Qdrant vectors + neo4j graph (ADR-0025)
+
+Memory goes **hybrid** (ADR-0025): Mem0 now stores per-user data in **both** Qdrant vectors (`mem0_<userId>`) **and** a self-controlled **neo4j** entity/relationship graph, namespaced by the same `user_id`. The three-store split is **conceptually unchanged** — Record (Postgres) / Memory (Mem0) / Strategy (Qdrant `wabi_strategies`) still holds; "Memory" simply now has two physical backends behind one Mem0 boundary. Memory remains derived, rebuildable, and non-authoritative.
+
+The deletion rule **extends to the graph.** "Delete my data" must purge the user's **neo4j subgraph** in addition to their Postgres rows, Qdrant `mem0_<userId>` vectors, and Escalation Events. The "never delete shared knowledge" carve-out is unchanged: only the shared `wabi_strategies` collection is exempt. Mem0's `delete_all(user_id=...)` is expected to cascade to neo4j with graph enabled (to be verified; fallback is an explicit graph-delete in the Mem0 image). The standing rule — *any personal-data store added later inherits this deletion rule* — now explicitly covers the neo4j personal graph.
+
 ## Why
 
 The Record/Memory/Strategy boundary removes the "where does this go?" ambiguity for a data shape that could otherwise plausibly live in either Postgres or Mem0. Making Memory explicitly rebuildable and non-authoritative means a Mem0 outage or wipe degrades personalization without losing real data. Defining the deletion path up front is a requirement for a product handling sensitive mental-health-adjacent data (ADR-0001, ADR-0002), not an afterthought.

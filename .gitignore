@@ -34,3 +34,10 @@ qdrant_data/
 .taskmaster/
 
 .scratch/
+
+# Python
+__pycache__/
+*.pyc
+
+# Agent worktrees
+.claude/worktrees/

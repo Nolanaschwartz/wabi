@@ -3,15 +3,19 @@ Wabi self-hosted mem0 REST server.
 
 Drop-in replacement for the route handlers in `mem0/mem0-api-server:latest`, but with an
 ENV-DRIVEN config instead of the stock image's hardcoded DEFAULT_CONFIG (pgvector + neo4j +
-OpenAI). See ADR-0017 (amended 2026-06-06) and remediation issues #04 / #23 / #37.
+OpenAI). See ADR-0025 (hybrid graph+vector memory), ADR-0017, and remediation issues #04 / #23 / #37.
 
 Differences from the stock image:
   - Vector store: Qdrant (self-hosted), via host+port (NOT url, since we have no Qdrant api_key).
-  - Graph store: OMITTED -> mem0 runs vector-only, no neo4j required.
+  - Graph store: neo4j (self-controlled), enabled when MEM0_GRAPH_PASSWORD is set (ADR-0025). With
+    no graph password the config stays vector-only, so the same artifact runs in environments where
+    neo4j is not yet provisioned.
   - LLM + embedder: OpenAI-compatible, pointed at self-controlled endpoints via env.
       * embedder uses the `lmstudio` provider: it is OpenAI-compatible but does NOT send the
         OpenAI-proprietary `dimensions=` param, which llama.cpp / vLLM embedding servers reject.
   - Same artifact dev->prod; only the *_BASE_URL / *_API_KEY env values change.
+
+Config assembly lives in config.py (no `mem0` import) so it is unit-testable in isolation.
 """
 
 import logging
@@ -25,66 +29,22 @@ from pydantic import BaseModel, Field
 
 from mem0 import Memory
 
+from config import build_config
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 load_dotenv()
 
-# --- Vector store (Qdrant, self-hosted) ---
-QDRANT_HOST = os.environ.get("MEM0_QDRANT_HOST", "qdrant")
-QDRANT_PORT = int(os.environ.get("MEM0_QDRANT_PORT", "6333"))
-QDRANT_COLLECTION = os.environ.get("MEM0_QDRANT_COLLECTION", "wabi_memories")
-EMBEDDING_DIMS = int(os.environ.get("MEM0_EMBEDDING_DIMS", "768"))
+DEFAULT_CONFIG = build_config(os.environ)
 
-# --- LLM (OpenAI-compatible, self-controlled) ---
-LLM_BASE_URL = os.environ.get("MEM0_LLM_BASE_URL")
-LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", "gpt-4o-mini")
-LLM_API_KEY = os.environ.get("MEM0_LLM_API_KEY") or "not-needed"
-LLM_TEMPERATURE = float(os.environ.get("MEM0_LLM_TEMPERATURE", "0.2"))
-
-# --- Embedder (OpenAI-compatible via the lmstudio provider; no `dimensions=` param) ---
-EMBEDDER_BASE_URL = os.environ.get("MEM0_EMBEDDER_BASE_URL")
-EMBEDDER_MODEL = os.environ.get("MEM0_EMBEDDER_MODEL", "nomic-embed-text-v2-moe.Q4_K_M.gguf")
-EMBEDDER_API_KEY = os.environ.get("MEM0_EMBEDDER_API_KEY") or "not-needed"
-
-HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
-
-DEFAULT_CONFIG = {
-    "version": "v1.1",
-    "vector_store": {
-        "provider": "qdrant",
-        "config": {
-            "host": QDRANT_HOST,
-            "port": QDRANT_PORT,
-            "collection_name": QDRANT_COLLECTION,
-            "embedding_model_dims": EMBEDDING_DIMS,
-        },
-    },
-    # graph_store intentionally omitted -> enable_graph=False, no neo4j (vector-only, v1).
-    "llm": {
-        "provider": "openai",
-        "config": {
-            "model": LLM_MODEL,
-            "openai_base_url": LLM_BASE_URL,
-            "api_key": LLM_API_KEY,
-            "temperature": LLM_TEMPERATURE,
-        },
-    },
-    "embedder": {
-        "provider": "lmstudio",
-        "config": {
-            "model": EMBEDDER_MODEL,
-            "lmstudio_base_url": EMBEDDER_BASE_URL,
-            "embedding_dims": EMBEDDING_DIMS,
-            "api_key": EMBEDDER_API_KEY,
-        },
-    },
-    "history_db_path": HISTORY_DB_PATH,
-}
-
+_vs = DEFAULT_CONFIG["vector_store"]["config"]
+_graph_enabled = "graph_store" in DEFAULT_CONFIG
 logging.info(
-    "Wabi mem0 config: qdrant=%s:%s/%s dims=%s llm=%s@%s embedder=%s@%s (graph disabled)",
-    QDRANT_HOST, QDRANT_PORT, QDRANT_COLLECTION, EMBEDDING_DIMS,
-    LLM_MODEL, LLM_BASE_URL, EMBEDDER_MODEL, EMBEDDER_BASE_URL,
+    "Wabi mem0 config: qdrant=%s:%s/%s dims=%s llm=%s@%s embedder=%s@%s graph=%s",
+    _vs["host"], _vs["port"], _vs["collection_name"], _vs["embedding_model_dims"],
+    DEFAULT_CONFIG["llm"]["config"]["model"], DEFAULT_CONFIG["llm"]["config"]["openai_base_url"],
+    DEFAULT_CONFIG["embedder"]["config"]["model"], DEFAULT_CONFIG["embedder"]["config"]["lmstudio_base_url"],
+    "neo4j@" + DEFAULT_CONFIG["graph_store"]["config"]["url"] if _graph_enabled else "disabled",
 )
 
 MEMORY_INSTANCE = Memory.from_config(DEFAULT_CONFIG)

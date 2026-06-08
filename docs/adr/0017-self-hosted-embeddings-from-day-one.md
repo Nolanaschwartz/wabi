@@ -25,3 +25,7 @@ Production runs on a cloud platform (Railway) that cannot reach the LAN inferenc
 - The embedding model in practice is `nomic-embed-text-v2-moe` (768-dim), not `bge-base`; the 768-dim lock-in above is unaffected.
 
 See remediation issue #37 (inference topology) and #04/#23 (mem0 deployable image).
+
+## Amendment (2026-06-07): graph store (neo4j) is now used — Memory goes hybrid (ADR-0025)
+
+The 2026-06-06 amendment's line "The graph store (neo4j) is **not used** in v1 (vector-only; graph memory is optional in mem0 and unused)" is **superseded by ADR-0025.** Memory is now **hybrid**: a self-controlled **neo4j** graph runs **alongside** the Qdrant vectors (Mem0's native hybrid mode), additive, not a replacement. The privacy stance in this ADR is unchanged: neo4j is **Wabi's own container** (self-hosted dev / Railway-private prod, never a third-party multi-tenant managed graph), and graph extraction reuses the **same personal-data-tier extraction LLM** and the **same self-hosted embedder** — no new sub-processor, no new trust boundary. The 768-dim embedding lock-in is unaffected. See ADR-0025 for the hybrid shape, the deletion-purges-graph rule, and the graceful-degradation tradeoff.

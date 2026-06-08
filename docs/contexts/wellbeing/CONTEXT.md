@@ -63,7 +63,7 @@ A structured, person-logged event stored in Postgres — a Mood, Tilt Session, P
 _Avoid_: entry (when precision matters), data point
 
 **Memory**:
-A durable fact the AI Coach *infers* about a person to personalize coaching (e.g. "tilts in ranked", "prefers breathing exercises"), held in Mem0. Rebuildable from Records and conversation; never a source of truth. Derived **at session end**, not per message (ADR-0016); Mem0's vectors are embedded by a **self-hosted** embedder and stored in a per-user Qdrant namespace that "delete my data" purges (ADR-0017, ADR-0004).
+A durable fact the AI Coach *infers* about a person to personalize coaching (e.g. "tilts in ranked", "prefers breathing exercises"), held in Mem0. Rebuildable from Records and conversation; never a source of truth. Derived **at session end**, not per message (ADR-0016). Mem0 is **hybrid** (ADR-0025): facts live in **both** a per-user Qdrant vector namespace **and** a self-controlled **neo4j** graph that captures the *relationships* between facts ("lost his job" → "tilts more since"). Both backends are embedded/extracted by a **self-hosted** embedder + personal-data-tier extraction LLM, and **both** are purged when "delete my data" runs (ADR-0017, ADR-0004, ADR-0025).
 _Avoid_: note, profile fact, record
 
 **Conversation** (a **Session**):
