@@ -1,11 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 export type MemoryEntry = {
   id: string;
   content: string;
 };
 
+interface Mem0CreateResponse {
+  id?: string;
+  events?: Array<{ id?: string; event?: string }>;
+  memories?: Array<{ id?: string }>;
+}
+
 @Injectable()
 export class MemoryStoreService {
+  private readonly logger = new Logger(MemoryStoreService.name);
   private enabled: boolean;
   private baseUrl: string | undefined;
 
@@ -14,11 +21,28 @@ export class MemoryStoreService {
     this.enabled = !!this.baseUrl;
   }
 
+  private logOp(
+    op: 'deriveAndStore' | 'search' | 'getAll' | 'deleteAll',
+    userId: string,
+    status: 'success' | 'error' | 'http_error',
+    detail: Record<string, any> = {},
+  ) {
+    const entry = { op, userId, status, ...detail };
+    if (status === 'error' || status === 'http_error') {
+      this.logger.error('mem0 crud', entry);
+    } else {
+      this.logger.log('mem0 crud', entry);
+    }
+  }
+
   async deriveAndStore(
     userId: string,
     sessionText: string,
   ): Promise<void> {
-    if (!this.enabled) return;
+    if (!this.enabled) {
+      this.logger.debug('mem0 disabled, skip deriveAndStore', { userId });
+      return;
+    }
 
     try {
       const res = await fetch(`${this.baseUrl}/memories`, {
@@ -29,11 +53,30 @@ export class MemoryStoreService {
           user_id: `mem0_${userId}`,
         }),
       });
+
       if (!res.ok) {
-        console.error(`[memory] add failed: ${res.status} ${await res.text()}`);
+        const body = await res.text();
+        this.logOp('deriveAndStore', userId, 'http_error', {
+          status: res.status,
+          body: body.slice(0, 200),
+        });
+        return;
       }
+
+      const json: Mem0CreateResponse = await res.json();
+      const createdIds = this.extractCreatedIds(json);
+      this.logOp('deriveAndStore', userId, 'success', {
+        createdCount: createdIds.length,
+        ids: createdIds,
+        events: json.events?.map((e: any) => ({
+          id: e.id,
+          event: e.event,
+        })),
+      });
     } catch (err) {
-      console.error('[memory] add error', err);
+      this.logOp('deriveAndStore', userId, 'error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -53,18 +96,30 @@ export class MemoryStoreService {
         }),
       });
       if (!res.ok) {
-        console.error(
-          `[memory] search failed: ${res.status} ${await res.text()}`,
-        );
+        const body = await res.text();
+        this.logOp('search', userId, 'http_error', {
+          status: res.status,
+          query,
+          body: body.slice(0, 200),
+        });
         return [];
       }
       const json = await res.json();
-      return (json.results ?? []).map((r: any) => ({
+      const results = (json.results ?? []).map((r: any) => ({
         id: r.id,
         content: r.memory ?? '',
       }));
+      this.logOp('search', userId, 'success', {
+        query,
+        hitCount: results.length,
+        ids: results.map((r: MemoryEntry) => r.id),
+      });
+      return results;
     } catch (err) {
-      console.error('[memory] search error', err);
+      this.logOp('search', userId, 'error', {
+        query,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return [];
     }
   }
@@ -77,18 +132,27 @@ export class MemoryStoreService {
         `${this.baseUrl}/memories?user_id=${encodeURIComponent(`mem0_${userId}`)}`,
       );
       if (!res.ok) {
-        console.error(
-          `[memory] getAll failed: ${res.status} ${await res.text()}`,
-        );
+        const body = await res.text();
+        this.logOp('getAll', userId, 'http_error', {
+          status: res.status,
+          body: body.slice(0, 200),
+        });
         return [];
       }
       const json = await res.json();
-      return (json.results ?? []).map((r: any) => ({
+      const results = (json.results ?? []).map((r: any) => ({
         id: r.id,
         content: r.memory ?? '',
       }));
+      this.logOp('getAll', userId, 'success', {
+        totalCount: results.length,
+        ids: results.map((r: MemoryEntry) => r.id),
+      });
+      return results;
     } catch (err) {
-      console.error('[memory] getAll error', err);
+      this.logOp('getAll', userId, 'error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return [];
     }
   }
@@ -102,12 +166,35 @@ export class MemoryStoreService {
         { method: 'DELETE' },
       );
       if (!res.ok) {
-        console.error(
-          `[memory] delete failed: ${res.status} ${await res.text()}`,
-        );
+        const body = await res.text();
+        this.logOp('deleteAll', userId, 'http_error', {
+          status: res.status,
+          body: body.slice(0, 200),
+        });
+        return;
       }
+
+      this.logOp('deleteAll', userId, 'success', {
+        deleted: true,
+      });
     } catch (err) {
-      console.error('[memory] delete error', err);
+      this.logOp('deleteAll', userId, 'error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
+  }
+
+  // Extract created memory IDs from mem0 create response.
+  // Response shape varies: may have top-level id, events[].id, or memories[].id.
+  private extractCreatedIds(json: Mem0CreateResponse): string[] {
+    const ids: string[] = [];
+    if (json.id) ids.push(json.id);
+    for (const evt of json.events ?? []) {
+      if (evt.id) ids.push(evt.id);
+    }
+    for (const m of json.memories ?? []) {
+      if (m.id && !ids.includes(m.id)) ids.push(m.id);
+    }
+    return ids;
   }
 }
