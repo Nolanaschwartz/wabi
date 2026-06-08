@@ -1,32 +1,53 @@
 import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
+import {
+  Context,
+  Options,
+  StringOption,
+  SlashCommandContext,
+  Subcommand,
+  createCommandGroupDecorator,
+} from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { JournalService } from './journal.service';
 import { XpService } from '../xp/xp.service';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
+
+export const JournalCommandGroup = createCommandGroupDecorator({
+  name: 'journal',
+  description: 'Journal and reflect',
+  ...COMMAND_CONTEXTS,
+});
+
+export class JournalWriteDto {
+  @StringOption({
+    name: 'content',
+    description: 'Write a few sentences about how you feel',
+    required: true,
+  })
+  content!: string;
+}
 
 @Injectable()
-@SlashCommand({ name: 'journal', description: 'Journal and reflect' })
+@JournalCommandGroup()
 export class JournalController {
   constructor(
     private readonly journalService: JournalService,
     private readonly xpService: XpService,
   ) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
+  @Subcommand({ name: 'prompt', description: 'Get a reflective journaling prompt' })
+  async prompt(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply();
+    await this.handlePrompt(interaction);
+  }
 
-    const opts = (interaction as any).options;
-    const subcommand = opts?.getSubcommand();
-
-    if (subcommand === 'prompt') {
-      await this.handlePrompt(interaction);
-    } else if (subcommand === 'write') {
-      await this.handleWrite(interaction);
-    } else {
-      await interaction.editReply({
-        content: "Usage: `/journal prompt` or `/journal write content:...`",
-      });
-    }
+  @Subcommand({ name: 'write', description: 'Write a journal entry' })
+  async write(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() { content }: JournalWriteDto,
+  ): Promise<void> {
+    await interaction.deferReply();
+    await this.handleWrite(interaction, content);
   }
 
   private async handlePrompt(interaction: CommandInteraction): Promise<void> {
@@ -36,10 +57,7 @@ export class JournalController {
     });
   }
 
-  private async handleWrite(interaction: CommandInteraction): Promise<void> {
-    const opts = (interaction as any).options;
-    const content = opts?.getString('content') ?? '';
-
+  private async handleWrite(interaction: CommandInteraction, content: string): Promise<void> {
     if (content.length < 10) {
       await interaction.editReply({
         content: "That's a bit short. Try writing a few sentences about how you're feeling.",
