@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 export type TraceStep = 'classify' | 'coach' | 'retrieval';
 
@@ -15,6 +15,7 @@ function sampleRate(): number {
 
 @Injectable()
 export class LangfuseTracer {
+  private readonly logger = new Logger(LangfuseTracer.name);
   private enabled: boolean;
 
   constructor() {
@@ -23,6 +24,18 @@ export class LangfuseTracer {
       process.env.LANGFUSE_PUBLIC_KEY &&
       process.env.LANGFUSE_SECRET_KEY
     );
+    if (this.enabled) {
+      this.logger.log(`Langfuse tracing enabled -> ${process.env.LANGFUSE_HOST}`);
+    } else {
+      const missing = [
+        ['LANGFUSE_HOST', process.env.LANGFUSE_HOST],
+        ['LANGFUSE_PUBLIC_KEY', process.env.LANGFUSE_PUBLIC_KEY],
+        ['LANGFUSE_SECRET_KEY', process.env.LANGFUSE_SECRET_KEY],
+      ]
+        .filter(([, v]) => !v)
+        .map(([k]) => k);
+      this.logger.warn(`Langfuse tracing disabled; missing env: ${missing.join(', ')}`);
+    }
   }
 
   trace(
@@ -98,9 +111,19 @@ export class LangfuseTracer {
           Authorization: `Basic ${auth}`,
         },
         body: JSON.stringify({ batch: [event] }),
-      }).catch(() => {});
-    } catch {
-      // Best-effort tracing
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            this.logger.warn(
+              `Langfuse ingest ${type} -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
+            );
+          } else {
+            this.logger.debug(`Langfuse ingest ${type} ok (HTTP ${res.status})`);
+          }
+        })
+        .catch((err) => this.logger.warn(`Langfuse ingest ${type} failed: ${err}`));
+    } catch (err) {
+      this.logger.warn(`Langfuse ingest ${type} threw: ${err}`);
     }
   }
 }
