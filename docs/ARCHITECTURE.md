@@ -33,7 +33,8 @@ overrides everything.
 | **Postgres** (Prisma) | Records, `User`, lucia Sessions, Escalation Events, AiConversation metadata, Strategy drafts/feedback, pg-boss jobs | The only **authoritative, non-rebuildable** store |
 | **Redis** | Live session buffer (`wabi:sess:<userId>`, ~10 turns) | **Ephemeral, persistence OFF** (ADR-0016) |
 | **Qdrant** | `wabi_strategies` (shared) + `mem0_<userId>` (personal, via Mem0) | 768-dim (ADR-0017) |
-| **Mem0** | Derived Memory; history store **disabled** | Rebuildable from Records (ADR-0004) |
+| **Mem0** | Derived Memory, **hybrid**: Qdrant vectors + neo4j graph; history store **disabled** | Rebuildable from Records (ADR-0004/0025) |
+| **neo4j** | Per-user entity/relationship graph (personal, via Mem0) | **Hybrid** graph backend; rebuilds forward; purged on delete (ADR-0025) |
 | **Embeddings** | bge-base, OpenAI-compatible endpoint | **Local** — personal data never leaves infra (ADR-0017) |
 | **Langfuse** | LLM traces (crisis-scrubbed) | Self-hosted; personal data under delete-my-data |
 | **GlitchTip** | Application errors (content-scrubbed) | Self-hosted error tracking (ADR-0022) |
@@ -59,7 +60,8 @@ overrides everything.
   │     ├── Postgres   (private)        ── pg-boss jobs live here     │
   │     ├── Redis      (private, no persistence)                      │
   │     ├── Qdrant     (private)                                      │
-  │     ├── Mem0       (private) ── embeds via ↓                      │
+  │     ├── Mem0       (private) ── embeds via ↓; hybrid: ↓ Qdrant+neo4j │
+  │     ├── neo4j      (private) ── Mem0 per-user graph (ADR-0025)    │
   │     ├── embeddings (private, bge-base)                            │
   │     └── Langfuse   (private)                                      │
   └──────────────────────────────────────────────────────────────────┘
@@ -140,14 +142,15 @@ web checkout (straight paid sub, no Stripe trial)
 | Verbatim DMs | Discord (+ transient OpenAI for PoC) | Never persisted by Wabi (ADR-0013) |
 | Live turns | Redis | Ephemeral, evaporate at session end |
 | Records | Postgres | Authoritative; export/delete |
-| Derived Memory | Mem0 → Qdrant `mem0_<userId>` | Rebuildable; deleted by dropping the namespace |
+| Derived Memory (vectors) | Mem0 → Qdrant `mem0_<userId>` | Rebuildable; deleted by dropping the namespace |
+| Derived Memory (graph) | Mem0 → neo4j per-user subgraph | Rebuildable; purged on delete-my-data (ADR-0025) |
 | Escalation Events | Postgres | Content-free; deletable |
 | Traces | Langfuse | Crisis-scrubbed; under delete-my-data |
 | Identity/email/billing | Discord, Stripe | External identity-tier (accepted) |
 | Shared Strategies | Qdrant `wabi_strategies` | **Non-personal** — never deleted on user delete |
 
-Delete-my-data = Postgres rows + Mem0 namespace + Escalation Events; **never** the
-shared Strategy collection (ADR-0004).
+Delete-my-data = Postgres rows + Mem0 vectors (Qdrant namespace) + Mem0 neo4j
+subgraph + Escalation Events; **never** the shared Strategy collection (ADR-0004/0025).
 
 ---
 
@@ -179,4 +182,4 @@ delete · 0005 paid-only + safety carveout · 0006 layered crisis detection ·
 web-first onboarding · **0016** ephemeral buffer + session-end memory · **0017**
 self-hosted embeddings · **0018** durable pg-boss jobs · **0019** NestJS backend ·
 **0020** deployment/ops (Railway) · **0021** graceful degradation + safety floor ·
-**0022** observability + liveness
+**0022** observability + liveness · **0025** hybrid graph+vector memory (neo4j)
