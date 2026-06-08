@@ -37,6 +37,14 @@ services:
       - '7687:7687'
     volumes:
       - neo4j_data:/data
+    # mem0 connects to neo4j at construction and crashes if bolt isn't ready, so gate mem0 on this
+    # healthcheck (neo4j cold start is ~20-40s) rather than the bare container-start of depends_on.
+    healthcheck:
+      test: ['CMD-SHELL', "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-wabi-local} 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
 
   mem0:
     build:
@@ -64,9 +72,15 @@ services:
       HISTORY_DB_PATH: /app/history/history.db
     ports:
       - '8081:8081'
+    # Gate on neo4j being healthy (not just started); restart as a backstop for transient neo4j
+    # blips. If neo4j is permanently down, mem0 stays unavailable and the bot degrades to
+    # buffer-only (ADR-0025: neo4j is a hard mem0 dependency).
+    restart: on-failure
     depends_on:
-      - qdrant
-      - neo4j
+      qdrant:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
     volumes:
       - mem0_history:/app/history
 
