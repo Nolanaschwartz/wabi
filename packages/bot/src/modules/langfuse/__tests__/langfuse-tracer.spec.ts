@@ -13,6 +13,7 @@ describe('LangfuseTracer', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     jest.resetModules();
+    delete process.env.LANGFUSE_SAMPLE_RATE;
   });
 
   it('does not trace when disabled', () => {
@@ -65,6 +66,24 @@ describe('LangfuseTracer', () => {
     expect(typeof event.id).toBe('string');
     expect(typeof event.timestamp).toBe('string');
     expect(event.body.name).toBe('classify');
+  });
+
+  // In dev we want every non-crisis trace sampled (full visibility); prod stays at 10%. The rate is
+  // read per-call from env / NODE_ENV so it tracks the running environment, not import time.
+  it('samples all traces in dev (NODE_ENV not production)', () => {
+    delete process.env.NODE_ENV;
+    delete process.env.LANGFUSE_SAMPLE_RATE;
+    enabledTracer().trace('test-1', 'classify', 'input', 'safe');
+    const event = JSON.parse(lastCall()[1]!.body as string).batch[0];
+    expect(event.body.metadata.sampled).toBe(true);
+  });
+
+  it('honors an explicit LANGFUSE_SAMPLE_RATE override', () => {
+    delete process.env.NODE_ENV;
+    process.env.LANGFUSE_SAMPLE_RATE = '0';
+    enabledTracer().trace('test-1', 'classify', 'input', 'safe');
+    const event = JSON.parse(lastCall()[1]!.body as string).batch[0];
+    expect(event.body.metadata.sampled).toBe(false);
   });
 
   // Non-crisis traces retain full coaching content for eval/quality data (ADR-0024):

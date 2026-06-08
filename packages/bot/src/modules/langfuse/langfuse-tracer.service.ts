@@ -1,7 +1,17 @@
 import { Injectable } from '@nestjs/common';
-const SAMPLE_RATE = 0.1;
 
 export type TraceStep = 'classify' | 'coach' | 'retrieval';
+
+// Dev keeps full visibility (sample everything); prod samples 10%. Read per-call from env so it
+// tracks the running environment rather than import-time state. LANGFUSE_SAMPLE_RATE overrides both.
+function sampleRate(): number {
+  const override = process.env.LANGFUSE_SAMPLE_RATE;
+  if (override !== undefined && override !== '') {
+    const parsed = Number(override);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return process.env.NODE_ENV === 'production' ? 0.1 : 1.0;
+}
 
 @Injectable()
 export class LangfuseTracer {
@@ -25,7 +35,7 @@ export class LangfuseTracer {
     if (!this.enabled) return;
     if (options?.isCrisis) return;
 
-    const isSampled = Math.random() < SAMPLE_RATE;
+    const isSampled = Math.random() < sampleRate();
     const level = isSampled ? 'debug' : 'info';
 
     // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024).
