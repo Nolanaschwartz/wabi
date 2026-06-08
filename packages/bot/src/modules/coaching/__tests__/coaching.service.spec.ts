@@ -285,6 +285,33 @@ describe('CoachingService', () => {
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
 
+  it('sends the coach reply without waiting on memory persistence', async () => {
+    // mem0 ADD now runs hybrid vector+graph extraction (~20s+). deriveAndStore must NOT block the
+    // user-visible reply — otherwise the bot appears to never respond. Simulate a persist that never
+    // resolves; handle must still complete and reply.
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+      timezone: 'UTC',
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue('That sounds tough. Hang in there.');
+    // Never resolves — mimics a slow/hung hybrid extraction.
+    (memoryStore.deriveAndStore as jest.Mock).mockReturnValue(new Promise<void>(() => {}));
+
+    await service.handle(mockMessage, jest.fn());
+
+    expect(memoryStore.deriveAndStore).toHaveBeenCalled();
+    expect(mockMessage.reply).toHaveBeenCalledWith('That sounds tough. Hang in there.');
+  });
+
   it('cancels pending coach turn on crisis', async () => {
     service.cancelPending('123');
     expect(burstCoalescer.cancel).toHaveBeenCalledWith('123');

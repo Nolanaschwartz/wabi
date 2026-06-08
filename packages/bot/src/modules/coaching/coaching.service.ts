@@ -140,10 +140,10 @@ export class CoachingService {
 
     const streakResult = await this.streaks.checkAndAward(userId, user.timezone ?? 'UTC').catch(() => null);
 
-    await this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
-
     this.langfuseTracer.trace(traceId, 'coach', context, reply, { latencyMs: coachLatency });
 
+    // Send the reply BEFORE persisting long-term memory. deriveAndStore runs mem0's hybrid
+    // vector+graph extraction (~20s+ since ADR-0025), which must never delay the user-visible reply.
     const parts = splitMessage(reply);
     for (const part of parts) {
       await message.reply(part);
@@ -151,6 +151,10 @@ export class CoachingService {
     if (streakResult && streakResult.message) {
       await message.reply(streakResult.message);
     }
+
+    // Fire-and-forget: persistence failures are already logged inside deriveAndStore, and memory is
+    // not needed to answer this turn. Awaiting it here previously starved the reply.
+    void this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
   }
 
   cancelPending(userId: string): void {
