@@ -1,19 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { Context, ContextOf, On } from 'necord';
-import { Message } from 'discord.js';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
-import { CrisisResourcesService } from '../crisis/crisis-resources.service';
+import { EscalationService } from '../crisis/escalation.service';
 import { CoachingService } from '../coaching/coaching.service';
-import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
-import { prisma } from '@wabi/shared';
 
 @Injectable()
 export class EchoController {
   constructor(
     private readonly crisisScreening: CrisisScreeningService,
-    private readonly crisisResources: CrisisResourcesService,
+    private readonly escalation: EscalationService,
     private readonly coaching: CoachingService,
-    private readonly crisisAftermath: CrisisAftermathService,
   ) {}
 
   @On('messageCreate')
@@ -28,54 +24,10 @@ export class EchoController {
       // for this user (e.g. a benign first message still debouncing), so no cheerful reply is
       // sent alongside the crisis resources. (Issue #06 / #25.)
       this.coaching.cancelPending(message.author.id);
-      await this.handleCrisis(message);
+      await this.escalation.escalate(message, 'tripwire');
       return;
     }
 
-    await this.coaching.handle(message, async () => this.handleCrisis(message));
-  }
-
-  private async handleCrisis(message: Message): Promise<void> {
-    const user = await prisma.user.findUnique({
-      where: { discordId: message.author.id },
-    });
-    const locale = user?.locale ?? 'en-US';
-    const resources = this.crisisResources.resourcesFor(locale);
-
-    const resourceLines = resources.resources.map((r) => {
-      if (r.type === 'web') return `• ${r.name}: ${r.url}`;
-      if (r.type === 'info') return `• ${r.name}`;
-      return `• ${r.name}: ${r.phone}`;
-    });
-
-    const embed = {
-      color: 0x000000,
-      title: '🚨 You matter',
-      description:
-        "If you're in crisis, real people are here to help. Please reach out:",
-      fields: [
-        {
-          name: 'Resources',
-          value: resourceLines.join('\n'),
-          inline: false,
-        },
-      ],
-      footer: { text: 'These numbers are free and confidential' },
-    };
-
-    await message.reply({ embeds: [embed] });
-
-    try {
-      await prisma.escalationEvent.create({
-        data: {
-          userId: message.author.id,
-          layer: 'tripwire',
-        },
-      });
-    } catch {
-      // Best-effort logging
-    }
-
-    await this.crisisAftermath.onEscalation(message.author.id);
+    await this.coaching.handle(message);
   }
 }

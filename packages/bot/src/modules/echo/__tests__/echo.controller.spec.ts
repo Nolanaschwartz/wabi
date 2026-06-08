@@ -34,9 +34,8 @@ describe('EchoController', () => {
             provide: EchoController,
             useValue: new EchoController(
               { tripwire: jest.fn() } as any,
-              {} as any,
+              { escalate: jest.fn() } as any,
               { handle: jest.fn() } as any,
-              {} as any,
             ),
           },
         ],
@@ -78,9 +77,8 @@ describe('EchoController', () => {
 
       const controller = new EchoController(
         { tripwire: mockTripwire } as any,
-        null!,
+        { escalate: jest.fn() } as any,
         { handle: mockHandle } as any,
-        {} as any,
       );
 
       const message = {
@@ -100,9 +98,8 @@ describe('EchoController', () => {
 
       const controller = new EchoController(
         { tripwire: mockTripwire } as any,
-        null!,
+        { escalate: jest.fn() } as any,
         { handle: mockHandle } as any,
-        {} as any,
       );
 
       const message = {
@@ -122,9 +119,8 @@ describe('EchoController', () => {
 
       const controller = new EchoController(
         { tripwire: mockTripwire } as any,
-        null!,
+        { escalate: jest.fn() } as any,
         { handle: mockHandle } as any,
-        {} as any,
       );
 
       const message = {
@@ -135,17 +131,17 @@ describe('EchoController', () => {
 
       await controller.handleMessage([message]);
       expect(mockTripwire).toHaveBeenCalledWith('i played ranked all night');
-      expect(mockHandle).toHaveBeenCalledWith(message, expect.any(Function));
+      expect(mockHandle).toHaveBeenCalledWith(message);
     });
 
-    it('cancels a pending coach turn when a tripwire crisis arrives mid-burst', async () => {
+    it('escalates through one seam and cancels a pending coach turn when a tripwire crisis arrives mid-burst', async () => {
       const cancelPending = jest.fn();
       const handle = jest.fn();
+      const escalate = jest.fn().mockResolvedValue(undefined);
       const controller = new EchoController(
         { tripwire: jest.fn().mockReturnValue(true) } as any,
-        { resourcesFor: () => ({ resources: [] }) } as any,
+        { escalate } as any,
         { handle, cancelPending } as any,
-        { onEscalation: jest.fn().mockResolvedValue(undefined) } as any,
       );
 
       const message = {
@@ -160,8 +156,9 @@ describe('EchoController', () => {
       // Pending coach turn is canceled (no cheerful reply), and we don't run the coach pipeline.
       expect(cancelPending).toHaveBeenCalledWith('123');
       expect(handle).not.toHaveBeenCalled();
-      // Crisis resources are still delivered.
-      expect(message.reply).toHaveBeenCalled();
+      // The whole crisis response goes through the single Escalation seam, tagged 'tripwire'.
+      expect(escalate).toHaveBeenCalledTimes(1);
+      expect(escalate).toHaveBeenCalledWith(message, 'tripwire');
     });
   });
 });
