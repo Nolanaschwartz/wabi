@@ -1,28 +1,49 @@
 import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
-import { CommandInteraction } from 'discord.js';
+import {
+  Context,
+  Options,
+  BooleanOption,
+  SlashCommandContext,
+  Subcommand,
+  createCommandGroupDecorator,
+} from 'necord';
+import { CommandInteraction, MessageFlags } from 'discord.js';
 import { DataRightsService } from './data-rights.service';
+import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
+
+export const DataCommandGroup = createCommandGroupDecorator({
+  name: 'data',
+  description: 'Manage your data',
+  ...COMMAND_CONTEXTS,
+});
+
+export class DataDeleteDto {
+  @BooleanOption({
+    name: 'confirm',
+    description: 'Confirm permanent deletion of all your data',
+    required: false,
+  })
+  confirm?: boolean;
+}
 
 @Injectable()
-@SlashCommand({ name: 'data', description: 'Manage your data' })
+@DataCommandGroup()
 export class DataRightsController {
   constructor(private readonly dataRightsService: DataRightsService) {}
 
-  async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply({ ephemeral: true });
+  @Subcommand({ name: 'export', description: 'Export all your data as JSON' })
+  async export(@Context() [interaction]: SlashCommandContext): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await this.handleExport(interaction);
+  }
 
-    const opts = (interaction as any).options;
-    const subcommand = opts?.getSubcommand();
-
-    if (subcommand === 'export') {
-      await this.handleExport(interaction);
-    } else if (subcommand === 'delete') {
-      await this.handleDelete(interaction);
-    } else {
-      await interaction.editReply({
-        content: "Usage: `/data export` or `/data delete confirm:true`",
-      });
-    }
+  @Subcommand({ name: 'delete', description: 'Permanently delete all your data' })
+  async delete(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() { confirm }: DataDeleteDto,
+  ): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await this.handleDelete(interaction, confirm ?? false);
   }
 
   private async handleExport(interaction: CommandInteraction): Promise<void> {
@@ -56,10 +77,7 @@ export class DataRightsController {
     }
   }
 
-  private async handleDelete(interaction: CommandInteraction): Promise<void> {
-    const opts = (interaction as any).options;
-    const confirm = opts?.getBoolean('confirm') ?? false;
-
+  private async handleDelete(interaction: CommandInteraction, confirm: boolean): Promise<void> {
     if (!confirm) {
       await interaction.editReply({
         content: "To confirm deletion, run `/data delete confirm:true`. This will permanently delete all your data.",
