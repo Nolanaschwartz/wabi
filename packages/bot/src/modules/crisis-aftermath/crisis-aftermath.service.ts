@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import { Client } from 'discord.js';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
+import { ContactPolicyService } from '../contact-policy/contact-policy.service';
 
 const FOLLOW_UP_DELAY_MINUTES = 30;
 const FOLLOW_UP_MESSAGES = [
@@ -17,6 +19,8 @@ export class CrisisAftermathService {
     private readonly sessionBuffer: SessionBufferService,
     private readonly coachingSession: CoachingSessionService,
     private readonly scheduler: SchedulerService,
+    private readonly client: Client,
+    private readonly contactPolicy: ContactPolicyService,
   ) {}
 
   async init(): Promise<void> {
@@ -38,27 +42,51 @@ export class CrisisAftermathService {
       Math.floor(Math.random() * FOLLOW_UP_MESSAGES.length)
     ];
 
-    await this.scheduler.schedule(
+    // One-off delayed job (not a recurring cron). The follow-up respects quiet hours via the Contact
+    // Policy: if the 30-minute mark lands in quiet hours it defers to the next allowed window rather
+    // than waking the person (ADR-0008/0010), but is exempt from opt-in and the sparing rate.
+    const startAfterSeconds = await this.followUpDelaySeconds(userId);
+    await this.scheduler.sendAfter(
       'crisis-follow-up',
-      `${FOLLOW_UP_DELAY_MINUTES} minutes`,
-      {
-        userId,
-        message: followUpMessage,
-      },
+      { userId, message: followUpMessage },
+      startAfterSeconds,
     );
   }
 
+  private async followUpDelaySeconds(userId: string): Promise<number> {
+    const baseFireAt = new Date(Date.now() + FOLLOW_UP_DELAY_MINUTES * 60 * 1000);
+    const user = await prisma.user
+      .findUnique({ where: { discordId: userId }, select: { timezone: true } })
+      .catch(() => null);
+    const decision = this.contactPolicy.mayContact(
+      user?.timezone ?? 'UTC',
+      'crisis-follow-up',
+      baseFireAt,
+    );
+    if (decision.allow) {
+      return FOLLOW_UP_DELAY_MINUTES * 60;
+    }
+    const deferMs = (decision.deferUntil?.getTime() ?? baseFireAt.getTime()) - Date.now();
+    return Math.max(0, Math.round(deferMs / 1000));
+  }
+
   private async followUpJob(job: unknown[]): Promise<void> {
+    const data = job[0] as { userId: string; message: string };
+    if (!data?.userId) return;
+
+    // Deliver the gentle follow-up DM, then record the content-free event (ADR-0010).
     try {
-      const data = job[0] as { userId: string };
+      await this.client.users.send(data.userId, { content: data.message });
+    } catch {
+      // The person may have closed DMs — the escalation already surfaced resources.
+    }
+
+    try {
       await prisma.escalationEvent.create({
-        data: {
-          userId: data.userId,
-          layer: 'follow-up',
-        },
+        data: { userId: data.userId, layer: 'follow-up' },
       });
     } catch {
-      // Non-critical
+      // Non-critical, content-free logging.
     }
   }
 
