@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
+import { XpService } from '../xp/xp.service';
 
 const STREAK_GRACE_DAYS = 1;
 const XP_PER_COACHING_TURN = 10;
@@ -19,6 +20,10 @@ function startOfDayInTZ(tz: string, d: Date = new Date()): Date {
 
 @Injectable()
 export class StreaksService {
+  // XP is awarded through XpService — the sole writer of the xpEntry ledger. Streaks still READS
+  // xpEntry to infer daily engagement (see the double-duty note below), but never writes it raw.
+  constructor(private readonly xp: XpService) {}
+
   async checkAndAward(
     discordId: string,
     timezone: string = 'UTC',
@@ -33,9 +38,7 @@ export class StreaksService {
     });
 
     if (!lastEntry) {
-      await prisma.xpEntry.create({
-        data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
-      });
+      await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
       return {
         streak: 1,
         message: "Welcome! Your streak has begun.",
@@ -53,9 +56,7 @@ export class StreaksService {
     }
 
     if (daysSince === 1) {
-      await prisma.xpEntry.create({
-        data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
-      });
+      await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
       const streak = (await this.getCurrentStreak(discordId, timezone)) + 1;
       return {
         streak,
@@ -64,18 +65,14 @@ export class StreaksService {
     }
 
     if (daysSince <= STREAK_GRACE_DAYS + 1) {
-      await prisma.xpEntry.create({
-        data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
-      });
+      await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
       return {
         streak: await this.getCurrentStreak(discordId, timezone),
         message: "Welcome back! No worries about the break.",
       };
     }
 
-    await prisma.xpEntry.create({
-      data: { userId: discordId, amount: XP_PER_COACHING_TURN, reason: 'coaching' },
-    });
+    await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
     return {
       streak: 1,
       message: "Welcome back! Fresh start, no pressure.",
