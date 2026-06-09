@@ -56,6 +56,12 @@ export class StrategyAdminService {
   }
 
   async approveDraft(id: string): Promise<StrategyDraft | null> {
+    // Only a pending-review draft may be published (ADR-0012 lifecycle). The guard lives here, in
+    // the service — not just in the admin UI — so an already-published or quarantined draft can't be
+    // flipped back through a stale/replayed request.
+    const existing = await prisma.strategyDraft.findUnique({ where: { id } });
+    if (!existing || existing.status !== 'pending-review') return null;
+
     const updated = await prisma.strategyDraft.update({
       where: { id },
       data: { status: 'published' },
@@ -69,6 +75,10 @@ export class StrategyAdminService {
   }
 
   async rejectDraft(id: string): Promise<StrategyDraft | null> {
+    // Same lifecycle guard: only a pending-review draft may be quarantined from review.
+    const existing = await prisma.strategyDraft.findUnique({ where: { id } });
+    if (!existing || existing.status !== 'pending-review') return null;
+
     const updated = await prisma.strategyDraft.update({
       where: { id },
       data: { status: 'quarantined' },

@@ -183,7 +183,11 @@ describe('StrategyAdminService', () => {
     expect(pending[0].status).toBe('pending-review');
   });
 
-  it('approves draft', async () => {
+  it('approves a pending-review draft', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'pending-review',
+    });
     (prisma.strategyDraft.update as jest.Mock).mockResolvedValue({
       id: '1',
       title: 'Test',
@@ -202,7 +206,11 @@ describe('StrategyAdminService', () => {
     expect(retrieval.upsert).toHaveBeenCalledWith('1', expect.any(String), 'Test');
   });
 
-  it('rejects draft', async () => {
+  it('rejects a pending-review draft', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'pending-review',
+    });
     (prisma.strategyDraft.update as jest.Mock).mockResolvedValue({
       id: '1',
       title: 'Test',
@@ -219,6 +227,32 @@ describe('StrategyAdminService', () => {
     const result = await service.rejectDraft('1');
     expect(result?.status).toBe('quarantined');
     expect(retrieval.delete).toHaveBeenCalledWith('1');
+  });
+
+  it('refuses to re-publish a draft that is not pending-review (lifecycle guard)', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'quarantined',
+    });
+
+    const result = await service.approveDraft('1');
+
+    expect(result).toBeNull();
+    expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+    expect(retrieval.upsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses to reject a draft that is not pending-review (lifecycle guard)', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'published',
+    });
+
+    const result = await service.rejectDraft('1');
+
+    expect(result).toBeNull();
+    expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+    expect(retrieval.delete).not.toHaveBeenCalled();
   });
 
   it('adjusts evidence level and persists the change', async () => {
