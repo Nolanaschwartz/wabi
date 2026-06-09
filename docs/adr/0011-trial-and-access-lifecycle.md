@@ -30,6 +30,8 @@ coach + store + new logging  -> ACTIVE ACCESS only
 data read / export / delete  -> ALWAYS
 ```
 
+> **Amendment (ADR-0026):** `new logging` above is scoped to **coaching-pipeline writes** (memory/session derivation inside the DM path). The standalone inner-state log commands (`/mood`, `/journal`, `/tilt`, `/playtime`) are deliberately **not** access-gated — logging your own state is treated as a data right, not new AI work. Only the coaching DM path gates on Active Access.
+
 A lapsed user's free-form DM therefore runs tripwire + classifier (cost is bounded — the cheap `CLASSIFIER_MODEL`, never the coach), and on no crisis returns a **rate-limited** (once per session/day, never per message) caring resubscribe prompt. "Read-only data access" is served via the web dashboard and read-only slash commands (`/profile`, `/mood stats`), not free-form DM.
 
 ## Why
