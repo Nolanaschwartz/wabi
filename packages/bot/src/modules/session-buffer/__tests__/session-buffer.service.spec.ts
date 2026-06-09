@@ -109,4 +109,21 @@ describe('SessionBufferService', () => {
       expect.objectContaining({ EX: 86400 }),
     );
   });
+
+  describe('inAftermathWindow (raw quarantine-key read; policy stays in CrisisAftermath)', () => {
+    it('returns true when the quarantine key is set', async () => {
+      const mockClient = { get: jest.fn().mockResolvedValue('true') };
+      (service as any).client = mockClient;
+
+      await expect(service.inAftermathWindow('123')).resolves.toBe(true);
+      expect(mockClient.get).toHaveBeenCalledWith('wabi:quarantine:123');
+    });
+
+    it('returns false when the quarantine key is absent', async () => {
+      const mockClient = { get: jest.fn().mockResolvedValue(null) };
+      (service as any).client = mockClient;
+
+      await expect(service.inAftermathWindow('123')).resolves.toBe(false);
+    });
+  });
 });

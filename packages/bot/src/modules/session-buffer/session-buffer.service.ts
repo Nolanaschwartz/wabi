@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { createClient, RedisClientType } from 'redis';
 
 const SESSION_KEY_PREFIX = 'wabi:sess:';
+const QUARANTINE_KEY_PREFIX = 'wabi:quarantine:';
+const QUARANTINE_TTL_SECONDS = 24 * 60 * 60;
 const SESSION_TTL_SECONDS = 30 * 60;
 const MAX_TURNS = 10;
 // Cap the startup Redis connect so a down/slow Redis can't block bootstrap — and the Discord
@@ -96,11 +98,26 @@ export class SessionBufferService {
 
   async clearAndQuarantine(userId: string): Promise<void> {
     await this.client.del(this.sessionKey(userId));
-    await this.client.set(`wabi:quarantine:${userId}`, 'true', { EX: 86400 });
+    await this.client.set(this.quarantineKey(userId), 'true', {
+      EX: QUARANTINE_TTL_SECONDS,
+    });
+  }
+
+  // The raw fact: is the post-crisis quarantine key still set? The *policy* of when that counts
+  // (e.g. a fresh session cancelling the window) lives in CrisisAftermath, not here — this module
+  // owns the key, its name, and its TTL, nothing more. Symmetric read for the clearAndQuarantine
+  // write above; callers never touch the Redis client directly.
+  async inAftermathWindow(userId: string): Promise<boolean> {
+    const value = await this.client.get(this.quarantineKey(userId));
+    return value === 'true';
   }
 
   private sessionKey(userId: string): string {
     return `${SESSION_KEY_PREFIX}${userId}`;
+  }
+
+  private quarantineKey(userId: string): string {
+    return `${QUARANTINE_KEY_PREFIX}${userId}`;
   }
 
   private async getRaw(userId: string): Promise<RawSessionData | null> {
