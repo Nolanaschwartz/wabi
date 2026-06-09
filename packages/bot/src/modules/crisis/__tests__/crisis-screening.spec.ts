@@ -126,3 +126,48 @@ describe('CrisisScreeningService.screen', () => {
     expect(verdict).toEqual({ kind: 'safe' });
   });
 });
+
+describe('CrisisScreeningService.guard — the shared screened-record path', () => {
+  let service: CrisisScreeningService;
+  let classifier: { classify: jest.Mock };
+  let escalation: { escalate: jest.Mock };
+  const payload = { embeds: [{ title: '🚨 You matter' }] };
+
+  beforeEach(() => {
+    classifier = { classify: jest.fn().mockResolvedValue('safe') };
+    escalation = { escalate: jest.fn().mockResolvedValue(payload) };
+    service = new CrisisScreeningService(classifier as any, escalation as any);
+  });
+
+  it('runs the persist and returns its value when the free text clears', async () => {
+    const persist = jest.fn().mockResolvedValue({ id: 'm1' });
+
+    const result = await service.guard('123', 'I had a good day', persist);
+
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ crisis: false, value: { id: 'm1' } });
+  });
+
+  it('short-circuits to the crisis response and NEVER persists on a crisis hit', async () => {
+    const persist = jest.fn().mockResolvedValue({ id: 'm1' });
+
+    const result = await service.guard('123', 'I want to die', persist);
+
+    expect(persist).not.toHaveBeenCalled();
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', {
+      startAftermath: false,
+    });
+    expect(result).toEqual({ crisis: true, response: payload });
+  });
+
+  it('skips screening for absent/empty free text (structured-only record)', async () => {
+    const persist = jest.fn().mockResolvedValue(undefined);
+
+    const result = await service.guard('123', undefined, persist);
+
+    expect(escalation.escalate).not.toHaveBeenCalled();
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ crisis: false, value: undefined });
+  });
+});

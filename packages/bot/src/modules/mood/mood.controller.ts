@@ -53,11 +53,17 @@ export class MoodController {
     const clamped = Math.max(1, Math.min(5, rating ?? 3));
     const emoji = MoodService.ratingToEmoji(clamped);
 
-    await this.moodService.log(interaction.user.id, {
+    const result = await this.moodService.log(interaction.user.id, {
       rating: clamped,
       emoji,
       note: note ?? undefined,
     });
+
+    if (result.crisis) {
+      // The note tripped Crisis Screening — surface real resources, skip the mood confirmation.
+      await interaction.editReply(result.response);
+      return;
+    }
 
     const trend = await this.moodService.trend(interaction.user.id);
     const trendText = trend > 0 ? `\nYour ${Math.round(trend * 10) / 10}-day average: ${'⭐'.repeat(Math.round(trend))}` : '';

@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { CrisisScreeningService } from '../crisis/crisis-screening.service';
-import type { CrisisResponse } from '../crisis/escalation.service';
+import {
+  CrisisScreeningService,
+  ScreenedRecord,
+} from '../crisis/crisis-screening.service';
 import { CoachService } from '../coaching/coach.service';
 import { XpService } from '../xp/xp.service';
 
@@ -23,9 +25,10 @@ const PROMPTS = [
   "What made you smile today?",
 ];
 
-export type JournalWriteResult =
-  | { crisis: true; response: CrisisResponse }
-  | { crisis: false; reflection: string; xpAwarded: number };
+export type JournalWriteResult = ScreenedRecord<{
+  reflection: string;
+  xpAwarded: number;
+}>;
 
 @Injectable()
 export class JournalService {
@@ -41,27 +44,24 @@ export class JournalService {
   }
 
   async write(discordId: string, content: string): Promise<JournalWriteResult> {
-    // Screen the free-text entry before persisting (ADR-0028). A crisis hit surfaces the real locale
-    // Crisis Resources + records one Escalation Event — but no DM-session aftermath, since a journal
-    // entry is not a Conversation. We hand the renderable response straight back to the controller.
-    const verdict = await this.screening.screen(discordId, content);
-    if (verdict.kind === 'crisis') {
-      return { crisis: true, response: verdict.response };
-    }
+    // The entry content crosses the shared screened-record path before persisting (ADR-0028). A
+    // crisis hit surfaces the real locale Crisis Resources + records one Escalation Event — but no
+    // DM-session aftermath, since a journal entry is not a Conversation — and the entry is not saved.
+    return this.screening.guard(discordId, content, async () => {
+      const reflection = await this.generateReflection(content);
 
-    const reflection = await this.generateReflection(content);
+      await prisma.journalEntry.create({
+        data: {
+          userId: discordId,
+          content,
+          reflection: reflection || null,
+        },
+      });
 
-    await prisma.journalEntry.create({
-      data: {
-        userId: discordId,
-        content,
-        reflection: reflection || null,
-      },
+      await this.xp.award(discordId, JOURNAL_XP_AWARD, 'journal');
+
+      return { reflection: reflection || '', xpAwarded: JOURNAL_XP_AWARD };
     });
-
-    await this.xp.award(discordId, JOURNAL_XP_AWARD, 'journal');
-
-    return { crisis: false, reflection: reflection || '', xpAwarded: JOURNAL_XP_AWARD };
   }
 
   private async generateReflection(content: string): Promise<string> {

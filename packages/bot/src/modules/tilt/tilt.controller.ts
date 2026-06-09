@@ -71,13 +71,19 @@ export class TiltController {
     trigger: string,
     severity: number,
   ): Promise<void> {
-    const technique = await this.tiltService.start(interaction.user.id, {
+    const result = await this.tiltService.start(interaction.user.id, {
       trigger,
       severity,
     });
 
+    if (result.crisis) {
+      // The trigger tripped Crisis Screening — surface real resources, skip the session confirmation.
+      await interaction.editReply(result.response);
+      return;
+    }
+
     await interaction.editReply({
-      content: `Tilt session started. Trigger: ${trigger} (Severity: ${severity}/10)\n\nReset technique: ${technique}`,
+      content: `Tilt session started. Trigger: ${trigger} (Severity: ${severity}/10)\n\nReset technique: ${result.value}`,
     });
   }
 

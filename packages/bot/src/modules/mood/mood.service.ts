@@ -1,4 +1,9 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
+import {
+  CrisisScreeningService,
+  ScreenedRecord,
+} from '../crisis/crisis-screening.service';
 
 const MOOD_EMOJIS: Record<number, string> = {
   1: '😞',
@@ -15,16 +20,24 @@ export interface MoodLog {
   context?: string;
 }
 
+@Injectable()
 export class MoodService {
-  async log(discordId: string, mood: MoodLog): Promise<void> {
-    await prisma.mood.create({
-      data: {
-        userId: discordId,
-        rating: mood.rating,
-        emoji: mood.emoji,
-        note: mood.note ?? null,
-        context: mood.context ?? null,
-      },
+  constructor(private readonly screening: CrisisScreeningService) {}
+
+  // The mood `note` is free text a person can express distress into, so it crosses the shared
+  // screened-record path before the record is written (ADR-0028). A crisis note escalates and is not
+  // persisted; the controller renders the returned resources.
+  async log(discordId: string, mood: MoodLog): Promise<ScreenedRecord<void>> {
+    return this.screening.guard(discordId, mood.note, async () => {
+      await prisma.mood.create({
+        data: {
+          userId: discordId,
+          rating: mood.rating,
+          emoji: mood.emoji,
+          note: mood.note ?? null,
+          context: mood.context ?? null,
+        },
+      });
     });
   }
 

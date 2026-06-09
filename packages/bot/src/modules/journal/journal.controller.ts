@@ -70,7 +70,7 @@ export class JournalController {
     }
 
     await interaction.editReply({
-      content: `Entry saved. ${result.reflection} (+${result.xpAwarded} XP)`,
+      content: `Entry saved. ${result.value.reflection} (+${result.value.xpAwarded} XP)`,
     });
   }
 }

@@ -7,6 +7,14 @@ export type ScreeningVerdict =
   | { kind: 'crisis'; response: CrisisResponse }
   | { kind: 'safe' };
 
+/**
+ * The outcome of a screened persist: either a crisis was caught (the record was NOT written and the
+ * caller renders `response`), or the free text cleared and the persist ran, yielding `value`.
+ */
+export type ScreenedRecord<T> =
+  | { crisis: true; response: CrisisResponse }
+  | { crisis: false; value: T };
+
 @Injectable()
 export class CrisisScreeningService {
   constructor(
@@ -77,5 +85,28 @@ export class CrisisScreeningService {
     }
 
     return { kind: 'safe' };
+  }
+
+  /**
+   * The shared screened-record path (ADR-0028): any surface persisting a free-text inner-state field
+   * calls this instead of writing directly, so screening can never be silently skipped. Screens the
+   * free text first; on a crisis it escalates and returns the response WITHOUT running `persist`. When
+   * the text clears — or is absent (a structured-only record) — it runs `persist` and returns its
+   * value.
+   */
+  async guard<T>(
+    userId: string,
+    content: string | null | undefined,
+    persist: () => Promise<T>,
+  ): Promise<ScreenedRecord<T>> {
+    if (content && content.trim().length > 0) {
+      const verdict = await this.screen(userId, content);
+      if (verdict.kind === 'crisis') {
+        return { crisis: true, response: verdict.response };
+      }
+    }
+
+    const value = await persist();
+    return { crisis: false, value };
   }
 }
