@@ -12,6 +12,7 @@ import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../billing/access-resolver';
 import { MemoryStoreService } from '../memory/memory-store.service';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
+import { EscalationService } from '../crisis/escalation.service';
 import { StreaksService } from '../streaks/streaks.service';
 import { TiltService } from '../tilt/tilt.service';
 import { setupLinkMessage } from '../../lib/setup-link';
@@ -31,14 +32,12 @@ export class CoachingService {
     private readonly accessResolver: AccessResolver,
     private readonly memoryStore: MemoryStoreService,
     private readonly crisisAftermath: CrisisAftermathService,
+    private readonly escalation: EscalationService,
     private readonly streaks: StreaksService,
     private readonly tilt: TiltService,
   ) {}
 
-  async handle(
-    message: Message,
-    onCrisis: () => Promise<void>,
-  ): Promise<void> {
+  async handle(message: Message): Promise<void> {
     const userId = message.author.id;
     const traceId = crypto.randomUUID();
 
@@ -107,12 +106,11 @@ export class CoachingService {
 
       if (classification === 'crisis') {
         this.burstCoalescer.cancel(userId);
-        await this.sessionBuffer.clearAndQuarantine(userId);
-        await this.coachingSession.quarantine(userId);
-        await this.logEscalation(userId, 'classifier');
         this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
-        await this.crisisAftermath.onEscalation(userId);
-        await onCrisis();
+        // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
+        // + quarantine + ONE follow-up. No more hand-assembling the sequence here and again on the
+        // tripwire path. (ADR-0006/0010.)
+        await this.escalation.escalate(message, 'classifier');
         return;
       }
 
@@ -207,16 +205,4 @@ export class CoachingService {
     return context;
   }
 
-  private async logEscalation(userId: string, layer: string): Promise<void> {
-    try {
-      await prisma.escalationEvent.create({
-        data: {
-          userId: userId,
-          layer,
-        },
-      });
-    } catch {
-      // Best-effort logging
-    }
-  }
 }

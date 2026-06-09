@@ -133,6 +133,7 @@ describe('CoachingService', () => {
   let coachingSession: jest.Mocked<CoachingSessionService>;
   let memoryStore: jest.Mocked<MemoryStoreService>;
   let crisisAftermath: jest.Mocked<CrisisAftermathService>;
+  let escalation: { escalate: jest.Mock };
   let streaks: jest.Mocked<StreaksService>;
   let tilt: jest.Mocked<TiltService>;
 
@@ -157,6 +158,7 @@ describe('CoachingService', () => {
     coachingSession = new CoachingSessionService() as any;
     memoryStore = new MemoryStoreService() as any;
     crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
+    escalation = { escalate: jest.fn().mockResolvedValue(undefined) };
     streaks = (StreaksService as jest.Mock)() as any;
     tilt = (TiltService as jest.Mock)() as any;
     service = new CoachingService(
@@ -170,6 +172,7 @@ describe('CoachingService', () => {
       accessResolver,
       memoryStore,
       crisisAftermath,
+      escalation as any,
       streaks,
       tilt,
     );
@@ -183,7 +186,7 @@ describe('CoachingService', () => {
       timezone: 'UTC',
     });
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -210,7 +213,7 @@ describe('CoachingService', () => {
       subscriptionStatus: 'past_due',
     });
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(mockMessage.reply).toHaveBeenCalledWith(
@@ -236,11 +239,12 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('crisis');
     strategyRetrieval.search.mockResolvedValue([]);
 
-    const onCrisis = jest.fn();
-    await service.handle(mockMessage, onCrisis);
+    await service.handle(mockMessage);
 
-    expect(onCrisis).toHaveBeenCalled();
-    expect(sessionBuffer.clearAndQuarantine).toHaveBeenCalledWith('123');
+    // The classifier path now crosses ONE seam for the whole crisis response — it no longer
+    // hand-assembles quarantine/log/aftermath inline (which used to double-fire via onCrisis).
+    expect(escalation.escalate).toHaveBeenCalledTimes(1);
+    expect(escalation.escalate).toHaveBeenCalledWith(mockMessage, 'classifier');
     expect(coach.generate).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
     expect(langfuseTracer.trace).toHaveBeenCalledWith(
@@ -271,7 +275,7 @@ describe('CoachingService', () => {
     ]);
     coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(coach.generate).toHaveBeenCalled();
     expect(strategyRetrieval.search).toHaveBeenCalled();
@@ -306,7 +310,7 @@ describe('CoachingService', () => {
     // Never resolves — mimics a slow/hung hybrid extraction.
     (memoryStore.deriveAndStore as jest.Mock).mockReturnValue(new Promise<void>(() => {}));
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(memoryStore.deriveAndStore).toHaveBeenCalled();
     expect(mockMessage.reply).toHaveBeenCalledWith('That sounds tough. Hang in there.');
@@ -333,7 +337,7 @@ describe('CoachingService', () => {
     sessionBuffer.getContext.mockResolvedValue(null);
     coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(classifier.classify).toHaveBeenCalledWith('test message');
     expect(strategyRetrieval.search).toHaveBeenCalledWith('test message');
@@ -356,7 +360,7 @@ describe('CoachingService', () => {
     });
     (burstCoalescer.coalesce as jest.Mock).mockReturnValue(null);
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
@@ -382,7 +386,7 @@ describe('CoachingService', () => {
     tilt.isTiltLanguage.mockReturnValue(true);
     tilt.detectTrigger.mockReturnValue('feeding');
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(tilt.setPendingOffer).toHaveBeenCalledWith('123', 'feeding');
     expect(mockMessage.reply).toHaveBeenCalledWith(
@@ -403,7 +407,7 @@ describe('CoachingService', () => {
     tilt.isTiltLanguage.mockReturnValue(true);
     (crisisAftermath.isQuarantined as jest.Mock).mockResolvedValue(true);
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(tilt.setPendingOffer).not.toHaveBeenCalled();
     expect(coach.generate).toHaveBeenCalled();
@@ -414,7 +418,7 @@ describe('CoachingService', () => {
     tilt.getPendingOffer.mockReturnValue('feeding');
     const acceptMsg = { ...mockMessage, content: 'accept', reply: jest.fn().mockResolvedValue({}) } as any;
 
-    await service.handle(acceptMsg, jest.fn());
+    await service.handle(acceptMsg);
 
     expect(tilt.acceptPendingOffer).toHaveBeenCalledWith('123');
     expect(acceptMsg.reply).toHaveBeenCalledWith(expect.stringContaining('Reset technique'));
@@ -428,7 +432,7 @@ describe('CoachingService', () => {
     tilt.getPendingOffer.mockReturnValue('feeding');
     const declineMsg = { ...mockMessage, content: 'decline', reply: jest.fn().mockResolvedValue({}) } as any;
 
-    await service.handle(declineMsg, jest.fn());
+    await service.handle(declineMsg);
 
     expect(tilt.clearPendingOffer).toHaveBeenCalledWith('123');
     expect(tilt.acceptPendingOffer).not.toHaveBeenCalled();
@@ -452,7 +456,7 @@ describe('CoachingService', () => {
     sessionBuffer.getContext.mockResolvedValue(null);
     coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
 
-    await service.handle(mockMessage, jest.fn());
+    await service.handle(mockMessage);
 
     expect(coach.generate).toHaveBeenCalled();
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");

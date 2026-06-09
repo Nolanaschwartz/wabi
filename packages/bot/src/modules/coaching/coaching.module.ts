@@ -9,6 +9,7 @@ import { LangfuseModule } from '../langfuse/langfuse.module';
 import { BillingModule } from '../billing/billing.module';
 import { MemoryModule } from '../memory/memory.module';
 import { CrisisAftermathModule } from '../crisis-aftermath/crisis-aftermath.module';
+import { CrisisModule } from '../crisis/crisis.module';
 import { StreaksModule } from '../streaks/streaks.module';
 import { TiltModule } from '../tilt/tilt.module';
 
@@ -21,6 +22,7 @@ import { TiltModule } from '../tilt/tilt.module';
     BillingModule,
     MemoryModule,
     CrisisAftermathModule,
+    CrisisModule,
     StreaksModule,
     TiltModule,
   ],
