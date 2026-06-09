@@ -74,13 +74,15 @@ describe('AccessResolver', () => {
     expect(result.hasActiveAccess).toBe(false);
   });
 
-  it('applies state updates', async () => {
+  it('persists subscriptionStatus (not the derived access flag, which is recomputed on read)', async () => {
     (prisma.user.update as jest.Mock).mockResolvedValue({});
     await resolver.apply('123', { hasActiveAccess: true, subscriptionStatus: 'active' });
 
+    // hasActiveAccess is computed by decideAccess() on every read — it is never persisted, so the
+    // write must NOT include it (the column was removed as a dead, drift-prone denormalization).
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { discordId: '123' },
-      data: { hasActiveAccess: true, subscriptionStatus: 'active' },
+      data: { subscriptionStatus: 'active' },
     });
   });
 
@@ -92,7 +94,6 @@ describe('AccessResolver', () => {
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { discordId: '123' },
       data: {
-        hasActiveAccess: false,
         subscriptionStatus: 'canceled',
         lastStripeEventAt: eventAt,
       },

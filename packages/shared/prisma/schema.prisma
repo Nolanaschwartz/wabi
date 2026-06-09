@@ -13,7 +13,6 @@ model User {
   discordId             String   @unique
   email                 String?
   stripeCustomerId      String?  @unique
-  hasActiveAccess       Boolean  @default(false)
   trialEndsAt           DateTime?
   subscriptionStatus    String   @default("trialing")
   lastStripeEventAt     DateTime?
@@ -31,7 +30,6 @@ model User {
   sessions Session[]
 
   @@index([discordId])
-  @@index([hasActiveAccess])
   @@index([stripeCustomerId])
 }
 

@@ -42,10 +42,11 @@ export class AccessResolver {
    * subsequently-delivered, older event.
    */
   async apply(discordId: string, state: AccessState, eventAt?: Date): Promise<void> {
+    // Persist only subscriptionStatus (+ event watermark). hasActiveAccess is derived by
+    // decideAccess() on every read, so storing it would be a dead, drift-prone denormalization.
     await prisma.user.update({
       where: { discordId },
       data: {
-        hasActiveAccess: state.hasActiveAccess,
         subscriptionStatus: state.subscriptionStatus,
         ...(eventAt ? { lastStripeEventAt: eventAt } : {}),
       },

@@ -1,6 +1,9 @@
-export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled';
+import type { SubscriptionStatus } from '@wabi/shared';
+
+export type { SubscriptionStatus };
 
 export interface AccessState {
+  /** Derived (decideAccess) — used for runtime gating, never persisted. */
   hasActiveAccess: boolean;
   subscriptionStatus: SubscriptionStatus;
 }
