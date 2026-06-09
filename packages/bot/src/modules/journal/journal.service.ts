@@ -2,6 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { ClassifierService } from '../coaching/classifier.service';
 import { CoachService } from '../coaching/coach.service';
+import { XpService } from '../xp/xp.service';
+
+// A saved journal entry is worth this much XP. The award belongs to "writing an entry",
+// so it lives here next to the persist — not at the call site, where a second caller would
+// have to re-encode it (and a crisis entry could accidentally still be rewarded).
+const JOURNAL_XP_AWARD = 10;
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -21,6 +27,7 @@ export class JournalService {
   constructor(
     private readonly classifier: ClassifierService,
     private readonly coach: CoachService,
+    private readonly xp: XpService,
   ) {}
 
   async prompt(): Promise<string> {
@@ -31,11 +38,12 @@ export class JournalService {
   async write(
     discordId: string,
     content: string,
-  ): Promise<{ crisis: boolean; reflection: string }> {
+  ): Promise<{ crisis: boolean; reflection: string; xpAwarded: number }> {
     const classification = await this.classifier.classify(content);
 
     if (classification === 'crisis') {
-      return { crisis: true, reflection: '' };
+      // No persist, no reward — a crisis entry is handed off to safety, not gamified.
+      return { crisis: true, reflection: '', xpAwarded: 0 };
     }
 
     const reflection = await this.generateReflection(content);
@@ -48,7 +56,9 @@ export class JournalService {
       },
     });
 
-    return { crisis: false, reflection: reflection || '' };
+    await this.xp.award(discordId, JOURNAL_XP_AWARD, 'journal');
+
+    return { crisis: false, reflection: reflection || '', xpAwarded: JOURNAL_XP_AWARD };
   }
 
   private async generateReflection(content: string): Promise<string> {

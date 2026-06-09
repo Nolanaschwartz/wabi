@@ -9,7 +9,6 @@ import {
 } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { JournalService } from './journal.service';
-import { XpService } from '../xp/xp.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const JournalCommandGroup = createCommandGroupDecorator({
@@ -30,10 +29,7 @@ export class JournalWriteDto {
 @Injectable()
 @JournalCommandGroup()
 export class JournalController {
-  constructor(
-    private readonly journalService: JournalService,
-    private readonly xpService: XpService,
-  ) {}
+  constructor(private readonly journalService: JournalService) {}
 
   @Subcommand({ name: 'prompt', description: 'Get a reflective journaling prompt' })
   async prompt(@Context() [interaction]: SlashCommandContext): Promise<void> {
@@ -74,10 +70,8 @@ export class JournalController {
       return;
     }
 
-    await this.xpService.award(interaction.user.id, 10, 'journal');
-
     await interaction.editReply({
-      content: `Entry saved. ${result.reflection} (+10 XP)`,
+      content: `Entry saved. ${result.reflection} (+${result.xpAwarded} XP)`,
     });
   }
 }
