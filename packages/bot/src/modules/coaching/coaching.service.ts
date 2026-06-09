@@ -102,9 +102,11 @@ export class CoachingService {
         this.burstCoalescer.cancel(userId);
         this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
         // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
-        // + quarantine + ONE follow-up. No more hand-assembling the sequence here and again on the
-        // tripwire path. (ADR-0006/0010.)
-        await this.escalation.escalate(message, 'classifier');
+        // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
+        // DM channel. No more hand-assembling the sequence here and again on the tripwire path.
+        // (ADR-0006/0010/0028.)
+        const response = await this.escalation.escalate(userId, 'classifier');
+        await message.reply(response);
         return;
       }
 

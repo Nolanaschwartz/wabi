@@ -138,6 +138,9 @@ describe('CoachingService', () => {
     reply: jest.fn().mockResolvedValue({}),
   } as any;
 
+  // Escalation now returns a renderable payload (no transport coupling); the DM path renders it.
+  const crisisPayload = { embeds: [{ title: '🚨 You matter' }] };
+
   beforeEach(() => {
     jest.clearAllMocks();
     classifier = new ClassifierService() as any;
@@ -150,7 +153,7 @@ describe('CoachingService', () => {
     coachingSession = new CoachingSessionService() as any;
     memoryStore = new MemoryStoreService() as any;
     crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
-    escalation = { escalate: jest.fn().mockResolvedValue(undefined) };
+    escalation = { escalate: jest.fn().mockResolvedValue(crisisPayload) };
     streaks = (StreaksService as jest.Mock)() as any;
     tilt = (TiltService as jest.Mock)() as any;
     service = new CoachingService(
@@ -243,7 +246,7 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     // Crisis response fires; the lapsed user is NOT handed a subscribe prompt instead.
-    expect(escalation.escalate).toHaveBeenCalledWith(mockMessage, 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
     expect(mockMessage.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
@@ -269,7 +272,9 @@ describe('CoachingService', () => {
     // The classifier path now crosses ONE seam for the whole crisis response — it no longer
     // hand-assembles quarantine/log/aftermath inline (which used to double-fire via onCrisis).
     expect(escalation.escalate).toHaveBeenCalledTimes(1);
-    expect(escalation.escalate).toHaveBeenCalledWith(mockMessage, 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    // The returned crisis payload is rendered on the DM channel.
+    expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
     expect(coach.generate).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
     expect(langfuseTracer.trace).toHaveBeenCalledWith(

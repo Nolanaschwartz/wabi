@@ -24,7 +24,6 @@ describe('EscalationService', () => {
   let service: EscalationService;
   let crisisResources: { resourcesFor: jest.Mock };
   let crisisAftermath: { onEscalation: jest.Mock };
-  let message: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -38,17 +37,13 @@ describe('EscalationService', () => {
       crisisResources as any,
       crisisAftermath as any,
     );
-    message = {
-      author: { id: '123' },
-      reply: jest.fn().mockResolvedValue({}),
-    };
   });
 
-  it('surfaces locale crisis resources to the person', async () => {
-    await service.escalate(message, 'tripwire');
+  it('returns the locale crisis resources as a renderable payload — no transport', async () => {
+    const response = await service.escalate('123', 'tripwire');
 
     expect(crisisResources.resourcesFor).toHaveBeenCalledWith('en-US');
-    expect(message.reply).toHaveBeenCalledWith(
+    expect(response).toEqual(
       expect.objectContaining({
         embeds: expect.arrayContaining([
           expect.objectContaining({ title: '🚨 You matter' }),
@@ -57,8 +52,16 @@ describe('EscalationService', () => {
     );
   });
 
+  it('resolves the locale from the userId, not a Message', async () => {
+    await service.escalate('123', 'tripwire');
+
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { discordId: '123' },
+    });
+  });
+
   it('records exactly ONE Escalation Event, tagged with the layer that fired', async () => {
-    await service.escalate(message, 'classifier');
+    await service.escalate('123', 'classifier');
 
     expect(prisma.escalationEvent.create).toHaveBeenCalledTimes(1);
     expect(prisma.escalationEvent.create).toHaveBeenCalledWith({
@@ -66,15 +69,26 @@ describe('EscalationService', () => {
     });
   });
 
-  it('hands off to the Crisis Aftermath exactly once (one quarantine + one follow-up)', async () => {
-    await service.escalate(message, 'tripwire');
+  it('hands off to the Crisis Aftermath by default (DM-surfaced crisis)', async () => {
+    await service.escalate('123', 'tripwire');
 
     expect(crisisAftermath.onEscalation).toHaveBeenCalledTimes(1);
     expect(crisisAftermath.onEscalation).toHaveBeenCalledWith('123');
   });
 
+  it('skips the DM-session Aftermath when startAftermath is false (a logged field is not a Conversation)', async () => {
+    const response = await service.escalate('123', 'classifier', {
+      startAftermath: false,
+    });
+
+    // Resources + event still happen — only the DM-session aftermath is withheld.
+    expect(response.embeds.length).toBeGreaterThan(0);
+    expect(prisma.escalationEvent.create).toHaveBeenCalledTimes(1);
+    expect(crisisAftermath.onEscalation).not.toHaveBeenCalled();
+  });
+
   it('passes the tripwire layer through unchanged', async () => {
-    await service.escalate(message, 'tripwire');
+    await service.escalate('123', 'tripwire');
 
     expect(prisma.escalationEvent.create).toHaveBeenCalledWith({
       data: { userId: '123', layer: 'tripwire' },
