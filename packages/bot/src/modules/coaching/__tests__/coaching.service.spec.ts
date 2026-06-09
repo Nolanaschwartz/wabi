@@ -107,17 +107,9 @@ jest.mock('../../streaks/streaks.service', () => ({
 
 jest.mock('../../tilt/tilt.service', () => ({
   TiltService: jest.fn(() => ({
-    getPendingOffer: jest.fn().mockReturnValue(null),
-    setPendingOffer: jest.fn(),
-    clearPendingOffer: jest.fn(),
-    acceptPendingOffer: jest.fn().mockResolvedValue('Box breathing.'),
-    isTiltLanguage: jest.fn().mockReturnValue(false),
-    detectTrigger: jest.fn().mockReturnValue(null),
-    createOffer: jest.fn((trigger: string) => ({
-      acceptMessage: `offer for ${trigger} — accept or decline`,
-      declineMessage: 'No problem.',
-      trigger,
-    })),
+    // The offer lifecycle now lives behind two methods on TiltService (#J deepening).
+    respondToPendingOffer: jest.fn().mockResolvedValue({ kind: 'none' }),
+    maybeOffer: jest.fn().mockReturnValue(null),
   })),
 }));
 
@@ -313,11 +305,12 @@ describe('CoachingService', () => {
     expect(coach.generate).toHaveBeenCalled();
     expect(strategyRetrieval.search).toHaveBeenCalled();
     expect(sessionBuffer.append).toHaveBeenCalled();
-    // Read-back: retrieved memory is injected into the coach prompt.
+    // Read-back: retrieved memory is injected into the coach prompt (now the 2nd arg — the assembled
+    // prompt — with the system persona as the 1st; shaping lives in buildCoachPrompt).
     expect(memoryStore.search).toHaveBeenCalledWith('123', 'test message');
     expect(coach.generate).toHaveBeenCalledWith(
+      expect.stringContaining('compassionate DM companion'),
       expect.stringContaining('Tilts in ranked'),
-      false,
     );
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
@@ -440,17 +433,15 @@ describe('CoachingService', () => {
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'teammates keep feeding ugh' });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
-    tilt.isTiltLanguage.mockReturnValue(true);
-    tilt.detectTrigger.mockReturnValue('feeding');
+    tilt.maybeOffer.mockReturnValue('offer for feeding — accept or decline');
 
     await service.handle(mockMessage);
 
-    expect(tilt.setPendingOffer).toHaveBeenCalledWith('123', 'feeding');
+    expect(tilt.maybeOffer).toHaveBeenCalledWith('123', 'teammates keep feeding ugh');
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.stringContaining('accept or decline'),
     );
     // An offer, not an auto-started session, and no coach reply this turn.
-    expect(tilt.acceptPendingOffer).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
   });
 
@@ -461,23 +452,26 @@ describe('CoachingService', () => {
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
     coach.generate.mockResolvedValue('Gentle reply.');
-    tilt.isTiltLanguage.mockReturnValue(true);
     (crisisAftermath.isQuarantined as jest.Mock).mockResolvedValue(true);
 
     await service.handle(mockMessage);
 
-    expect(tilt.setPendingOffer).not.toHaveBeenCalled();
+    // Aftermath suppresses the offer entirely — maybeOffer is never consulted.
+    expect(tilt.maybeOffer).not.toHaveBeenCalled();
     expect(coach.generate).toHaveBeenCalled();
   });
 
   it('accepting a pending offer starts a tilt session', async () => {
     activeUser();
-    tilt.getPendingOffer.mockReturnValue('feeding');
+    tilt.respondToPendingOffer.mockResolvedValue({
+      kind: 'accepted',
+      reply: 'Tilt session started. Reset technique: Box breathing.',
+    });
     const acceptMsg = { ...mockMessage, content: 'accept', reply: jest.fn().mockResolvedValue({}) } as any;
 
     await service.handle(acceptMsg);
 
-    expect(tilt.acceptPendingOffer).toHaveBeenCalledWith('123');
+    expect(tilt.respondToPendingOffer).toHaveBeenCalledWith('123', 'accept');
     expect(acceptMsg.reply).toHaveBeenCalledWith(expect.stringContaining('Reset technique'));
     // The accept short-circuits before classification/coaching.
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
@@ -486,13 +480,13 @@ describe('CoachingService', () => {
 
   it('declining a pending offer does nothing but acknowledge', async () => {
     activeUser();
-    tilt.getPendingOffer.mockReturnValue('feeding');
+    tilt.respondToPendingOffer.mockResolvedValue({ kind: 'declined', reply: 'No problem.' });
     const declineMsg = { ...mockMessage, content: 'decline', reply: jest.fn().mockResolvedValue({}) } as any;
 
     await service.handle(declineMsg);
 
-    expect(tilt.clearPendingOffer).toHaveBeenCalledWith('123');
-    expect(tilt.acceptPendingOffer).not.toHaveBeenCalled();
+    expect(declineMsg.reply).toHaveBeenCalledWith('No problem.');
+    // Declining short-circuits before classification/coaching.
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
   });

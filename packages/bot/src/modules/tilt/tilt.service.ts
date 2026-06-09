@@ -34,6 +34,17 @@ export interface TiltOffer {
   trigger: string;
 }
 
+/**
+ * Outcome of a turn that may be answering a pending Tilt offer. The whole accept/decline state
+ * machine lives here (not in the coach hot path): the orchestrator just routes a `reply` to the
+ * user, and treats `none`/`ignored` as "carry on coaching".
+ */
+export type PendingOfferOutcome =
+  | { kind: 'none' }
+  | { kind: 'accepted'; reply: string }
+  | { kind: 'declined'; reply: string }
+  | { kind: 'ignored' };
+
 @Injectable()
 export class TiltService {
   // Ephemeral accept/decline window for a detection-driven offer. Losing this on
@@ -96,6 +107,42 @@ export class TiltService {
       trigger,
       severity: OFFER_DEFAULT_SEVERITY,
     });
+  }
+
+  /**
+   * Interpret a turn against any pending offer: accept → start a session, decline → drop the offer,
+   * anything else → leave it to lapse. `none` means there was no offer (caller continues normally).
+   * The intent parsing (`accept`/`decline`) used to be inlined in CoachingService.handle.
+   */
+  async respondToPendingOffer(discordId: string, text: string): Promise<PendingOfferOutcome> {
+    const trigger = this.getPendingOffer(discordId);
+    if (!trigger) return { kind: 'none' };
+
+    const intent = text.trim().toLowerCase();
+    if (intent === 'accept' || intent.startsWith('accept')) {
+      const technique = await this.acceptPendingOffer(discordId);
+      if (!technique) return { kind: 'none' };
+      return { kind: 'accepted', reply: `Tilt session started. Reset technique: ${technique}` };
+    }
+    if (intent === 'decline' || intent.startsWith('decline')) {
+      this.clearPendingOffer(discordId);
+      return { kind: 'declined', reply: this.createOffer(trigger).declineMessage };
+    }
+    return { kind: 'ignored' };
+  }
+
+  /**
+   * Detection-driven offer: if the turn reads as gameplay frustration AND no offer is already
+   * pending, store a pending offer and return the accept-prompt to send. Returns null otherwise.
+   * Self-suppressing on an existing offer replaces the caller's old `!pendingTrigger` guard.
+   */
+  maybeOffer(discordId: string, text: string): string | null {
+    if (this.getPendingOffer(discordId)) return null;
+    if (!this.isTiltLanguage(text)) return null;
+
+    const trigger = this.detectTrigger(text) ?? 'tilt';
+    this.setPendingOffer(discordId, trigger);
+    return this.createOffer(trigger).acceptMessage;
   }
 
   createOffer(trigger: string): TiltOffer {

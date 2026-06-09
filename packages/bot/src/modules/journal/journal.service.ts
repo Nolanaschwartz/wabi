@@ -63,8 +63,11 @@ export class JournalService {
 
   private async generateReflection(content: string): Promise<string> {
     try {
+      // Journal reflection is a distinct task from DM coaching, so it supplies its own system
+      // persona (the coach model adapter no longer bakes one in — see coach-prompt.ts).
       const reply = await this.coach.generate(
-        `Reflect briefly and supportively on this journal entry. Be warm, brief (under 150 chars), and specific to what they wrote:\n${content}`,
+        'You are Wabi. Reflect briefly and supportively on this journal entry. Be warm, brief (under 150 chars), and specific to what they wrote. Never give clinical advice or diagnose.',
+        content,
       );
       return reply;
     } catch {

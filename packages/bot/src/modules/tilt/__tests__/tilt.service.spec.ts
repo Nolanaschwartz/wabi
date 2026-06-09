@@ -82,6 +82,75 @@ describe('TiltService', () => {
     expect(prisma.tiltSession.create).not.toHaveBeenCalled();
   });
 
+  describe('respondToPendingOffer — the accept/decline state machine (moved out of the coach hot path)', () => {
+    it('returns kind "none" when there is no pending offer, so coaching continues', async () => {
+      const outcome = await service.respondToPendingOffer('123', 'accept');
+      expect(outcome).toEqual({ kind: 'none' });
+    });
+
+    it('accepts a pending offer (any text starting with "accept") and starts the session', async () => {
+      (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
+      (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
+      service.setPendingOffer('123', 'feeding');
+
+      const outcome = await service.respondToPendingOffer('123', 'Accept please');
+
+      expect(outcome.kind).toBe('accepted');
+      expect((outcome as { reply: string }).reply).toContain('Reset technique');
+      expect(prisma.tiltSession.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ userId: '123', trigger: 'feeding' }),
+      });
+      // Offer consumed.
+      expect(service.getPendingOffer('123')).toBeNull();
+    });
+
+    it('declines a pending offer and clears it without starting a session', async () => {
+      service.setPendingOffer('123', 'raging');
+
+      const outcome = await service.respondToPendingOffer('123', 'decline');
+
+      expect(outcome.kind).toBe('declined');
+      expect((outcome as { reply: string }).reply).toBeTruthy();
+      expect(prisma.tiltSession.create).not.toHaveBeenCalled();
+      expect(service.getPendingOffer('123')).toBeNull();
+    });
+
+    it('returns kind "ignored" (offer left to lapse) when the reply is neither accept nor decline', async () => {
+      service.setPendingOffer('123', 'feeding');
+
+      const outcome = await service.respondToPendingOffer('123', 'idk maybe later');
+
+      expect(outcome).toEqual({ kind: 'ignored' });
+      // Not consumed — it lapses on its own TTL.
+      expect(service.getPendingOffer('123')).toBe('feeding');
+      expect(prisma.tiltSession.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('maybeOffer — detection-driven offer creation', () => {
+    it('returns the accept-prompt and stores a pending offer when tilt language is detected', () => {
+      const message = service.maybeOffer('123', 'my teammates keep feeding ugh');
+
+      expect(message).toContain('accept');
+      expect(message).toContain('decline');
+      expect(service.getPendingOffer('123')).toBe('feeding');
+    });
+
+    it('returns null (no offer) when the text is not tilt language', () => {
+      const message = service.maybeOffer('123', 'had a great game today');
+      expect(message).toBeNull();
+      expect(service.getPendingOffer('123')).toBeNull();
+    });
+
+    it('does not stack a second offer while one is already pending', () => {
+      service.setPendingOffer('123', 'raging');
+      const message = service.maybeOffer('123', 'teammates feeding again');
+      expect(message).toBeNull();
+      // The original offer is untouched.
+      expect(service.getPendingOffer('123')).toBe('raging');
+    });
+  });
+
   it('creates an offer for detected frustration', () => {
     const offer = service.createOffer('raging');
 

@@ -31,14 +31,14 @@ describe('CoachService', () => {
       text: "That sounds tough. Take a deep breath — you'll find your footing.",
     });
 
-    const result = await service.generate('I keep losing and I feel like giving up');
+    const result = await service.generate('system', 'I keep losing and I feel like giving up');
     expect(result).toBe("That sounds tough. Take a deep breath — you'll find your footing.");
   });
 
   it('returns empty string on API error', async () => {
     (generateText as jest.Mock).mockRejectedValue(new Error('500'));
 
-    const result = await service.generate('test');
+    const result = await service.generate('system', 'test');
     expect(result).toBe('');
   });
 
@@ -47,7 +47,7 @@ describe('CoachService', () => {
       .mockResolvedValueOnce({ text: '   ' })
       .mockResolvedValueOnce({ text: 'Retry works.' });
 
-    const result = await service.generate('test');
+    const result = await service.generate('system', 'test');
 
     expect(result).toBe('Retry works.');
     expect(generateText).toHaveBeenCalledTimes(2);
@@ -59,7 +59,7 @@ describe('CoachService', () => {
   it('returns empty after failed retry', async () => {
     (generateText as jest.Mock).mockResolvedValue({ text: '' });
 
-    const result = await service.generate('test');
+    const result = await service.generate('system', 'test');
 
     expect(result).toBe('');
     expect(generateText).toHaveBeenCalledTimes(2);
@@ -73,7 +73,7 @@ describe('CoachService', () => {
       .mockResolvedValueOnce({ text: '' })
       .mockResolvedValueOnce({ text: 'ok' });
 
-    await service.generate('test');
+    await service.generate('system', 'test');
 
     for (const call of (generateText as jest.Mock).mock.calls) {
       expect(call[0].maxOutputTokens).toBeGreaterThanOrEqual(2048);

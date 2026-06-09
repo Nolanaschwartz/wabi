@@ -12,21 +12,22 @@ export class CoachService {
     this.config = getProvider('coach');
   }
 
-  async generate(message: string, inAftermath: boolean = false): Promise<string> {
+  /**
+   * Run the coach model against an already-assembled {system, prompt}. This service is the model
+   * adapter only — retries, output budget, error-to-empty-string. All prompt shaping (persona
+   * selection, context layout, aftermath tone) lives in buildCoachPrompt (coach-prompt.ts).
+   */
+  async generate(system: string, prompt: string): Promise<string> {
     const openai = createOpenAI({
       baseURL: this.config.baseUrl,
       apiKey: this.config.apiKey,
     });
 
-    const system = inAftermath
-      ? 'You are Wabi. The user recently experienced a crisis. Be gentle, warm, and supportive. Use a calm tone — no cheerful or energetic language. Do NOT suggest tilt sessions or coaching exercises. Keep responses brief and caring. Never give clinical advice or diagnose. Re-screen for safety signals. Keep responses under 300 characters.'
-      : 'You are Wabi, a compassionate DM companion for gamers. You offer warm, brief coaching that helps players reflect on tilt, stress, and life balance. Never give clinical advice or diagnose. Keep responses under 400 characters. Speak naturally, like a friend who cares. If the user mentions feeling genuinely distressed or suicidal, say you cannot help with that and direct them to professional resources.';
-
     try {
       const { text } = await generateText({
         model: openai(this.config.model),
         system,
-        prompt: message,
+        prompt,
         temperature: 0.7,
         maxOutputTokens: 2048,
       });
@@ -36,14 +37,13 @@ export class CoachService {
         this.logger.warn('coach returned empty response, retrying', {
           model: this.config.model,
           baseUrl: this.config.baseUrl,
-          contextLength: message.length,
-          inAftermath,
+          contextLength: prompt.length,
         });
 
         const { text: retryText } = await generateText({
           model: openai(this.config.model),
           system,
-          prompt: message,
+          prompt,
           temperature: 0.3,
           maxOutputTokens: 2048,
         });
@@ -53,8 +53,7 @@ export class CoachService {
         this.logger.warn('coach returned empty response after retry', {
           model: this.config.model,
           baseUrl: this.config.baseUrl,
-          contextLength: message.length,
-          inAftermath,
+          contextLength: prompt.length,
         });
       }
       return result;
@@ -63,8 +62,7 @@ export class CoachService {
         model: this.config.model,
         baseUrl: this.config.baseUrl,
         error: err instanceof Error ? err.message : String(err),
-        contextLength: message.length,
-        inAftermath,
+        contextLength: prompt.length,
       });
       return '';
     }

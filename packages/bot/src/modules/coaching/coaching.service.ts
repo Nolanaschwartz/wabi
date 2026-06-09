@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { ClassifierService } from './classifier.service';
 import { CoachService } from './coach.service';
+import { buildCoachPrompt } from './coach-prompt';
 import { splitMessage } from './message-splitter';
 import { Message, DMChannel } from 'discord.js';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
@@ -60,23 +61,13 @@ export class CoachingService {
     // must not be missed. Coaching itself is gated AFTER classification, below.
     const access = await this.accessResolver.resolve(userId);
 
-    // Tilt offer response: if we previously offered a Tilt Session, this turn may be
-    // the user's accept/decline. Handle it before normal coaching. (#31 / #12)
-    const pendingTrigger = this.tilt.getPendingOffer(userId);
-    if (pendingTrigger) {
-      const intent = message.content.trim().toLowerCase();
-      if (intent === 'accept' || intent.startsWith('accept')) {
-        const technique = await this.tilt.acceptPendingOffer(userId);
-        await message.reply(`Tilt session started. Reset technique: ${technique}`);
-        return;
-      }
-      if (intent === 'decline' || intent.startsWith('decline')) {
-        this.tilt.clearPendingOffer(userId);
-        await message.reply(this.tilt.createOffer(pendingTrigger).declineMessage);
-        return;
-      }
-      // Neither accept nor decline — let the offer lapse (TTL) and continue coaching,
-      // suppressing a duplicate offer this turn (see the detection block below).
+    // Tilt offer response: if we previously offered a Tilt Session, this turn may be the user's
+    // accept/decline. The whole state machine lives in TiltService now; here we just route its
+    // reply. accepted/declined end the turn; none/ignored fall through to coaching. (#31 / #12)
+    const offerResponse = await this.tilt.respondToPendingOffer(userId, message.content);
+    if (offerResponse.kind === 'accepted' || offerResponse.kind === 'declined') {
+      await message.reply(offerResponse.reply);
+      return;
     }
 
     let typingInterval: ReturnType<typeof setInterval> | null = null;
@@ -132,20 +123,31 @@ export class CoachingService {
 
       const inAftermath = await this.crisisAftermath.isQuarantined(userId);
 
-      // Detected gameplay frustration → offer a Tilt Session (user stays in control),
-      // never auto-start one. Suppressed during crisis aftermath (#05) and when an offer
-      // is already pending this turn. (#31 / #12)
-      if (!inAftermath && !pendingTrigger && this.tilt.isTiltLanguage(batch)) {
-        const trigger = this.tilt.detectTrigger(batch) ?? 'tilt';
-        this.tilt.setPendingOffer(userId, trigger);
-        await message.reply(this.tilt.createOffer(trigger).acceptMessage);
-        return;
+      // Detected gameplay frustration → offer a Tilt Session (user stays in control), never
+      // auto-start one. Suppressed during crisis aftermath (#05); maybeOffer self-suppresses when an
+      // offer is already pending (the lapsing 'ignored' case above). (#31 / #12)
+      if (!inAftermath) {
+        const offerMessage = this.tilt.maybeOffer(userId, batch);
+        if (offerMessage) {
+          await message.reply(offerMessage);
+          return;
+        }
       }
 
-      const context = await this.buildContext(userId, batch, strategies, inAftermath);
+      // Gather context (I/O), then hand it to the pure prompt assembler. CoachingService never
+      // shapes the prompt string itself — buildCoachPrompt owns persona + layout + read-back labels.
+      const session = await this.sessionBuffer.getContext(userId);
+      const memories = await this.memoryStore.search(userId, batch);
+      const { system, prompt } = buildCoachPrompt({
+        currentMessage: batch,
+        turns: session?.turns ?? [],
+        memories,
+        strategies,
+        inAftermath,
+      });
 
       const coachStart = Date.now();
-      const reply = await this.coach.generate(context, inAftermath);
+      const reply = await this.coach.generate(system, prompt);
       const coachLatency = Date.now() - coachStart;
 
     if (!reply) {
@@ -159,7 +161,7 @@ export class CoachingService {
 
       const streakResult = await this.streaks.checkAndAward(userId, user.timezone ?? 'UTC').catch(() => null);
 
-      this.langfuseTracer.trace(traceId, 'coach', context, reply, { latencyMs: coachLatency });
+      this.langfuseTracer.trace(traceId, 'coach', prompt, reply, { latencyMs: coachLatency });
 
       // Send the reply BEFORE persisting long-term memory. deriveAndStore runs mem0's hybrid
       // vector+graph extraction (~20s+ since ADR-0025), which must never delay the user-visible reply.
@@ -182,41 +184,4 @@ export class CoachingService {
   cancelPending(userId: string): void {
     this.burstCoalescer.cancel(userId);
   }
-
-  private async buildContext(
-    userId: string,
-    currentMessage: string,
-    strategies: Array<{ content: string; evidence: string }>,
-    inAftermath: boolean = false,
-  ): Promise<string> {
-    const session = await this.sessionBuffer.getContext(userId);
-    const turnHistory = session?.turns
-      .map((t) => `${t.role}: ${t.content}`)
-      .join('\n')
-      .trim();
-
-    // Read-back: surface what we've learned about this person (self-hosted Memory).
-    const memories = await this.memoryStore.search(userId, currentMessage);
-    const memoryContext = memories.length > 0
-      ? `\nWhat you remember about this person:\n${memories
-          .slice(0, 5)
-          .map((m) => `- ${m.content}`)
-          .join('\n')}`
-      : '';
-
-    const strategyContext = strategies.length > 0
-      ? `\nRelevant strategies:\n${strategies.map((s) => `- ${s.content} (${s.evidence})`).join('\n')}`
-      : '';
-
-    let context = `Conversation history:\n${turnHistory || 'No prior turns'}`;
-    context += memoryContext;
-    context += strategyContext;
-    if (inAftermath) {
-      context += '\n\nIMPORTANT: The user recently experienced a crisis. Be gentle and supportive. Avoid cheerful or energetic tone. Re-screen for safety.';
-    }
-    context += `\n\nCurrent message: ${currentMessage}`;
-
-    return context;
-  }
-
 }
