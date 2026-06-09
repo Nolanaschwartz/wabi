@@ -4,6 +4,16 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./sentry-scrub": {
+      "types": "./dist/sentry-scrub.d.ts",
+      "default": "./dist/sentry-scrub.js"
+    }
+  },
   "scripts": {
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
