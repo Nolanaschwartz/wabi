@@ -14,14 +14,9 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-jest.mock('pg-boss', () => ({
-  PgBoss: jest.fn().mockImplementation(() => ({
-    start: jest.fn().mockResolvedValue(undefined),
-    createQueue: jest.fn().mockResolvedValue(undefined),
-    work: jest.fn().mockResolvedValue(undefined),
-    send: jest.fn().mockResolvedValue('job_1'),
-    stop: jest.fn().mockResolvedValue(undefined),
-  })),
+// Mocking the Scheduler also keeps pg-boss (ESM) out of the import graph.
+jest.mock('../../scheduler/scheduler.service', () => ({
+  SchedulerService: jest.fn(),
 }));
 
 jest.mock('@qdrant/qdrant-js', () => ({
@@ -39,6 +34,8 @@ describe('StrategyAdminService', () => {
   let service: StrategyAdminService;
   let trustGate: jest.Mocked<StrategyTrustGate>;
   let retrieval: jest.Mocked<StrategyRetrievalService>;
+  // Plain scheduler stub; `available` is flipped per-test to exercise durable vs synchronous demote.
+  let scheduler: { work: jest.Mock; send: jest.Mock; available: boolean };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -47,7 +44,12 @@ describe('StrategyAdminService', () => {
       upsert: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
     } as any;
-    service = new StrategyAdminService(trustGate, retrieval);
+    scheduler = {
+      work: jest.fn().mockResolvedValue(undefined),
+      send: jest.fn().mockResolvedValue('job_1'),
+      available: true,
+    };
+    service = new StrategyAdminService(trustGate, retrieval, scheduler as any);
   });
 
   it('publishes draft when decision is publish', async () => {
@@ -255,6 +257,7 @@ describe('StrategyAdminService', () => {
   });
 
   it('auto-quarantines at threshold synchronously when no durable queue is available', async () => {
+    scheduler.available = false;
     (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
       id: '1',
       status: 'published',
@@ -279,12 +282,11 @@ describe('StrategyAdminService', () => {
       negativeCount: 2,
     });
     (trustGate.shouldQuarantine as jest.Mock).mockReturnValue(true);
-    const send = jest.fn().mockResolvedValue('job_1');
-    (service as any).bossClient = { send };
+    // scheduler.available defaults to true → durable enqueue path.
 
     await service.recordNegativeFeedback('1');
 
-    expect(send).toHaveBeenCalledWith('strategy-demote', { draftId: '1' });
+    expect(scheduler.send).toHaveBeenCalledWith('strategy-demote', { draftId: '1' });
     // Demotion is deferred to the worker — no synchronous quarantine write.
     expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
     expect(retrieval.delete).not.toHaveBeenCalled();

@@ -18,24 +18,28 @@ jest.mock('../../strategy-retrieval/strategy-retrieval.service', () => ({
   })),
 }));
 
-jest.mock('pg-boss', () => ({
-  PgBoss: jest.fn().mockImplementation(() => ({
-    start: jest.fn().mockResolvedValue(undefined),
-    createQueue: jest.fn().mockResolvedValue(undefined),
-    schedule: jest.fn().mockResolvedValue(undefined),
+jest.mock('../../scheduler/scheduler.service', () => ({
+  SchedulerService: jest.fn().mockImplementation(() => ({
+    cron: jest.fn().mockResolvedValue(undefined),
     work: jest.fn().mockResolvedValue(undefined),
-    stop: jest.fn().mockResolvedValue(undefined),
+    send: jest.fn().mockResolvedValue(undefined),
+    schedule: jest.fn().mockResolvedValue(undefined),
+    available: true,
   })),
 }));
+
+import { SchedulerService } from '../../scheduler/scheduler.service';
 
 describe('TiltService', () => {
   let service: TiltService;
   let strategyRetrieval: jest.Mocked<StrategyRetrievalService>;
+  let scheduler: jest.Mocked<SchedulerService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     strategyRetrieval = new StrategyRetrievalService() as any;
-    service = new TiltService(strategyRetrieval);
+    scheduler = new SchedulerService() as any;
+    service = new TiltService(strategyRetrieval, scheduler);
   });
 
   it('detects tilt language', () => {

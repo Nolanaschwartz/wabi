@@ -45,7 +45,9 @@ describe('session sweep integration', () => {
     const { MemoryStoreService } = await import('../modules/memory/memory-store.service');
     const memoryStore = new MemoryStoreService();
     const { SessionSweeper: SS } = await import('../modules/session-buffer/session-sweeper.service');
-    sweeper = new SS(coachingSession, sessionBuffer, memoryStore);
+    // Scheduler is unused here — the test invokes sweep() directly, not the cron registration.
+    const scheduler = { cron: async () => undefined } as any;
+    sweeper = new SS(coachingSession, sessionBuffer, memoryStore, scheduler);
   }, 60000);
 
   afterAll(async () => {

@@ -1,33 +1,23 @@
 import { Injectable } from '@nestjs/common';
-import { PgBoss } from 'pg-boss';
 import { prisma } from '@wabi/shared';
 import { StrategyTrustGate, StrategyDraft, EvaluationDecision } from './strategy-trust-gate';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
+import { SchedulerService } from '../scheduler/scheduler.service';
 
 const DEMOTE_QUEUE = 'strategy-demote';
 
 @Injectable()
 export class StrategyAdminService {
-  private bossClient: PgBoss | null = null;
-
   constructor(
     private readonly trustGate: StrategyTrustGate,
     private readonly retrieval: StrategyRetrievalService,
+    private readonly scheduler: SchedulerService,
   ) {}
 
   async init(): Promise<void> {
-    if (!process.env.DATABASE_URL) return;
-
-    try {
-      this.bossClient = new PgBoss({
-        connectionString: process.env.DATABASE_URL,
-      });
-      await this.bossClient.start();
-      await this.bossClient.createQueue(DEMOTE_QUEUE);
-      await this.bossClient.work(DEMOTE_QUEUE, this.demoteJob.bind(this));
-    } catch {
-      // Graceful degradation — demotion falls back to synchronous processing
-    }
+    // Register the demote worker on the shared Scheduler. When degraded, this no-ops and
+    // enqueueDemote falls back to synchronous processing (below).
+    await this.scheduler.work(DEMOTE_QUEUE, this.demoteJob.bind(this));
   }
 
   async submitDraft(draft: StrategyDraft): Promise<StrategyDraft> {
@@ -121,9 +111,9 @@ export class StrategyAdminService {
    * back to processing it synchronously so feedback is never lost.
    */
   private async enqueueDemote(draftId: string): Promise<void> {
-    if (this.bossClient) {
+    if (this.scheduler.available) {
       try {
-        await this.bossClient.send(DEMOTE_QUEUE, { draftId });
+        await this.scheduler.send(DEMOTE_QUEUE, { draftId });
         return;
       } catch {
         // Fall through to synchronous demotion
@@ -163,12 +153,6 @@ export class StrategyAdminService {
     });
 
     return drafts.map(this.toDraft);
-  }
-
-  async destroy(): Promise<void> {
-    if (this.bossClient) {
-      await this.bossClient.stop();
-    }
   }
 
   private toDraft(row: any): StrategyDraft {

@@ -23,15 +23,15 @@ jest.mock('../../memory/memory-store.service', () => ({
   })),
 }));
 
-jest.mock('pg-boss', () => ({
-  PgBoss: jest.fn().mockImplementation(() => ({
-    start: jest.fn().mockResolvedValue(undefined),
-    createQueue: jest.fn().mockResolvedValue(undefined),
-    schedule: jest.fn().mockResolvedValue(undefined),
+jest.mock('../../scheduler/scheduler.service', () => ({
+  SchedulerService: jest.fn().mockImplementation(() => ({
+    cron: jest.fn().mockResolvedValue(undefined),
     work: jest.fn().mockResolvedValue(undefined),
-    stop: jest.fn().mockResolvedValue(undefined),
+    available: true,
   })),
 }));
+
+import { SchedulerService } from '../../scheduler/scheduler.service';
 
 const mockSession = (id: string, discordId: string, doNotMine: boolean = false) => ({
   id,
@@ -55,7 +55,8 @@ describe('SessionSweeper', () => {
     coachingSession = new CoachingSessionService() as any;
     sessionBuffer = new SessionBufferService() as any;
     memoryStore = new MemoryStoreService() as any;
-    sweeper = new SessionSweeper(coachingSession, sessionBuffer, memoryStore);
+    const scheduler = new SchedulerService() as any;
+    sweeper = new SessionSweeper(coachingSession, sessionBuffer, memoryStore, scheduler);
   });
 
   it('mines one extraction per ended session', async () => {

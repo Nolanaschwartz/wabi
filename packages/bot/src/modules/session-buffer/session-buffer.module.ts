@@ -3,9 +3,10 @@ import { SessionBufferService } from './session-buffer.service';
 import { CoachingSessionService } from './coaching-session.service';
 import { SessionSweeper } from './session-sweeper.service';
 import { MemoryModule } from '../memory/memory.module';
+import { SchedulerModule } from '../scheduler/scheduler.module';
 
 @Module({
-  imports: [MemoryModule],
+  imports: [MemoryModule, SchedulerModule],
   providers: [
     {
       provide: SessionBufferService,

@@ -10,26 +10,28 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-jest.mock('pg-boss', () => ({
-  PgBoss: jest.fn().mockImplementation(() => ({
-    start: jest.fn(),
-    work: jest.fn(),
-    schedule: jest.fn(),
-    stop: jest.fn(),
-  })),
+// Mocking the Scheduler also keeps pg-boss (ESM) out of the import graph.
+jest.mock('../../scheduler/scheduler.service', () => ({
+  SchedulerService: jest.fn(),
 }));
 
 describe('CrisisAftermathService', () => {
   let service: CrisisAftermathService;
   let sessionBuffer: jest.Mocked<SessionBufferService>;
   let coachingSession: { quarantine: jest.Mock };
+  let scheduler: { work: jest.Mock; schedule: jest.Mock; available: boolean };
 
   beforeEach(async () => {
     jest.clearAllMocks();
     sessionBuffer = new SessionBufferService() as any;
     sessionBuffer.clearAndQuarantine = jest.fn().mockResolvedValue(undefined);
     coachingSession = { quarantine: jest.fn().mockResolvedValue(undefined) };
-    service = new CrisisAftermathService(sessionBuffer, coachingSession as any);
+    scheduler = {
+      work: jest.fn().mockResolvedValue(undefined),
+      schedule: jest.fn().mockResolvedValue(undefined),
+      available: true,
+    };
+    service = new CrisisAftermathService(sessionBuffer, coachingSession as any, scheduler as any);
     await service.init();
   });
 
@@ -43,14 +45,24 @@ describe('CrisisAftermathService', () => {
     expect(coachingSession.quarantine).toHaveBeenCalledWith('123');
   });
 
-  it('schedules follow-up job', async () => {
+  it('schedules the delayed follow-up through the Scheduler', async () => {
     await service.onEscalation('123');
+    expect(scheduler.schedule).toHaveBeenCalledWith(
+      'crisis-follow-up',
+      '30 minutes',
+      expect.objectContaining({ userId: '123' }),
+    );
   });
 
-  it('does not init when disabled', async () => {
-    const disabledService = new CrisisAftermathService(sessionBuffer, coachingSession as any);
-    (disabledService as any).enabled = false;
-    await disabledService.init();
+  it('still quarantines but skips the follow-up when the Scheduler is degraded', async () => {
+    scheduler.available = false;
+
+    await service.onEscalation('123');
+
+    // Safety state (do-not-mine + buffer clear) is unconditional; only the follow-up needs the queue.
+    expect(coachingSession.quarantine).toHaveBeenCalledWith('123');
+    expect(sessionBuffer.clearAndQuarantine).toHaveBeenCalledWith('123');
+    expect(scheduler.schedule).not.toHaveBeenCalled();
   });
 
   describe('isQuarantined (reads the buffer through its interface, not the raw client)', () => {

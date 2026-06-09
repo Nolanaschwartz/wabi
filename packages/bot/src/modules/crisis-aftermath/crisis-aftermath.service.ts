@@ -1,8 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { PgBoss } from 'pg-boss';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
+import { SchedulerService } from '../scheduler/scheduler.service';
 
 const FOLLOW_UP_DELAY_MINUTES = 30;
 const FOLLOW_UP_MESSAGES = [
@@ -13,29 +13,15 @@ const FOLLOW_UP_MESSAGES = [
 
 @Injectable()
 export class CrisisAftermathService {
-  private bossClient: PgBoss | null = null;
-  private enabled: boolean;
-
   constructor(
     private readonly sessionBuffer: SessionBufferService,
     private readonly coachingSession: CoachingSessionService,
-  ) {
-    this.enabled = !!process.env.DATABASE_URL;
-  }
+    private readonly scheduler: SchedulerService,
+  ) {}
 
   async init(): Promise<void> {
-    if (!this.enabled) return;
-
-    try {
-      this.bossClient = new PgBoss({
-        connectionString: process.env.DATABASE_URL,
-      });
-      await this.bossClient.start();
-      await this.bossClient.createQueue('crisis-follow-up');
-      await this.bossClient.work('crisis-follow-up', this.followUpJob.bind(this));
-    } catch {
-      // Graceful degradation
-    }
+    // Register the follow-up worker on the shared Scheduler; lifecycle is the Scheduler's.
+    await this.scheduler.work('crisis-follow-up', this.followUpJob.bind(this));
   }
 
   async onEscalation(userId: string): Promise<void> {
@@ -46,24 +32,20 @@ export class CrisisAftermathService {
     await this.coachingSession.quarantine(userId);
     await this.sessionBuffer.clearAndQuarantine(userId);
 
-    if (!this.bossClient) return;
+    if (!this.scheduler.available) return;
 
     const followUpMessage = FOLLOW_UP_MESSAGES[
       Math.floor(Math.random() * FOLLOW_UP_MESSAGES.length)
     ];
 
-    try {
-      await this.bossClient.schedule(
-        'crisis-follow-up',
-        `${FOLLOW_UP_DELAY_MINUTES} minutes`,
-        {
-          userId,
-          message: followUpMessage,
-        },
-      );
-    } catch {
-      // Best-effort scheduling
-    }
+    await this.scheduler.schedule(
+      'crisis-follow-up',
+      `${FOLLOW_UP_DELAY_MINUTES} minutes`,
+      {
+        userId,
+        message: followUpMessage,
+      },
+    );
   }
 
   private async followUpJob(job: unknown[]): Promise<void> {
@@ -91,12 +73,6 @@ export class CrisisAftermathService {
       return await this.sessionBuffer.inAftermathWindow(userId);
     } catch {
       return false;
-    }
-  }
-
-  async destroy(): Promise<void> {
-    if (this.bossClient) {
-      await this.bossClient.stop();
     }
   }
 }

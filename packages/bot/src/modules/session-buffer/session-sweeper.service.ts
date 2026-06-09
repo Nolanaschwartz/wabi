@@ -1,9 +1,9 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { PgBoss } from 'pg-boss';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { CoachingSessionService } from './coaching-session.service';
 import { SessionBufferService } from './session-buffer.service';
 import { MemoryStoreService } from '../memory/memory-store.service';
+import { SchedulerService } from '../scheduler/scheduler.service';
 
 export interface SweepResult {
   sessionsEnded: number;
@@ -15,37 +15,19 @@ const SWEEP_QUEUE = 'session-sweeper';
 const SWEEP_CRON = '*/5 * * * *';
 
 @Injectable()
-export class SessionSweeper implements OnModuleInit, OnModuleDestroy {
-  private bossClient: PgBoss | null = null;
-
+export class SessionSweeper implements OnModuleInit {
   constructor(
     private readonly coachingSession: CoachingSessionService,
     private readonly sessionBuffer: SessionBufferService,
     private readonly memoryStore: MemoryStoreService,
+    private readonly scheduler: SchedulerService,
   ) {}
 
   async onModuleInit() {
-    if (!process.env.DATABASE_URL) return;
-
-    try {
-      this.bossClient = new PgBoss({
-        connectionString: process.env.DATABASE_URL,
-      });
-      await this.bossClient.start();
-      await this.bossClient.createQueue(SWEEP_QUEUE);
-      await this.bossClient.schedule(SWEEP_QUEUE, SWEEP_CRON);
-      await this.bossClient.work(SWEEP_QUEUE, async () => {
-        await this.sweep();
-      });
-    } catch {
-      // Graceful degradation
-    }
-  }
-
-  async onModuleDestroy() {
-    if (this.bossClient) {
-      await this.bossClient.stop();
-    }
+    // Register the sweep cron on the shared Scheduler; the client lifecycle is the Scheduler's.
+    await this.scheduler.cron(SWEEP_QUEUE, SWEEP_CRON, async () => {
+      await this.sweep();
+    });
   }
 
   async sweep(): Promise<SweepResult> {

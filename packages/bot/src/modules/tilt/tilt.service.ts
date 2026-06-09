@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { PgBoss } from 'pg-boss';
 import { prisma } from '@wabi/shared';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
+import { SchedulerService } from '../scheduler/scheduler.service';
 
 const TILT_DURATION_MINUTES = 30;
 const OFFER_TTL_MS = 5 * 60 * 1000;
@@ -36,37 +36,19 @@ export interface TiltOffer {
 
 @Injectable()
 export class TiltService {
-  private bossClient: PgBoss | null = null;
   // Ephemeral accept/decline window for a detection-driven offer. Losing this on
   // restart is acceptable — the offer simply lapses and the user can re-trigger.
   private pendingOffers = new Map<string, { trigger: string; expiresAt: number }>();
 
   constructor(
     private readonly strategyRetrieval: StrategyRetrievalService,
+    private readonly scheduler: SchedulerService,
   ) {}
 
   async init(): Promise<void> {
-    if (!process.env.DATABASE_URL) return;
-
-    try {
-      this.bossClient = new PgBoss({
-        connectionString: process.env.DATABASE_URL,
-      });
-      await this.bossClient.start();
-      await this.bossClient.createQueue(AUTO_RESOLVE_QUEUE);
-      await this.bossClient.schedule(AUTO_RESOLVE_QUEUE, AUTO_RESOLVE_CRON);
-      await this.bossClient.work(AUTO_RESOLVE_QUEUE, async () => {
-        await this.autoResolveExpired();
-      });
-    } catch {
-      // Graceful degradation
-    }
-  }
-
-  async destroy(): Promise<void> {
-    if (this.bossClient) {
-      await this.bossClient.stop();
-    }
+    await this.scheduler.cron(AUTO_RESOLVE_QUEUE, AUTO_RESOLVE_CRON, async () => {
+      await this.autoResolveExpired();
+    });
   }
 
   isTiltLanguage(text: string): boolean {
