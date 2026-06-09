@@ -1,4 +1,4 @@
-import { prisma } from '@wabi/shared';
+import { prisma, trialGrant } from '@wabi/shared';
 import { lucia } from '@/lib/auth';
 import {
   PENDING_CONSENT_COOKIE,
@@ -19,21 +19,21 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const now = new Date();
-  const trialEndsAt = new Date(
-    Date.now() + parseInt(process.env.TRIAL_DAYS || '7') * 24 * 60 * 60 * 1000,
-  );
+  // The Trial grant (window + initial status) is computed by the shared Entitlement module so the
+  // web writer and the bot's read agree on what a Trial is (ADR-0011).
+  const { trialEndsAt, subscriptionStatus } = trialGrant(now);
 
   // First-ever persistence for this identity, stamped with consent at the moment of the
   // affirmative action. upsert keeps a retried consent POST (cookie still valid) idempotent.
   const user = await prisma.user.upsert({
     where: { discordId: pending.discordId },
-    update: { consentAcceptedAt: now, trialEndsAt, subscriptionStatus: 'trialing' },
+    update: { consentAcceptedAt: now, trialEndsAt, subscriptionStatus },
     create: {
       discordId: pending.discordId,
       email: pending.email,
       consentAcceptedAt: now,
       trialEndsAt,
-      subscriptionStatus: 'trialing',
+      subscriptionStatus,
     },
   });
 

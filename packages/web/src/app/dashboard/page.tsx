@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { validateRequest } from '@/lib/session';
-import { prisma } from '@wabi/shared';
+import { prisma, decideAccess } from '@wabi/shared';
 import DashboardView from './dashboard-view';
 
 export default async function DashboardPage() {
@@ -27,12 +27,13 @@ export default async function DashboardPage() {
     prisma.user.findUnique({ where: { id: user.id } }),
   ]);
 
+  // Derive billing display from the SAME shared decision the bot gates on (decideAccess), so the
+  // dashboard and the coaching gate can never disagree — e.g. a lapsed trial reads "Not subscribed"
+  // here exactly when the bot stops coaching.
+  const access = decideAccess(dbUser, new Date());
   const billing = {
-    // An active paid subscription is managed via the Stripe portal; otherwise the user
-    // (trialing or lapsed) is offered checkout.
-    hasSubscription:
-      !!dbUser?.stripeCustomerId && dbUser?.subscriptionStatus === 'active',
-    subscriptionStatus: dbUser?.subscriptionStatus ?? 'trialing',
+    hasActiveAccess: access.hasActiveAccess,
+    subscriptionStatus: access.subscriptionStatus,
     trialEndsAt: dbUser?.trialEndsAt ? dbUser.trialEndsAt.toISOString() : null,
   };
 
