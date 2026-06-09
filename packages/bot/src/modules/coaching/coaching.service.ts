@@ -54,16 +54,11 @@ export class CoachingService {
       return;
     }
 
+    // Resolve access now, but do NOT gate on it yet. The crisis classifier is the safety floor and
+    // must run for every consented user — active OR lapsed (ADR-0011/0021): a paraphrased crisis
+    // with no tripwire keyword is only caught by the LLM, and a lapsed at-risk user is exactly who
+    // must not be missed. Coaching itself is gated AFTER classification, below.
     const access = await this.accessResolver.resolve(userId);
-    if (!access.hasActiveAccess) {
-      // The dashboard surfaces the Subscribe control (which starts Stripe checkout). Pointing at
-      // the bare landing page was a dead end — issue #28.
-      const subscribeUrl = `${baseUrl}/dashboard`;
-      await message.reply({
-        content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,
-      });
-      return;
-    }
 
     // Tilt offer response: if we previously offered a Tilt Session, this turn may be
     // the user's accept/decline. Handle it before normal coaching. (#31 / #12)
@@ -123,6 +118,17 @@ export class CoachingService {
       }
 
       this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
+
+      // Safety has run (tripwire + classifier). Coaching is the paid surface: a lapsed user gets a
+      // resubscribe prompt HERE — after crisis screening, never instead of it. (ADR-0011: classifier
+      // = consented; coach + store = active access. Dashboard carries the Subscribe control, #28.)
+      if (!access.hasActiveAccess) {
+        const subscribeUrl = `${baseUrl}/dashboard`;
+        await message.reply({
+          content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,
+        });
+        return;
+      }
 
       const inAftermath = await this.crisisAftermath.isQuarantined(userId);
 

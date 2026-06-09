@@ -201,7 +201,7 @@ describe('CoachingService', () => {
     expect(classifier.classify).not.toHaveBeenCalled();
   });
 
-  it('shows subscribe link pointing at the dashboard for lapsed access (before any classifier work)', async () => {
+  it('runs the crisis classifier for a lapsed user, THEN shows the subscribe link (safety is never paywalled — ADR-0011)', async () => {
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
@@ -212,15 +212,48 @@ describe('CoachingService', () => {
       hasActiveAccess: false,
       subscriptionStatus: 'past_due',
     });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'i guess things are fine' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
 
     await service.handle(mockMessage);
 
-    expect(classifier.classify).not.toHaveBeenCalled();
+    // The LLM classifier is the only layer that catches a paraphrased, no-keyword crisis. It MUST
+    // run for a consented-but-lapsed user — coaching is gated, safety is not.
+    expect(classifier.classify).toHaveBeenCalledWith('i guess things are fine');
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
         // Dashboard carries the Subscribe control that starts checkout (issue #28).
         content: expect.stringContaining('https://wabi.gg/dashboard'),
       }),
+    );
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('escalates a lapsed user in crisis instead of paywalling them (ADR-0011/0021)', async () => {
+    process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+      timezone: 'UTC',
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: false,
+      subscriptionStatus: 'canceled',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
+      kind: 'ready',
+      text: "i just don't see the point anymore",
+    });
+    classifier.classify.mockResolvedValue('crisis');
+    strategyRetrieval.search.mockResolvedValue([]);
+
+    await service.handle(mockMessage);
+
+    // Crisis response fires; the lapsed user is NOT handed a subscribe prompt instead.
+    expect(escalation.escalate).toHaveBeenCalledWith(mockMessage, 'classifier');
+    expect(mockMessage.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
     expect(coach.generate).not.toHaveBeenCalled();
   });
