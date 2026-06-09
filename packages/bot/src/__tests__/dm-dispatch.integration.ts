@@ -121,7 +121,7 @@ describe('DM dispatch integration', () => {
 
     // Dispatch through the registered listener handler (not the pipeline directly).
     // The burst coalescer debounces ~3s before the turn resolves.
-    await echo.handleMessage(makeDm(discordId, 'I keep losing ranked and tilting hard'));
+    await echo.handleMessage([makeDm(discordId, 'I keep losing ranked and tilting hard')]);
 
     // Coaching Session row was opened in Postgres.
     const session = await prisma.coachingSession.findUnique({ where: { discordId } });
@@ -141,19 +141,19 @@ describe('DM dispatch integration', () => {
     const guildId = randomDiscordId();
 
     // Bot-authored DM — ignored.
-    await echo.handleMessage({
+    await echo.handleMessage([{
       author: { bot: true, id: botId },
       channel: { isDMBased: () => true },
       content: 'beep boop',
       reply,
-    } as any);
+    }] as any);
     // Non-DM (guild channel) message — ignored.
-    await echo.handleMessage({
+    await echo.handleMessage([{
       author: { bot: false, id: guildId },
       channel: { isDMBased: () => false },
       content: 'hello channel',
       reply,
-    } as any);
+    }] as any);
 
     expect(await prisma.coachingSession.findUnique({ where: { discordId: botId } })).toBeNull();
     expect(await prisma.coachingSession.findUnique({ where: { discordId: guildId } })).toBeNull();
