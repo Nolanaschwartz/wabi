@@ -7,6 +7,9 @@ import { SchedulerService } from '../scheduler/scheduler.service';
 import { ContactPolicyService } from '../contact-policy/contact-policy.service';
 
 const FOLLOW_UP_DELAY_MINUTES = 30;
+// The Aftermath Window matches the Redis quarantine key's TTL (ADR-0010). Used as the lookback when
+// the durable EscalationEvent backstops a degraded Redis read.
+const AFTERMATH_WINDOW_HOURS = 24;
 const FOLLOW_UP_MESSAGES = [
   "Hey, I'm still here. How are you doing now?",
   "Just checking in - want to talk about anything?",
@@ -34,7 +37,13 @@ export class CrisisAftermathService {
     // one call both make. The Redis buffer clear + quarantine key are the time-bounded aftermath
     // window, a separate concern. (Issue #24 / ADR-0010/0016.)
     await this.coachingSession.quarantine(userId);
-    await this.sessionBuffer.clearAndQuarantine(userId);
+    try {
+      await this.sessionBuffer.clearAndQuarantine(userId);
+    } catch {
+      // Redis down at escalation time — the durable do-not-mine flag (above) and the EscalationEvent
+      // still protect the person, and isQuarantined falls back to the event, so this must not throw
+      // out of the escalation path (ADR-0021).
+    }
 
     if (!this.scheduler.available) return;
 
@@ -100,6 +109,23 @@ export class CrisisAftermathService {
 
       return await this.sessionBuffer.inAftermathWindow(userId);
     } catch {
+      // Redis is unreadable — or the window key was never written because Redis was down at
+      // escalation time. Fail CLOSED (ADR-0021): consult the durable EscalationEvent and assume the
+      // person is still in aftermath if there was a recent escalation, rather than the old fail-OPEN
+      // `return false` that dropped the softened tone on any Redis blip.
+      return this.recentEscalation(userId);
+    }
+  }
+
+  private async recentEscalation(userId: string): Promise<boolean> {
+    try {
+      const since = new Date(Date.now() - AFTERMATH_WINDOW_HOURS * 60 * 60 * 1000);
+      const event = await prisma.escalationEvent.findFirst({
+        where: { userId, timestamp: { gte: since } },
+      });
+      return event != null;
+    } catch {
+      // Postgres is also down — there is nothing more authoritative to consult.
       return false;
     }
   }

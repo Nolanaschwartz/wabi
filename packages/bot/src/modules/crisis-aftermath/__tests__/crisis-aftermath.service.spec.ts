@@ -7,6 +7,7 @@ jest.mock('@wabi/shared', () => ({
   prisma: {
     escalationEvent: {
       create: jest.fn(),
+      findFirst: jest.fn(),
     },
     user: {
       findUnique: jest.fn().mockResolvedValue({ timezone: 'UTC' }),
@@ -110,6 +111,23 @@ describe('CrisisAftermathService', () => {
     it('returns false when there is no live session and no aftermath window', async () => {
       sessionBuffer.getContext = jest.fn().mockResolvedValue(null) as any;
       sessionBuffer.inAftermathWindow = jest.fn().mockResolvedValue(false) as any;
+
+      await expect(service.isQuarantined('123')).resolves.toBe(false);
+    });
+
+    it('fails CLOSED on a Redis error: consults the durable EscalationEvent and quarantines if a recent escalation exists (ADR-0021)', async () => {
+      sessionBuffer.getContext = jest.fn().mockRejectedValue(new Error('redis down')) as any;
+      (prisma.escalationEvent.findFirst as jest.Mock).mockResolvedValue({
+        userId: '123',
+        layer: 'classifier',
+      });
+
+      await expect(service.isQuarantined('123')).resolves.toBe(true);
+    });
+
+    it('returns false on a Redis error when there is no recent escalation', async () => {
+      sessionBuffer.getContext = jest.fn().mockRejectedValue(new Error('redis down')) as any;
+      (prisma.escalationEvent.findFirst as jest.Mock).mockResolvedValue(null);
 
       await expect(service.isQuarantined('123')).resolves.toBe(false);
     });
