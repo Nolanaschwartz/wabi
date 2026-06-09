@@ -40,13 +40,25 @@ _Avoid_: therapist, counselor, therapy, treatment, clinician
 A *bot-initiated* prompt to the person — a routine wellbeing nudge, a break reminder, or a playtime warning. Distinct from a Mood, which is *person-initiated*. Opt-in, user-paced, quiet-hours aware, and sparing (ADR-0008); it lands in the person's DMs, so Wabi initiates contact on the person's terms.
 _Avoid_: ping, notification, alert
 
+**Contact Policy**:
+The cross-cutting rule that decides whether — and when — Wabi may send *any* bot-initiated message, evaluated per *kind* of contact against the person's settings and the current time. A routine **Check-in** is subject to all of it (opt-in, quiet hours, sparing rate); a Crisis Aftermath follow-up is exempt from opt-in and the sparing rate but still **respects quiet hours** — so a follow-up owed during quiet hours defers to the next allowed window rather than waking the person. The single seam every initiator (Check-in scheduler, crisis follow-up, planned playtime/streak nudges) crosses before a DM goes out.
+_Avoid_: rate limit (too narrow), notification settings
+
 **Crisis Escalation**:
 The hard safety boundary (ADR-0001): when a person expresses crisis-level distress, the AI Coach stops coaching and surfaces real crisis resources. It overrides all other coaching behaviour and is unconditional — it fires even without Active Access (ADR-0005).
 _Avoid_: intervention, crisis coaching
 
 **Crisis Tripwire**:
-The cheap, always-on keyword/regex backstop that catches the most explicit crisis phrases independent of any LLM call or coaching turn (ADR-0006). One of two detection layers; the other is the contextual LLM classifier.
+The cheap, always-on keyword/regex backstop that catches the most explicit crisis phrases independent of any LLM call or coaching turn (ADR-0006). One of two detection layers; the other is the **Crisis Classifier**.
 _Avoid_: filter, keyword detector (when precision matters)
+
+**Crisis Classifier**:
+The contextual LLM detection layer (ADR-0006) — the second of the two crisis-detection layers, catching paraphrased or context-dependent distress the Crisis Tripwire's fixed patterns miss. **Fails closed**: if it cannot run, it returns crisis (ADR-0021). Runs only for a consented person (ADR-0011), whereas the Tripwire runs unconditionally.
+_Avoid_: filter, sentiment analysis, moderation
+
+**Crisis Screening** (the act):
+Running the two detection layers — Crisis Tripwire then Crisis Classifier — over a piece of a person's free-text input and, on a hit, performing a Crisis Escalation. **Every free-text field a person can express distress into must cross it** — a Mood note, a Tilt trigger, a Journal Entry, a DM — so the safety response is identical regardless of which command surfaced the words; an unscreened free-text field is a safety gap. Atomic surfaces (a Mood note, Tilt trigger, Journal Entry) screen in one call; the DM path runs the Tripwire *before* burst-coalescing and the Classifier *after*, but either layer routes its hit through the one Escalation seam. An inner-state-field crisis escalates resources + Escalation Event but **not** the DM-session Crisis Aftermath — a logged field is not a Conversation.
+_Avoid_: moderation, content screening
 
 **Crisis Resources**:
 The locale-appropriate hotlines and support lines Wabi surfaces on escalation, keyed by the person's Discord locale. Wabi points to these; it never substitutes for them.
@@ -79,21 +91,25 @@ An evidence-graded coping technique in Wabi's *shared, non-personal* knowledge l
 _Avoid_: tip, content, knowledge-base entry
 
 **Strategy Draft**:
-A proposed Strategy awaiting approval (from `research-cron`, `session-mining`, or a human author). Drafts are never served until approved; session-mined drafts are always human-gated (ADR-0012).
+A proposed Strategy awaiting approval (from `research-cron`, `session-mining`, or a human author). Drafts are never served until approved; session-mined drafts are always human-gated (ADR-0012). A Draft's status (pending-review → published / quarantined) lives in Postgres, but the **Qdrant index is the serving surface**: a *published* Draft must be present in the index and a *quarantined* one absent. The two are **reconciled, never assumed** — so a quarantined Strategy can't keep being served on a silently-failed index delete, nor a published one stay invisible on a failed upsert.
 _Avoid_: pending strategy, suggestion
 
 ### Progress (personal, DM-first per ADR-0003)
 
+**Engagement** (a logged habit-event):
+One record that a person performed a self-care habit — a coaching turn, a Journal Entry, an answered Check-in. The single unit behind all gentle gamification: a **Streak** is consecutive days with ≥1 Engagement, **XP** is the sum of points carried per Engagement, and the **Wellness Score** is Engagement density over a window. Recorded exactly once per habit-event through one writer, so no surface hand-wires rewards and no event is counted twice. Which habits count, and for how much XP, is a gentle-gamification decision (ADR-0007).
+_Avoid_: activity, event (too generic), "xp entry" (the old row that conflated points with the engagement signal)
+
 **Streak**:
-A running count of consecutive periods a person has kept a self-care habit (e.g. answering check-ins, taking breaks). Global to the person; not server-scoped. Treated gently (ADR-0007) — a broken streak is framed with compassion, never as failure, and streak nudges yield when the person is struggling.
+A running count of consecutive days a person logged at least one Engagement (e.g. answering check-ins, taking breaks). Global to the person; not server-scoped. Treated gently (ADR-0007) — a broken streak is framed with compassion, never as failure, and streak nudges yield when the person is struggling.
 _Avoid_: chain, combo
 
 **XP / Level**:
-Lightweight progress points and tiers earned through habit engagement. Motivational only; never tied to Mood or Tilt severity (ADR-0002).
+Lightweight progress points and tiers — the sum of points carried by each Engagement. Motivational only; never tied to Mood or Tilt severity (ADR-0002).
 _Avoid_: score, points (ambiguous), rank
 
 **Wellness Score**:
-A private, person-global measure of *healthy-habit engagement* — the consistency of self-care actions. It deliberately does **not** read Mood or Tilt (ADR-0002), so it can never expose how someone feels.
+A private, person-global measure of *healthy-habit engagement* — Engagement density over a window. It deliberately reads only Engagement, never Mood or Tilt (ADR-0002), so it can never expose how someone feels — and counts each habit-event once.
 _Avoid_: health score, mood score, mental-health score
 
 ## Example dialogue
