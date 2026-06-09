@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { ClassifierService } from '../crisis/classifier.service';
+import { CrisisScreeningService } from '../crisis/crisis-screening.service';
+import type { CrisisResponse } from '../crisis/escalation.service';
 import { CoachService } from '../coaching/coach.service';
 import { XpService } from '../xp/xp.service';
 
@@ -22,10 +23,14 @@ const PROMPTS = [
   "What made you smile today?",
 ];
 
+export type JournalWriteResult =
+  | { crisis: true; response: CrisisResponse }
+  | { crisis: false; reflection: string; xpAwarded: number };
+
 @Injectable()
 export class JournalService {
   constructor(
-    private readonly classifier: ClassifierService,
+    private readonly screening: CrisisScreeningService,
     private readonly coach: CoachService,
     private readonly xp: XpService,
   ) {}
@@ -35,15 +40,13 @@ export class JournalService {
     return PROMPTS[idx];
   }
 
-  async write(
-    discordId: string,
-    content: string,
-  ): Promise<{ crisis: boolean; reflection: string; xpAwarded: number }> {
-    const classification = await this.classifier.classify(content);
-
-    if (classification === 'crisis') {
-      // No persist, no reward — a crisis entry is handed off to safety, not gamified.
-      return { crisis: true, reflection: '', xpAwarded: 0 };
+  async write(discordId: string, content: string): Promise<JournalWriteResult> {
+    // Screen the free-text entry before persisting (ADR-0028). A crisis hit surfaces the real locale
+    // Crisis Resources + records one Escalation Event — but no DM-session aftermath, since a journal
+    // entry is not a Conversation. We hand the renderable response straight back to the controller.
+    const verdict = await this.screening.screen(discordId, content);
+    if (verdict.kind === 'crisis') {
+      return { crisis: true, response: verdict.response };
     }
 
     const reflection = await this.generateReflection(content);

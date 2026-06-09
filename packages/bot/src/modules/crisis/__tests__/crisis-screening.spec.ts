@@ -1,10 +1,31 @@
+// screen() pulls in EscalationService → CrisisAftermathService → SchedulerService → pg-boss, which
+// is ESM and breaks the Jest loader. We inject mock collaborators, so stub the transitive deps to
+// keep the import graph parseable (same pattern as escalation.service.spec).
+jest.mock('pg-boss', () => ({
+  PgBoss: jest.fn().mockImplementation(() => ({
+    start: jest.fn(),
+    createQueue: jest.fn(),
+    work: jest.fn(),
+    schedule: jest.fn(),
+    stop: jest.fn(),
+  })),
+}));
+
+jest.mock('@wabi/shared', () => ({
+  prisma: {},
+}));
+
 import { CrisisScreeningService } from '../crisis-screening.service';
+
+const noopDeps = () =>
+  [{ classify: jest.fn() }, { escalate: jest.fn() }] as const;
 
 describe('CrisisScreeningService.tripwire', () => {
   let service: CrisisScreeningService;
 
   beforeEach(() => {
-    service = new CrisisScreeningService();
+    const [classifier, escalation] = noopDeps();
+    service = new CrisisScreeningService(classifier as any, escalation as any);
   });
 
   describe('explicit crisis phrases → true', () => {
@@ -57,5 +78,51 @@ describe('CrisisScreeningService.tripwire', () => {
     it.each(normalPhrases)('should NOT fire on: "%s"', (phrase) => {
       expect(service.tripwire(phrase)).toBe(false);
     });
+  });
+});
+
+describe('CrisisScreeningService.screen', () => {
+  let service: CrisisScreeningService;
+  let classifier: { classify: jest.Mock };
+  let escalation: { escalate: jest.Mock };
+  const payload = { embeds: [{ title: '🚨 You matter' }] };
+
+  beforeEach(() => {
+    classifier = { classify: jest.fn() };
+    escalation = { escalate: jest.fn().mockResolvedValue(payload) };
+    service = new CrisisScreeningService(classifier as any, escalation as any);
+  });
+
+  it('escalates on a tripwire hit without running the classifier (cheap layer first)', async () => {
+    const verdict = await service.screen('123', 'I want to die');
+
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', {
+      startAftermath: false,
+    });
+    expect(verdict).toEqual({ kind: 'crisis', response: payload });
+  });
+
+  it('escalates on a classifier crisis when the tripwire misses', async () => {
+    classifier.classify.mockResolvedValue('crisis');
+
+    const verdict = await service.screen('123', "i just don't see the point in any of it");
+
+    expect(classifier.classify).toHaveBeenCalledWith(
+      "i just don't see the point in any of it",
+    );
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', {
+      startAftermath: false,
+    });
+    expect(verdict).toEqual({ kind: 'crisis', response: payload });
+  });
+
+  it('returns safe and never escalates when both layers clear', async () => {
+    classifier.classify.mockResolvedValue('safe');
+
+    const verdict = await service.screen('123', 'I had a good day today');
+
+    expect(escalation.escalate).not.toHaveBeenCalled();
+    expect(verdict).toEqual({ kind: 'safe' });
   });
 });

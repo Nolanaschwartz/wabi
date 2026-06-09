@@ -1,7 +1,19 @@
 import { Injectable } from '@nestjs/common';
+import { ClassifierService } from './classifier.service';
+import { EscalationService, CrisisResponse } from './escalation.service';
+
+/** The outcome of screening one piece of free-text input. */
+export type ScreeningVerdict =
+  | { kind: 'crisis'; response: CrisisResponse }
+  | { kind: 'safe' };
 
 @Injectable()
 export class CrisisScreeningService {
+  constructor(
+    private readonly classifier: ClassifierService,
+    private readonly escalation: EscalationService,
+  ) {}
+
   private readonly explicitPatterns: RegExp[] = [
     /\bI don'?t want to live\b/i,
     /\bI don'?t want to be alive\b/i,
@@ -38,5 +50,32 @@ export class CrisisScreeningService {
       }
     }
     return false;
+  }
+
+  /**
+   * Full screening for one piece of a person's free-text input from any atomic surface — a Journal
+   * Entry, a Mood note, a Tilt trigger (ADR-0028). Runs the two crisis-detection layers cheap-first
+   * (tripwire then classifier) and, on a hit, performs a Crisis Escalation that surfaces resources +
+   * records one Escalation Event but does NOT open the DM-session aftermath window (a logged field is
+   * not a Conversation, so `startAftermath: false`). Returns the renderable crisis response for the
+   * caller to send on its own surface, or `{ kind: 'safe' }`.
+   */
+  async screen(userId: string, content: string): Promise<ScreeningVerdict> {
+    if (this.tripwire(content)) {
+      const response = await this.escalation.escalate(userId, 'tripwire', {
+        startAftermath: false,
+      });
+      return { kind: 'crisis', response };
+    }
+
+    const classification = await this.classifier.classify(content);
+    if (classification === 'crisis') {
+      const response = await this.escalation.escalate(userId, 'classifier', {
+        startAftermath: false,
+      });
+      return { kind: 'crisis', response };
+    }
+
+    return { kind: 'safe' };
   }
 }

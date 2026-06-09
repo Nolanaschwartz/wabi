@@ -64,9 +64,8 @@ export class JournalController {
     const result = await this.journalService.write(interaction.user.id, content);
 
     if (result.crisis) {
-      await interaction.editReply({
-        content: "I'm hearing that things are really tough right now. If you're in crisis, please reach out to someone who can help. You matter.",
-      });
+      // Real locale Crisis Resources surfaced by screening (ADR-0028) — not a hand-rolled platitude.
+      await interaction.editReply(result.response);
       return;
     }
 
