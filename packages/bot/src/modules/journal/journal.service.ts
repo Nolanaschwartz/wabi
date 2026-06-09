@@ -5,12 +5,7 @@ import {
   ScreenedRecord,
 } from '../crisis/crisis-screening.service';
 import { CoachService } from '../coaching/coach.service';
-import { XpService } from '../xp/xp.service';
-
-// A saved journal entry is worth this much XP. The award belongs to "writing an entry",
-// so it lives here next to the persist — not at the call site, where a second caller would
-// have to re-encode it (and a crisis entry could accidentally still be rewarded).
-const JOURNAL_XP_AWARD = 10;
+import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -35,7 +30,7 @@ export class JournalService {
   constructor(
     private readonly screening: CrisisScreeningService,
     private readonly coach: CoachService,
-    private readonly xp: XpService,
+    private readonly habitEngagement: HabitEngagementService,
   ) {}
 
   async prompt(): Promise<string> {
@@ -58,9 +53,11 @@ export class JournalService {
         },
       });
 
-      await this.xp.award(discordId, JOURNAL_XP_AWARD, 'journal');
+      // Log the Engagement (XP + streak) through the single writer (ADR-0027). XP is awarded once per
+      // engaged day, so a second entry the same day still saves but does not re-award.
+      const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
 
-      return { reflection: reflection || '', xpAwarded: JOURNAL_XP_AWARD };
+      return { reflection: reflection || '', xpAwarded };
     });
   }
 

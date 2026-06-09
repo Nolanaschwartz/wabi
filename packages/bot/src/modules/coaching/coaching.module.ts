@@ -9,7 +9,7 @@ import { BillingModule } from '../billing/billing.module';
 import { MemoryModule } from '../memory/memory.module';
 import { CrisisAftermathModule } from '../crisis-aftermath/crisis-aftermath.module';
 import { CrisisModule } from '../crisis/crisis.module';
-import { StreaksModule } from '../streaks/streaks.module';
+import { HabitEngagementModule } from '../habit-engagement/habit-engagement.module';
 import { TiltModule } from '../tilt/tilt.module';
 
 @Module({
@@ -22,7 +22,7 @@ import { TiltModule } from '../tilt/tilt.module';
     MemoryModule,
     CrisisAftermathModule,
     CrisisModule,
-    StreaksModule,
+    HabitEngagementModule,
     TiltModule,
   ],
   providers: [CoachService, CoachingService],

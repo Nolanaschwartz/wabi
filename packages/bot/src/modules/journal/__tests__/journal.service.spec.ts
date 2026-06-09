@@ -1,6 +1,6 @@
 import { JournalService } from '../journal.service';
 import { CoachService } from '../../coaching/coach.service';
-import { XpService } from '../../xp/xp.service';
+import { HabitEngagementService } from '../../habit-engagement/habit-engagement.service';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
@@ -23,9 +23,9 @@ jest.mock('../../coaching/coach.service', () => ({
   })),
 }));
 
-jest.mock('../../xp/xp.service', () => ({
-  XpService: jest.fn().mockImplementation(() => ({
-    award: jest.fn(),
+jest.mock('../../habit-engagement/habit-engagement.service', () => ({
+  HabitEngagementService: jest.fn().mockImplementation(() => ({
+    record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }),
   })),
 }));
 
@@ -33,7 +33,7 @@ describe('JournalService', () => {
   let service: JournalService;
   let screening: { guard: jest.Mock };
   let coach: jest.Mocked<CoachService>;
-  let xp: jest.Mocked<XpService>;
+  let habitEngagement: jest.Mocked<HabitEngagementService>;
   const crisisPayload = { embeds: [{ title: '🚨 You matter' }] };
 
   beforeEach(() => {
@@ -46,8 +46,8 @@ describe('JournalService', () => {
       })),
     };
     coach = new CoachService() as any;
-    xp = new XpService() as any;
-    service = new JournalService(screening as any, coach, xp);
+    habitEngagement = new HabitEngagementService(undefined as any, undefined as any) as any;
+    service = new JournalService(screening as any, coach, habitEngagement);
   });
 
   it('returns a prompt', async () => {
@@ -82,13 +82,13 @@ describe('JournalService', () => {
     expect(prisma.journalEntry.create).toHaveBeenCalled();
   });
 
-  it('awards journal XP itself on a saved entry (the rule lives in the module, not the controller)', async () => {
+  it('logs a journal Engagement through the single writer on a saved entry (ADR-0027)', async () => {
     (coach.generate as jest.Mock).mockResolvedValue('Nice.');
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
     const result = await service.write('123', 'I had a good day today');
 
-    expect(xp.award).toHaveBeenCalledWith('123', 10, 'journal');
+    expect(habitEngagement.record).toHaveBeenCalledWith('123', 'journal');
     expect(result.crisis).toBe(false);
     if (!result.crisis) {
       expect(result.value.xpAwarded).toBe(10);

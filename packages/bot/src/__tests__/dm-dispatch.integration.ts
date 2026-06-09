@@ -76,7 +76,10 @@ describe('DM dispatch integration', () => {
       onEscalation: jest.fn().mockResolvedValue(undefined),
     } as any;
     const escalation = { escalate: jest.fn().mockResolvedValue(undefined) } as any;
-    const streaks = { checkAndAward: jest.fn().mockResolvedValue(null) } as any;
+    // Coaching now logs the Engagement (streak + XP) through the single writer (ADR-0027).
+    const habitEngagement = {
+      record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }),
+    } as any;
     // The tilt offer lifecycle is consolidated into these two methods (commit 367b56c4):
     // no pending offer to answer, and no detection-driven offer for this safe turn.
     const tilt = {
@@ -96,7 +99,7 @@ describe('DM dispatch integration', () => {
       memoryStore,
       crisisAftermath,
       escalation,
-      streaks,
+      habitEngagement,
       tilt,
     );
 

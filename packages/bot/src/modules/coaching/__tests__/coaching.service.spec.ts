@@ -10,7 +10,7 @@ import { LangfuseTracer } from '../../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../../billing/access-resolver';
 import { MemoryStoreService } from '../../memory/memory-store.service';
 import { CrisisAftermathService } from '../../crisis-aftermath/crisis-aftermath.service';
-import { StreaksService } from '../../streaks/streaks.service';
+import { HabitEngagementService } from '../../habit-engagement/habit-engagement.service';
 import { TiltService } from '../../tilt/tilt.service';
 
 jest.mock('@wabi/shared', () => ({
@@ -99,9 +99,9 @@ jest.mock('../../crisis-aftermath/crisis-aftermath.service', () => ({
   })),
 }));
 
-jest.mock('../../streaks/streaks.service', () => ({
-  StreaksService: jest.fn(() => ({
-    checkAndAward: jest.fn().mockResolvedValue({ streak: 1, message: '' }),
+jest.mock('../../habit-engagement/habit-engagement.service', () => ({
+  HabitEngagementService: jest.fn(() => ({
+    record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }),
   })),
 }));
 
@@ -126,7 +126,7 @@ describe('CoachingService', () => {
   let memoryStore: jest.Mocked<MemoryStoreService>;
   let crisisAftermath: jest.Mocked<CrisisAftermathService>;
   let escalation: { escalate: jest.Mock };
-  let streaks: jest.Mocked<StreaksService>;
+  let habitEngagement: jest.Mocked<HabitEngagementService>;
   let tilt: jest.Mocked<TiltService>;
 
   const mockMessage = {
@@ -154,7 +154,7 @@ describe('CoachingService', () => {
     memoryStore = new MemoryStoreService() as any;
     crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
     escalation = { escalate: jest.fn().mockResolvedValue(crisisPayload) };
-    streaks = (StreaksService as jest.Mock)() as any;
+    habitEngagement = (HabitEngagementService as jest.Mock)() as any;
     tilt = (TiltService as jest.Mock)() as any;
     service = new CoachingService(
       classifier,
@@ -168,7 +168,7 @@ describe('CoachingService', () => {
       memoryStore,
       crisisAftermath,
       escalation as any,
-      streaks,
+      habitEngagement,
       tilt,
     );
   });
