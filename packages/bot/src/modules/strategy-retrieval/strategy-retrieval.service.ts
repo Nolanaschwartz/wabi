@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { QdrantClient } from '@qdrant/qdrant-js';
-import { getProvider, type ProviderConfig } from '@wabi/shared';
+import { getProvider } from '@wabi/shared';
 
 const COLLECTION_NAME = 'wabi_strategies';
-const VECTOR_SIZE = 768;
+// The personal/strategy embedding dimensionality, in ONE place (also imported by the integration
+// test so the two can't drift). If the embedding model changes, this is the single edit.
+export const VECTOR_SIZE = 768;
 
 export interface StrategyPoint {
   id: string;
@@ -15,14 +17,12 @@ export interface StrategyPoint {
 @Injectable()
 export class StrategyRetrievalService {
   private qdrant: QdrantClient;
-  private embeddingConfig: ProviderConfig;
   private initialized = false;
 
   constructor(qdrantUrl?: string) {
     this.qdrant = new QdrantClient({
       url: qdrantUrl || process.env.QDRANT_URL || 'http://localhost:6333',
     });
-    this.embeddingConfig = getProvider('embedding');
   }
 
   async init(): Promise<void> {
@@ -70,12 +70,14 @@ export class StrategyRetrievalService {
     }
   }
 
+  /** Returns whether the point is now in the index. Callers depend on the outcome to keep Postgres
+   * status and the Qdrant index in agreement (ADR-0012) — it must NOT swallow failure as success. */
   async upsert(
     id: string,
     content: string,
     evidence: string,
     effectivenessScore?: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const embedding = await this.embed(content);
       await this.qdrant.upsert(COLLECTION_NAME, {
@@ -91,27 +93,33 @@ export class StrategyRetrievalService {
           },
         ],
       });
+      return true;
     } catch {
-      // Qdrant unavailable — skip silently
+      return false;
     }
   }
 
-  async delete(id: string): Promise<void> {
+  /** Returns whether the point is now absent from the index (true also if it was never present). */
+  async delete(id: string): Promise<boolean> {
     try {
       await this.qdrant.delete(COLLECTION_NAME, { points: [id] });
+      return true;
     } catch {
-      // Qdrant unavailable — skip silently
+      return false;
     }
   }
 
   private async embed(text: string): Promise<number[]> {
+    // Resolve the embedding provider lazily on every call — never cache env-derived config in a
+    // field (the bot starts before inference env vars are populated; see CLAUDE.md).
+    const config = getProvider('embedding');
     const response = await fetch(
-      `${this.embeddingConfig.baseUrl}/api/embeddings`,
+      `${config.baseUrl}/api/embeddings`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: this.embeddingConfig.model,
+          model: config.model,
           input: text,
         }),
       },

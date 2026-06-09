@@ -1,8 +1,12 @@
 import { randomUUID } from 'crypto';
 import { startInfra } from '../integration-harness';
-import { StrategyRetrievalService } from '../modules/strategy-retrieval/strategy-retrieval.service';
+import {
+  StrategyRetrievalService,
+  VECTOR_SIZE,
+} from '../modules/strategy-retrieval/strategy-retrieval.service';
 
-const DIMS = 768;
+// Import the canonical dimensionality so the test can never drift from the collection schema.
+const DIMS = VECTOR_SIZE;
 
 // The real fetch, captured once before any mocking. Qdrant's REST client also uses
 // global.fetch, so the embed mock must delegate non-embedding requests here rather
