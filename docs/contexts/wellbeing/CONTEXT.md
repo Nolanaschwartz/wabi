@@ -56,6 +56,10 @@ _Avoid_: helpline list, referrals
 The minimal, content-free record that a Crisis Escalation occurred — a timestamp and which detection layer fired (tripwire vs. classifier), never the raw message (ADR-0010). Personal data; deletable. Wabi never notifies third parties off the back of it.
 _Avoid_: incident, crisis log (implying stored content), alert
 
+**Crisis Aftermath**:
+The period after a Crisis Escalation, governed by two *distinct* pieces of state (ADR-0010). The **do-not-mine flag** is durable (Postgres, on the session) and tells the session-end sweeper to never derive Memory from that session. The **Aftermath Window** is time-bounded (a 24h Redis key) and softens the AI Coach's tone while it lasts; a fresh, live Conversation cancels the window early. The two are set together on escalation but answer different questions — "may we ever mine this?" vs. "is the person still in the immediate aftermath right now?" — and must not be conflated.
+_Avoid_: cooldown, lockout, ban (none of these — coaching still happens, just gently)
+
 ### Memory & knowledge (ADR-0004)
 
 **Record**:
