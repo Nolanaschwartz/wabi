@@ -52,4 +52,28 @@ describe('CrisisAftermathService', () => {
     (disabledService as any).enabled = false;
     await disabledService.init();
   });
+
+  describe('isQuarantined (reads the buffer through its interface, not the raw client)', () => {
+    it('returns false when a live session exists, even if the window is set (policy: a fresh session cancels aftermath)', async () => {
+      sessionBuffer.getContext = jest.fn().mockResolvedValue({ turns: [] }) as any;
+      sessionBuffer.inAftermathWindow = jest.fn().mockResolvedValue(true) as any;
+
+      await expect(service.isQuarantined('123')).resolves.toBe(false);
+      expect(sessionBuffer.inAftermathWindow).not.toHaveBeenCalled();
+    });
+
+    it('returns true when there is no live session and the aftermath window is set', async () => {
+      sessionBuffer.getContext = jest.fn().mockResolvedValue(null) as any;
+      sessionBuffer.inAftermathWindow = jest.fn().mockResolvedValue(true) as any;
+
+      await expect(service.isQuarantined('123')).resolves.toBe(true);
+    });
+
+    it('returns false when there is no live session and no aftermath window', async () => {
+      sessionBuffer.getContext = jest.fn().mockResolvedValue(null) as any;
+      sessionBuffer.inAftermathWindow = jest.fn().mockResolvedValue(false) as any;
+
+      await expect(service.isQuarantined('123')).resolves.toBe(false);
+    });
+  });
 });

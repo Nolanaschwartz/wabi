@@ -82,14 +82,13 @@ export class CrisisAftermathService {
 
   async isQuarantined(userId: string): Promise<boolean> {
     try {
+      // Policy: a fresh, live session cancels the aftermath window. The raw "is the window still
+      // set?" fact is owned by SessionBuffer (its key, its TTL) — we read it through the interface,
+      // never the underlying client.
       const raw = await this.sessionBuffer.getContext(userId);
       if (raw) return false;
 
-      const client = (this.sessionBuffer as any).client;
-      if (!client) return false;
-
-      const value = await client.get(`wabi:quarantine:${userId}`);
-      return value === 'true';
+      return await this.sessionBuffer.inAftermathWindow(userId);
     } catch {
       return false;
     }
