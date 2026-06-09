@@ -75,6 +75,7 @@ describe('DM dispatch integration', () => {
       isQuarantined: jest.fn().mockResolvedValue(false),
       onEscalation: jest.fn().mockResolvedValue(undefined),
     } as any;
+    const escalation = { escalate: jest.fn().mockResolvedValue(undefined) } as any;
     const streaks = { checkAndAward: jest.fn().mockResolvedValue(null) } as any;
     const tilt = {
       getPendingOffer: jest.fn().mockReturnValue(null),
@@ -97,13 +98,13 @@ describe('DM dispatch integration', () => {
       accessResolver,
       memoryStore,
       crisisAftermath,
+      escalation,
       streaks,
       tilt,
     );
 
     const crisisScreening = { tripwire: jest.fn().mockReturnValue(false) } as any;
-    const crisisResources = { resourcesFor: jest.fn() } as any;
-    echo = new EchoController(crisisScreening, crisisResources, coaching, crisisAftermath);
+    echo = new EchoController(crisisScreening, escalation, coaching);
   }, 60000);
 
   afterAll(async () => {
