@@ -235,7 +235,7 @@ describe('CoachingService', () => {
       hasActiveAccess: true,
       subscriptionStatus: 'trialing',
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('batch');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'batch' });
     classifier.classify.mockResolvedValue('crisis');
     strategyRetrieval.search.mockResolvedValue([]);
 
@@ -262,7 +262,7 @@ describe('CoachingService', () => {
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
     classifier.classify.mockResolvedValue('safe');
     (accessResolver.resolve as jest.Mock).mockResolvedValue({
       hasActiveAccess: true,
@@ -302,7 +302,7 @@ describe('CoachingService', () => {
       hasActiveAccess: true,
       subscriptionStatus: 'trialing',
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
@@ -331,7 +331,7 @@ describe('CoachingService', () => {
       hasActiveAccess: true,
       subscriptionStatus: 'trialing',
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
@@ -348,7 +348,7 @@ describe('CoachingService', () => {
     );
   });
 
-  it('skips interim messages when coalesce returns null', async () => {
+  it('skips interim messages folded into a pending burst (coalesced)', async () => {
     (prisma.user.findUnique as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
@@ -358,10 +358,34 @@ describe('CoachingService', () => {
       hasActiveAccess: true,
       subscriptionStatus: 'trialing',
     });
-    (burstCoalescer.coalesce as jest.Mock).mockReturnValue(null);
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'coalesced' });
 
     await service.handle(mockMessage);
 
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('sends the hourly-ceiling reply and never coaches it (rate_limited)', async () => {
+    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+      timezone: 'UTC',
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
+      kind: 'rate_limited',
+      text: 'slow down please',
+    });
+
+    await service.handle(mockMessage);
+
+    // The ceiling reply goes straight to the user — it must NOT be classified or coached
+    // (the old sentinel bug re-fed it through the pipeline).
+    expect(mockMessage.reply).toHaveBeenCalledWith('slow down please');
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
   });
@@ -380,7 +404,7 @@ describe('CoachingService', () => {
 
   it('offers a tilt session (not auto-start) when frustration is detected', async () => {
     activeUser();
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('teammates keep feeding ugh');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'teammates keep feeding ugh' });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     tilt.isTiltLanguage.mockReturnValue(true);
@@ -399,7 +423,7 @@ describe('CoachingService', () => {
 
   it('does not offer a tilt session during crisis aftermath', async () => {
     activeUser();
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('teammates keep feeding ugh');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'teammates keep feeding ugh' });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
@@ -450,7 +474,7 @@ describe('CoachingService', () => {
       hasActiveAccess: true,
       subscriptionStatus: 'trialing',
     });
-    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue('test message');
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockRejectedValue(new Error('qdrant down'));
     sessionBuffer.getContext.mockResolvedValue(null);

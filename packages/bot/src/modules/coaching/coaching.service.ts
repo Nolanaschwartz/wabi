@@ -94,10 +94,18 @@ export class CoachingService {
     try {
       await this.coachingSession.touch(userId);
 
-      const batch = await this.burstCoalescer.coalesce(userId, message.content);
-      if (!batch || batch === '__canceled__') {
+      const coalesced = await this.burstCoalescer.coalesce(userId, message.content);
+      if (coalesced.kind === 'coalesced' || coalesced.kind === 'canceled') {
+        // Folded into an in-flight burst, or the turn was canceled — nothing to coach.
         return;
       }
+      if (coalesced.kind === 'rate_limited') {
+        // Hourly ceiling tripped: send the caring reply and stop. It is NOT a batch — the old
+        // sentinel let it fall through and get re-classified/re-coached, so the limit did nothing.
+        await message.reply(coalesced.text);
+        return;
+      }
+      const batch = coalesced.text;
 
       const [classification, strategies] = await Promise.all([
         this.classifier.classify(batch),

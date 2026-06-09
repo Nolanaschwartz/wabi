@@ -1,10 +1,30 @@
 import { Injectable } from '@nestjs/common';
 const DEBOUNCE_MS = 3000;
 const HOURLY_CEILING = 30;
+const CEILING_MESSAGE =
+  "I care about our conversations, and I want to give each one the attention it deserves. Let's take these one at a time — what's on your mind?";
+
+/**
+ * The outcome of feeding a message into the coalescer. Each variant is a distinct instruction
+ * to the caller, so no outcome can masquerade as another:
+ *  - `ready`        — the debounce elapsed; `text` is the batch to classify + coach.
+ *  - `coalesced`    — folded into an in-flight burst; this turn produces no reply, just return.
+ *  - `canceled`     — the pending turn was canceled (e.g. a crisis arrived mid-burst); drop it.
+ *  - `rate_limited` — the hourly ceiling tripped; SEND `text` to the user, do NOT coach it.
+ *
+ * The previous stringly interface (`Promise<string> | null` with a `'__canceled__'` sentinel)
+ * let the ceiling reply return as a plain string, which the caller treated as a batch and
+ * re-coached — the rate limit silently did nothing. The union makes that unrepresentable.
+ */
+export type CoalesceResult =
+  | { kind: 'ready'; text: string }
+  | { kind: 'coalesced' }
+  | { kind: 'canceled' }
+  | { kind: 'rate_limited'; text: string };
 
 interface CoalescedTurn {
   messages: string[];
-  resolve: (reply: string) => void;
+  resolve: (result: CoalesceResult) => void;
   cancel: () => void;
   isCanceled: boolean;
 }
@@ -16,21 +36,19 @@ export class BurstCoalescer {
   private hourlyCounts = new Map<string, number>();
   private hourlyResets = new Map<string, number>();
 
-  coalesce(userId: string, initialMessage?: string): Promise<string> | null {
+  coalesce(userId: string, initialMessage?: string): Promise<CoalesceResult> {
     const existing = this.pending.get(userId);
     if (existing) {
       if (initialMessage) existing.messages.push(initialMessage);
-      return null;
+      return Promise.resolve({ kind: 'coalesced' });
     }
 
     const hourlyLimit = this.getHourlyLimit(userId);
     if (this.isOverCeiling(userId, hourlyLimit)) {
-      return Promise.resolve(
-        "I care about our conversations, and I want to give each one the attention it deserves. Let's take these one at a time — what's on your mind?",
-      );
+      return Promise.resolve({ kind: 'rate_limited', text: CEILING_MESSAGE });
     }
 
-    return new Promise<string>((resolve) => {
+    return new Promise<CoalesceResult>((resolve) => {
       const turn: CoalescedTurn = {
         messages: initialMessage ? [initialMessage] : [],
         resolve,
@@ -42,7 +60,7 @@ export class BurstCoalescer {
             this.timers.delete(userId);
           }
           this.pending.delete(userId);
-          resolve('__canceled__');
+          resolve({ kind: 'canceled' });
         },
         isCanceled: false,
       };
@@ -54,7 +72,7 @@ export class BurstCoalescer {
           this.timers.delete(userId);
           const messages = [...turn.messages];
           this.pending.delete(userId);
-          resolve(messages.join('\n'));
+          resolve({ kind: 'ready', text: messages.join('\n') });
         }
       }, DEBOUNCE_MS);
       this.timers.set(userId, timer);
