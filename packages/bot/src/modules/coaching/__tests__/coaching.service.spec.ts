@@ -1,5 +1,5 @@
 import { CoachingService } from '../coaching.service';
-import { ClassifierService } from '../classifier.service';
+import { ClassifierService } from '../../crisis/classifier.service';
 import { CoachService } from '../coach.service';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
@@ -27,7 +27,7 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-jest.mock('../classifier.service', () => ({
+jest.mock('../../crisis/classifier.service', () => ({
   ClassifierService: jest.fn().mockImplementation(() => ({
     classify: jest.fn(),
   })),

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { ClassifierService } from './classifier.service';
+import { ClassifierService } from '../crisis/classifier.service';
 import { CoachService } from './coach.service';
 import { buildCoachPrompt } from './coach-prompt';
 import { splitMessage } from './message-splitter';

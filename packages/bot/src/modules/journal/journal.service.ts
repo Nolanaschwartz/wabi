@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { ClassifierService } from '../coaching/classifier.service';
+import { ClassifierService } from '../crisis/classifier.service';
 import { CoachService } from '../coaching/coach.service';
 import { XpService } from '../xp/xp.service';
 

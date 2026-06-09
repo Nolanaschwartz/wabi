@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { ClassifierService } from './classifier.service';
 import { CoachService } from './coach.service';
 import { CoachingService } from './coaching.service';
 import { SessionBufferModule } from '../session-buffer/session-buffer.module';
@@ -26,9 +25,9 @@ import { TiltModule } from '../tilt/tilt.module';
     StreaksModule,
     TiltModule,
   ],
-  providers: [ClassifierService, CoachService, CoachingService],
-  // ClassifierService and CoachService are exported so importing modules (e.g. JournalModule)
-  // can inject them and share these singletons instead of failing DI resolution at boot.
-  exports: [CoachingService, ClassifierService, CoachService],
+  providers: [CoachService, CoachingService],
+  // CoachService is exported so importing modules (e.g. JournalModule) can inject it and share the
+  // singleton. The Crisis Classifier now lives in CrisisModule (ADR-0006/0028), which exports it.
+  exports: [CoachingService, CoachService],
 })
 export class CoachingModule {}
