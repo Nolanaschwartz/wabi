@@ -103,6 +103,16 @@ export class SessionBufferService {
     });
   }
 
+  /**
+   * Purge BOTH Redis keys for a person — the live session buffer (which holds verbatim turns) and the
+   * post-crisis quarantine key. The Redis side of a Data Rights deletion (ADR-0011): verbatim content
+   * must not linger to TTL after "delete my data".
+   */
+  async purge(userId: string): Promise<void> {
+    await this.client.del(this.sessionKey(userId));
+    await this.client.del(this.quarantineKey(userId));
+  }
+
   // The raw fact: is the post-crisis quarantine key still set? The *policy* of when that counts
   // (e.g. a fresh session cancelling the window) lives in CrisisAftermath, not here — this module
   // owns the key, its name, and its TTL, nothing more. Symmetric read for the clearAndQuarantine
