@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { UserService } from '../user/user.service';
 
 /**
  * One Discord component row plus the copy that introduces it — the shape every consent surface
@@ -26,15 +27,17 @@ export class InnerStateConsentService {
   static readonly KEEP_PRIVATE_ID = 'inner_state_memory:keep_private';
   static readonly TOGGLE_ID = 'inner_state_memory:toggle';
 
+  constructor(private readonly userService: UserService) {}
+
   /**
    * If this person has neither opted in nor been asked, mark them asked *now* and return the
    * first-use prompt to append to the current reply. Otherwise return null — we never re-prompt.
    * Marking on display (not on click) is what makes the ask happen at most once across all fields.
    */
   async prepareFirstUsePrompt(userId: string): Promise<ConsentSurface | null> {
-    const user = await prisma.user.findUnique({
-      where: { discordId: userId },
-      select: { innerStateMemoryEnabled: true, innerStateMemoryPromptedAt: true },
+    const user = await this.userService.findByDiscordId(userId, {
+      innerStateMemoryEnabled: true,
+      innerStateMemoryPromptedAt: true,
     });
 
     if (!user || user.innerStateMemoryEnabled || user.innerStateMemoryPromptedAt) {
@@ -67,9 +70,8 @@ export class InnerStateConsentService {
 
   /** `/memory` toggle — flip in either direction and return the new state. */
   async toggle(userId: string): Promise<boolean> {
-    const user = await prisma.user.findUnique({
-      where: { discordId: userId },
-      select: { innerStateMemoryEnabled: true },
+    const user = await this.userService.findByDiscordId(userId, {
+      innerStateMemoryEnabled: true,
     });
     const next = !user?.innerStateMemoryEnabled;
     await prisma.user.update({
@@ -80,9 +82,8 @@ export class InnerStateConsentService {
   }
 
   async isEnabled(userId: string): Promise<boolean> {
-    const user = await prisma.user.findUnique({
-      where: { discordId: userId },
-      select: { innerStateMemoryEnabled: true },
+    const user = await this.userService.findByDiscordId(userId, {
+      innerStateMemoryEnabled: true,
     });
     return !!user?.innerStateMemoryEnabled;
   }

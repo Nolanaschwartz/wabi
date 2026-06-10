@@ -15,18 +15,21 @@ jest.mock('pg-boss', () => ({
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
-    user: { findUnique: jest.fn().mockResolvedValue({ locale: 'en-US' }) },
     escalationEvent: { create: jest.fn().mockResolvedValue({}) },
   },
 }));
 
 describe('EscalationService', () => {
   let service: EscalationService;
+  let userService: { findByDiscordId: jest.Mock };
   let crisisResources: { resourcesFor: jest.Mock };
   let crisisAftermath: { onEscalation: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    userService = {
+      findByDiscordId: jest.fn().mockResolvedValue({ locale: 'en-US' }),
+    };
     crisisResources = {
       resourcesFor: jest.fn().mockReturnValue({
         resources: [{ type: 'phone', name: '988 Lifeline', phone: '988' }],
@@ -34,6 +37,7 @@ describe('EscalationService', () => {
     };
     crisisAftermath = { onEscalation: jest.fn().mockResolvedValue(undefined) };
     service = new EscalationService(
+      userService as any,
       crisisResources as any,
       crisisAftermath as any,
     );
@@ -55,9 +59,7 @@ describe('EscalationService', () => {
   it('resolves the locale from the userId, not a Message', async () => {
     await service.escalate('123', 'tripwire');
 
-    expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { discordId: '123' },
-    });
+    expect(userService.findByDiscordId).toHaveBeenCalledWith('123');
   });
 
   it('records exactly ONE Escalation Event, tagged with the layer that fired', async () => {

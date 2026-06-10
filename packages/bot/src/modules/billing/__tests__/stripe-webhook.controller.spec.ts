@@ -23,6 +23,12 @@ jest.mock('stripe', () => {
   }));
 });
 
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
 jest.mock('../access-resolver', () => ({
   AccessResolver: jest.fn().mockImplementation(() => ({
     apply: jest.fn(),
@@ -44,7 +50,8 @@ describe('StripeWebhookController', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    accessResolver = new AccessResolver() as any;
+    const { UserService } = require('../../user/user.service');
+    accessResolver = new AccessResolver(new UserService()) as any;
     controller = new StripeWebhookController(accessResolver);
   });
 

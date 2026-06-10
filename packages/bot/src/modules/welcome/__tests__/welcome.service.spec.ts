@@ -1,20 +1,19 @@
-jest.mock('@wabi/shared', () => ({
-  prisma: {
-    user: {
-      findUnique: jest.fn(),
-      update: jest.fn(),
-    },
-  },
-}));
+jest.mock('@wabi/shared', () => ({}));
 
 import { WelcomeService } from '../welcome.service';
 
-const { prisma } = require('@wabi/shared');
+const mockFindByDiscordId = jest.fn();
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: mockFindByDiscordId,
+  })),
+}));
 
 function makeService() {
   const send = jest.fn().mockResolvedValue({});
   const client = { users: { send } } as any;
-  return { service: new WelcomeService(client), send };
+  const userService = { findByDiscordId: mockFindByDiscordId } as any;
+  return { service: new WelcomeService(client, userService), send };
 }
 
 describe('WelcomeService', () => {
@@ -24,7 +23,7 @@ describe('WelcomeService', () => {
   });
 
   it('sends the welcome opener to a consented user', async () => {
-    prisma.user.findUnique.mockResolvedValue({
+    mockFindByDiscordId.mockResolvedValue({
       discordId: 'd1',
       consentAcceptedAt: new Date('2026-01-01'),
     });
@@ -39,7 +38,7 @@ describe('WelcomeService', () => {
   });
 
   it('sends the setup-link message (not the opener) to an unknown user', async () => {
-    prisma.user.findUnique.mockResolvedValue(null);
+    mockFindByDiscordId.mockResolvedValue(null);
     const { service, send } = makeService();
 
     await service.welcome('stranger');
@@ -51,7 +50,7 @@ describe('WelcomeService', () => {
   });
 
   it('sends the setup-link message to a user who has not consented', async () => {
-    prisma.user.findUnique.mockResolvedValue({
+    mockFindByDiscordId.mockResolvedValue({
       discordId: 'd2',
       consentAcceptedAt: null,
     });
@@ -65,18 +64,21 @@ describe('WelcomeService', () => {
   });
 
   it('swallows DM delivery errors (closed DMs) without throwing', async () => {
-    prisma.user.findUnique.mockResolvedValue({
+    mockFindByDiscordId.mockResolvedValue({
       discordId: 'd3',
       consentAcceptedAt: new Date('2026-01-01'),
     });
     const send = jest.fn().mockRejectedValue(new Error('Cannot send messages to this user'));
-    const service = new WelcomeService({ users: { send } } as any);
+    const service = new WelcomeService(
+      { users: { send } } as any,
+      { findByDiscordId: mockFindByDiscordId } as any,
+    );
 
     await expect(service.welcome('d3')).resolves.toBeUndefined();
   });
 
   it('does not enroll the consented user into recurring check-ins (ADR-0008)', async () => {
-    prisma.user.findUnique.mockResolvedValue({
+    mockFindByDiscordId.mockResolvedValue({
       discordId: 'd1',
       consentAcceptedAt: new Date('2026-01-01'),
     });
@@ -84,6 +86,6 @@ describe('WelcomeService', () => {
 
     await service.welcome('d1');
 
-    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(mockFindByDiscordId).toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { AccessResolver } from '../access-resolver';
 import { prisma, decideAccess, trialGrant } from '@wabi/shared';
+import { UserService } from '../../user/user.service';
 
 // Keep the real shared access logic (decideAccess) while mocking only prisma's I/O.
 jest.mock('@wabi/shared', () => ({
@@ -12,16 +13,24 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
 describe('AccessResolver', () => {
   let resolver: AccessResolver;
+  let userService: jest.Mocked<UserService>;
 
   beforeEach(() => {
-    resolver = new AccessResolver();
     jest.clearAllMocks();
+    userService = new UserService() as any;
+    resolver = new AccessResolver(userService);
   });
 
   it('returns no access for unknown user', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue(null);
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue(null);
     const result = await resolver.resolve('999');
 
     expect(result).toEqual({
@@ -31,7 +40,7 @@ describe('AccessResolver', () => {
   });
 
   it('grants access during active trial', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       trialEndsAt: new Date(Date.now() + 86400000),
       subscriptionStatus: 'trialing',
@@ -44,7 +53,7 @@ describe('AccessResolver', () => {
   it('denies access on expired trial with a terminal subscription status', async () => {
     // Regression: this case previously used subscriptionStatus 'trialing' and asserted `true`,
     // so it never actually tested denial. A genuinely expired user has a terminal status.
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       trialEndsAt: new Date(Date.now() - 86400000),
       subscriptionStatus: 'canceled',
@@ -55,7 +64,7 @@ describe('AccessResolver', () => {
   });
 
   it('grants access on active stripe subscription', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       trialEndsAt: new Date(Date.now() - 86400000),
       subscriptionStatus: 'active',
@@ -66,7 +75,7 @@ describe('AccessResolver', () => {
   });
 
   it('denies access on past_due subscription', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       trialEndsAt: new Date(Date.now() - 86400000),
       subscriptionStatus: 'past_due',

@@ -11,6 +11,7 @@ import { CrisisAftermathModule } from '../crisis-aftermath/crisis-aftermath.modu
 import { CrisisModule } from '../crisis/crisis.module';
 import { HabitEngagementModule } from '../habit-engagement/habit-engagement.module';
 import { TiltModule } from '../tilt/tilt.module';
+import { UserModule } from '../user/user.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { TiltModule } from '../tilt/tilt.module';
     CrisisModule,
     HabitEngagementModule,
     TiltModule,
+    UserModule,
   ],
   providers: [CoachService, CoachingService],
   // CoachService is exported so importing modules (e.g. JournalModule) can inject it and share the

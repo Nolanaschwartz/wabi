@@ -2,6 +2,31 @@ import { Injectable } from '@nestjs/common';
 import { prisma, Prisma } from '@wabi/shared';
 import { MemoryStoreService } from '../memory/memory-store.service';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
+import { UserService } from '../user/user.service';
+
+/**
+ * Generate a Prisma-backed data source entry from a model name and field mapper. Pass the model's
+ * row type as `Row` (e.g. `prismaSource<Prisma.MoodGetPayload<{}>>(...)`) so the mapper's field
+ * access is checked against the real schema — a typo fails the build rather than silently exporting
+ * `undefined`. The model accessor itself is dynamic (camelCased model name), hence the `any` casts.
+ */
+function prismaSource<Row>(
+  key: string,
+  model: Prisma.ModelName,
+  mapFn: (row: Row) => Record<string, unknown>,
+): UserDataSource {
+  const modelCamel = model.charAt(0).toLowerCase() + model.slice(1);
+  return {
+    key,
+    model,
+    read: (id: string) =>
+      (prisma as any)[modelCamel]
+        .findMany({ where: { userId: id } })
+        .then((rows: Row[]) => rows.map(mapFn)),
+    delTx: (tx: Prisma.TransactionClient, id: string) =>
+      (tx as any)[modelCamel].deleteMany({ where: { userId: id } }),
+  };
+}
 
 /**
  * One source of a person's data. The whole point of declaring these in a single list is that
@@ -32,88 +57,51 @@ export class DataRightsService {
   private readonly sources: UserDataSource[];
 
   constructor(
+    private readonly userService: UserService,
     private readonly memoryStore: MemoryStoreService,
     private readonly sessionBuffer: SessionBufferService,
   ) {
     this.sources = [
-      {
-        key: 'moods',
-        model: 'Mood',
-        read: (id) =>
-          prisma.mood.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((m) => ({ rating: m.rating, emoji: m.emoji, note: m.note, createdAt: m.createdAt })),
-          ),
-        delTx: (tx, id) => tx.mood.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'playtime',
-        model: 'PlaytimeLog',
-        read: (id) =>
-          prisma.playtimeLog.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((p) => ({ duration: p.duration, game: p.game, createdAt: p.createdAt })),
-          ),
-        delTx: (tx, id) => tx.playtimeLog.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'journal',
-        model: 'JournalEntry',
-        read: (id) =>
-          prisma.journalEntry.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((j) => ({ content: j.content, reflection: j.reflection, createdAt: j.createdAt })),
-          ),
-        delTx: (tx, id) => tx.journalEntry.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'xp',
-        model: 'XpEntry',
-        read: (id) =>
-          prisma.xpEntry.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((x) => ({ amount: x.amount, reason: x.reason, createdAt: x.createdAt })),
-          ),
-        delTx: (tx, id) => tx.xpEntry.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'escalations',
-        model: 'EscalationEvent',
-        read: (id) =>
-          prisma.escalationEvent.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((e) => ({ layer: e.layer, timestamp: e.timestamp })),
-          ),
-        delTx: (tx, id) => tx.escalationEvent.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'sessions',
-        model: 'Session',
-        read: (id) =>
-          prisma.session.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((s) => ({ sessionId: s.id, expiresAt: s.expiresAt })),
-          ),
-        delTx: (tx, id) => tx.session.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'tilt',
-        model: 'TiltSession',
-        read: (id) =>
-          prisma.tiltSession.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((t) => ({
-              trigger: t.trigger,
-              severity: t.severity,
-              technique: t.technique,
-              resolved: t.resolved,
-              createdAt: t.createdAt,
-            })),
-          ),
-        delTx: (tx, id) => tx.tiltSession.deleteMany({ where: { userId: id } }),
-      },
-      {
-        key: 'conversations',
-        model: 'AiConversation',
-        read: (id) =>
-          prisma.aiConversation.findMany({ where: { userId: id } }).then((rows) =>
-            rows.map((c) => ({ topic: c.topic, createdAt: c.createdAt })),
-          ),
-        delTx: (tx, id) => tx.aiConversation.deleteMany({ where: { userId: id } }),
-      },
+      prismaSource<Prisma.MoodGetPayload<{}>>('moods', 'Mood', (m) => ({
+        rating: m.rating,
+        emoji: m.emoji,
+        note: m.note,
+        createdAt: m.createdAt,
+      })),
+      prismaSource<Prisma.PlaytimeLogGetPayload<{}>>('playtime', 'PlaytimeLog', (p) => ({
+        duration: p.duration,
+        game: p.game,
+        createdAt: p.createdAt,
+      })),
+      prismaSource<Prisma.JournalEntryGetPayload<{}>>('journal', 'JournalEntry', (j) => ({
+        content: j.content,
+        reflection: j.reflection,
+        createdAt: j.createdAt,
+      })),
+      prismaSource<Prisma.XpEntryGetPayload<{}>>('xp', 'XpEntry', (x) => ({
+        amount: x.amount,
+        reason: x.reason,
+        createdAt: x.createdAt,
+      })),
+      prismaSource<Prisma.EscalationEventGetPayload<{}>>('escalations', 'EscalationEvent', (e) => ({
+        layer: e.layer,
+        timestamp: e.timestamp,
+      })),
+      prismaSource<Prisma.SessionGetPayload<{}>>('sessions', 'Session', (s) => ({
+        sessionId: s.id,
+        expiresAt: s.expiresAt,
+      })),
+      prismaSource<Prisma.TiltSessionGetPayload<{}>>('tilt', 'TiltSession', (t) => ({
+        trigger: t.trigger,
+        severity: t.severity,
+        technique: t.technique,
+        resolved: t.resolved,
+        createdAt: t.createdAt,
+      })),
+      prismaSource<Prisma.AiConversationGetPayload<{}>>('conversations', 'AiConversation', (c) => ({
+        topic: c.topic,
+        createdAt: c.createdAt,
+      })),
       {
         // Delete-only. The Coaching Session row is internal bookkeeping (lastActivity, mined,
         // doNotMine) with no user-authored content — reaped on delete, never surfaced in export.
@@ -151,7 +139,7 @@ export class DataRightsService {
     const exportable = this.sources.filter((s) => s.key && s.read);
 
     const [user, entries] = await Promise.all([
-      prisma.user.findUnique({ where: { discordId } }),
+      this.userService.findByDiscordId(discordId),
       Promise.all(exportable.map(async (s) => [s.key!, await s.read!(discordId)] as const)),
     ]);
 

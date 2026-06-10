@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { prisma } from '@wabi/shared';
 import { MemoryStoreService } from './memory-store.service';
+import { UserService } from '../user/user.service';
 
 /**
  * Feeds a person's free-text inner state (journal / mood note / tilt trigger) into derived Memory —
@@ -16,14 +16,14 @@ import { MemoryStoreService } from './memory-store.service';
 export class InnerStateMemoryService {
   private readonly logger = new Logger(InnerStateMemoryService.name);
 
-  constructor(private readonly memoryStore: MemoryStoreService) {}
+  constructor(
+    private readonly memoryStore: MemoryStoreService,
+    private readonly userService: UserService,
+  ) {}
 
   async deriveIfConsented(userId: string, text: string): Promise<void> {
     try {
-      const user = await prisma.user.findUnique({
-        where: { discordId: userId },
-        select: { innerStateMemoryEnabled: true },
-      });
+      const user = await this.userService.findByDiscordId(userId, { innerStateMemoryEnabled: true });
 
       if (!user?.innerStateMemoryEnabled) return;
 

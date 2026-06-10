@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { prisma } from '@wabi/shared';
 import { ClassifierService } from '../crisis/classifier.service';
 import { CoachService } from './coach.service';
 import { buildCoachPrompt } from './coach-prompt';
@@ -16,6 +15,7 @@ import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.ser
 import { EscalationService } from '../crisis/escalation.service';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import { TiltService } from '../tilt/tilt.service';
+import { UserService } from '../user/user.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 
 @Injectable()
@@ -36,15 +36,14 @@ export class CoachingService {
     private readonly escalation: EscalationService,
     private readonly habitEngagement: HabitEngagementService,
     private readonly tilt: TiltService,
+    private readonly userService: UserService,
   ) {}
 
   async handle(message: Message): Promise<void> {
     const userId = message.author.id;
     const traceId = crypto.randomUUID();
 
-    const user = await prisma.user.findUnique({
-      where: { discordId: userId },
-    });
+    const user = await this.userService.findByDiscordId(userId);
 
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
 

@@ -53,6 +53,7 @@ describe('DM dispatch integration', () => {
     const { BurstCoalescer } = await import('../modules/burst-coalescer/burst-coalescer.service');
     const { CoachingService } = await import('../modules/coaching/coaching.service');
     const { EchoController } = await import('../modules/echo/echo.controller');
+    const { UserService } = await import('../modules/user/user.service');
     const shared = await import('@wabi/shared');
     prisma = shared.prisma;
 
@@ -101,6 +102,7 @@ describe('DM dispatch integration', () => {
       escalation,
       habitEngagement,
       tilt,
+      new UserService(),
     );
 
     const crisisScreening = { tripwire: jest.fn().mockReturnValue(false) } as any;

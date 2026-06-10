@@ -1,6 +1,7 @@
 import { DataRightsService } from '../data-rights.service';
 import { MemoryStoreService } from '../../memory/memory-store.service';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
+import { UserService } from '../../user/user.service';
 import { prisma } from '@wabi/shared';
 
 // Capturable transaction client so tests can assert which deletes fired inside the atomic tx.
@@ -18,7 +19,6 @@ const mockTx = {
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
-    user: { findUnique: jest.fn() },
     mood: { findMany: jest.fn(), deleteMany: jest.fn() },
     playtimeLog: { findMany: jest.fn(), deleteMany: jest.fn() },
     journalEntry: { findMany: jest.fn(), deleteMany: jest.fn() },
@@ -44,20 +44,28 @@ jest.mock('../../session-buffer/session-buffer.service', () => ({
   })),
 }));
 
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
 describe('DataRightsService', () => {
   let service: DataRightsService;
+  let userService: jest.Mocked<UserService>;
   let memoryStore: jest.Mocked<MemoryStoreService>;
   let sessionBuffer: jest.Mocked<SessionBufferService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    userService = new UserService() as any;
     memoryStore = new MemoryStoreService() as any;
     sessionBuffer = new SessionBufferService() as any;
-    service = new DataRightsService(memoryStore, sessionBuffer);
+    service = new DataRightsService(userService, memoryStore, sessionBuffer);
   });
 
   it('exports user data including tilt sessions and memory', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       email: null,
       locale: 'en-US',
@@ -85,7 +93,7 @@ describe('DataRightsService', () => {
   });
 
   it('does not surface internal Coaching Session bookkeeping in the export', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({ discordId: '123' });
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({ discordId: '123' });
     (prisma.mood.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.playtimeLog.findMany as jest.Mock).mockResolvedValue([]);
     (prisma.journalEntry.findMany as jest.Mock).mockResolvedValue([]);

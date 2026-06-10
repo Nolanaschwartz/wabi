@@ -12,6 +12,7 @@ import { MemoryStoreService } from '../../memory/memory-store.service';
 import { CrisisAftermathService } from '../../crisis-aftermath/crisis-aftermath.service';
 import { HabitEngagementService } from '../../habit-engagement/habit-engagement.service';
 import { TiltService } from '../../tilt/tilt.service';
+import { UserService } from '../../user/user.service';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
@@ -78,6 +79,12 @@ jest.mock('../../billing/access-resolver', () => ({
   })),
 }));
 
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
 jest.mock('../../memory/memory-store.service', () => ({
   MemoryStoreService: jest.fn().mockImplementation(() => ({
     deriveAndStore: jest.fn(),
@@ -113,6 +120,12 @@ jest.mock('../../tilt/tilt.service', () => ({
   })),
 }));
 
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
 describe('CoachingService', () => {
   let service: CoachingService;
   let classifier: jest.Mocked<ClassifierService>;
@@ -128,6 +141,7 @@ describe('CoachingService', () => {
   let escalation: { escalate: jest.Mock };
   let habitEngagement: jest.Mocked<HabitEngagementService>;
   let tilt: jest.Mocked<TiltService>;
+  let userService: jest.Mocked<UserService>;
 
   const mockMessage = {
     author: { id: '123', bot: false },
@@ -149,13 +163,14 @@ describe('CoachingService', () => {
     strategyRetrieval = new StrategyRetrievalService() as any;
     burstCoalescer = new BurstCoalescer() as any;
     langfuseTracer = new LangfuseTracer() as any;
-    accessResolver = new AccessResolver() as any;
+    accessResolver = new AccessResolver(new UserService()) as any;
     coachingSession = new CoachingSessionService() as any;
     memoryStore = new MemoryStoreService() as any;
     crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
     escalation = { escalate: jest.fn().mockResolvedValue(crisisPayload) };
     habitEngagement = (HabitEngagementService as jest.Mock)() as any;
     tilt = (TiltService as jest.Mock)() as any;
+    userService = new UserService() as any;
     service = new CoachingService(
       classifier,
       coach,
@@ -170,12 +185,13 @@ describe('CoachingService', () => {
       escalation as any,
       habitEngagement,
       tilt,
+      userService,
     );
   });
 
   it('shows setup link pointing at the real onboarding route for unconsented user', async () => {
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: null,
       timezone: 'UTC',
@@ -198,7 +214,7 @@ describe('CoachingService', () => {
 
   it('runs the crisis classifier for a lapsed user, THEN shows the subscribe link (safety is never paywalled — ADR-0011)', async () => {
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -227,7 +243,7 @@ describe('CoachingService', () => {
 
   it('escalates a lapsed user in crisis instead of paywalling them (ADR-0011/0021)', async () => {
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -254,7 +270,7 @@ describe('CoachingService', () => {
   });
 
   it('escalates on classifier crisis and quarantines session', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -287,7 +303,7 @@ describe('CoachingService', () => {
   });
 
   it('coaches on safe classification with active access', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -324,7 +340,7 @@ describe('CoachingService', () => {
     // mem0 ADD now runs hybrid vector+graph extraction (~20s+). deriveAndStore must NOT block the
     // user-visible reply — otherwise the bot appears to never respond. Simulate a persist that never
     // resolves; handle must still complete and reply.
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -353,7 +369,7 @@ describe('CoachingService', () => {
   });
 
   it('classifier and retrieval run concurrently (pipeline order)', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -380,7 +396,7 @@ describe('CoachingService', () => {
   });
 
   it('skips interim messages folded into a pending burst (coalesced)', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -398,7 +414,7 @@ describe('CoachingService', () => {
   });
 
   it('sends the hourly-ceiling reply and never coaches it (rate_limited)', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -422,7 +438,7 @@ describe('CoachingService', () => {
   });
 
   const activeUser = () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',
@@ -497,7 +513,7 @@ describe('CoachingService', () => {
   });
 
   it('coaches even when retrieval fails (graceful degradation)', async () => {
-    (prisma.user.findUnique as jest.Mock).mockResolvedValue({
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
       discordId: '123',
       consentAcceptedAt: new Date(),
       timezone: 'UTC',

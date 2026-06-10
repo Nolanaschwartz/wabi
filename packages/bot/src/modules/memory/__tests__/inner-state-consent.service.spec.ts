@@ -1,5 +1,6 @@
 import { InnerStateConsentService } from '../inner-state-consent.service';
 import { prisma } from '@wabi/shared';
+import { UserService } from '../../user/user.service';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
@@ -10,21 +11,29 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-const findUnique = prisma.user.findUnique as jest.Mock;
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
+const userServiceMock = { findByDiscordId: jest.fn() };
 const update = prisma.user.update as jest.Mock;
 
 describe('InnerStateConsentService', () => {
   let service: InnerStateConsentService;
+  let userService: jest.Mocked<UserService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     update.mockResolvedValue({});
-    service = new InnerStateConsentService();
+    userService = userServiceMock as any;
+    service = new InnerStateConsentService(userService);
   });
 
   describe('prepareFirstUsePrompt — ask once', () => {
     it('returns a prompt and marks the person asked when unconsented and never prompted', async () => {
-      findUnique.mockResolvedValue({
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
         innerStateMemoryEnabled: false,
         innerStateMemoryPromptedAt: null,
       });
@@ -45,7 +54,7 @@ describe('InnerStateConsentService', () => {
     });
 
     it('returns null and does not re-mark when already prompted (at most once)', async () => {
-      findUnique.mockResolvedValue({
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
         innerStateMemoryEnabled: false,
         innerStateMemoryPromptedAt: new Date('2026-06-01T00:00:00Z'),
       });
@@ -57,7 +66,7 @@ describe('InnerStateConsentService', () => {
     });
 
     it('returns null when the person has already consented', async () => {
-      findUnique.mockResolvedValue({
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
         innerStateMemoryEnabled: true,
         innerStateMemoryPromptedAt: null,
       });
@@ -69,7 +78,7 @@ describe('InnerStateConsentService', () => {
     });
 
     it('returns null when there is no User record (DM path never creates one)', async () => {
-      findUnique.mockResolvedValue(null);
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue(null);
 
       const prompt = await service.prepareFirstUsePrompt('123');
 
@@ -78,7 +87,7 @@ describe('InnerStateConsentService', () => {
     });
 
     it('first-use copy states the four required points', async () => {
-      findUnique.mockResolvedValue({
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
         innerStateMemoryEnabled: false,
         innerStateMemoryPromptedAt: null,
       });
@@ -120,7 +129,7 @@ describe('InnerStateConsentService', () => {
 
   describe('/memory toggle', () => {
     it('turns memory on when it was off', async () => {
-      findUnique.mockResolvedValue({ innerStateMemoryEnabled: false });
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({ innerStateMemoryEnabled: false });
       const next = await service.toggle('123');
       expect(next).toBe(true);
       expect(update).toHaveBeenCalledWith({
@@ -130,7 +139,7 @@ describe('InnerStateConsentService', () => {
     });
 
     it('turns memory off when it was on', async () => {
-      findUnique.mockResolvedValue({ innerStateMemoryEnabled: true });
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({ innerStateMemoryEnabled: true });
       const next = await service.toggle('123');
       expect(next).toBe(false);
       expect(update).toHaveBeenCalledWith({
@@ -140,11 +149,11 @@ describe('InnerStateConsentService', () => {
     });
 
     it('isEnabled reflects the stored flag', async () => {
-      findUnique.mockResolvedValue({ innerStateMemoryEnabled: true });
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({ innerStateMemoryEnabled: true });
       expect(await service.isEnabled('123')).toBe(true);
-      findUnique.mockResolvedValue({ innerStateMemoryEnabled: false });
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({ innerStateMemoryEnabled: false });
       expect(await service.isEnabled('123')).toBe(false);
-      findUnique.mockResolvedValue(null);
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue(null);
       expect(await service.isEnabled('123')).toBe(false);
     });
 

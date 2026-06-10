@@ -1,14 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { prisma, decideAccess, type AccessState } from '@wabi/shared';
+import { UserService } from '../user/user.service';
 
 // decideAccess (the pure Active Access decision) now lives in @wabi/shared so the bot's gate and the
 // web dashboard share ONE formula. This service is the bot's I/O wrapper around it.
 @Injectable()
 export class AccessResolver {
+  constructor(private readonly userService: UserService) {}
+
   async resolve(discordId: string): Promise<AccessState> {
-    const user = await prisma.user.findUnique({
-      where: { discordId },
-    });
+    const user = await this.userService.findByDiscordId(discordId);
 
     return decideAccess(user, new Date());
   }

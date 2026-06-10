@@ -10,6 +10,12 @@ jest.mock('../../streaks/streaks.service', () => ({
   StreaksService: jest.fn().mockImplementation(() => ({ advance: jest.fn() })),
 }));
 
+jest.mock('../../user/user.service', () => ({
+  UserService: jest.fn().mockImplementation(() => ({
+    findByDiscordId: jest.fn(),
+  })),
+}));
+
 describe('HabitEngagementService — the single Engagement writer (ADR-0027)', () => {
   let service: HabitEngagementService;
   let xp: jest.Mocked<XpService>;
@@ -18,7 +24,7 @@ describe('HabitEngagementService — the single Engagement writer (ADR-0027)', (
   beforeEach(() => {
     jest.clearAllMocks();
     xp = new XpService() as any;
-    streaks = new StreaksService() as any;
+    streaks = new StreaksService(xp) as any;
     service = new HabitEngagementService(xp, streaks);
   });
 

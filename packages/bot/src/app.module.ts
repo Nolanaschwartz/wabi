@@ -19,6 +19,7 @@ import { DataRightsModule } from './modules/data-rights/data-rights.module';
 import { StrategyAdminModule } from './modules/strategy-admin/strategy-admin.module';
 import { WelcomeModule } from './modules/welcome/welcome.module';
 import { HelpModule } from './modules/help/help.module';
+import { UserModule } from './modules/user/user.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { HelpModule } from './modules/help/help.module';
     StrategyAdminModule,
     WelcomeModule,
     HelpModule,
+    UserModule,
   ],
 })
 export class AppModule {}

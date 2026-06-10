@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Client } from 'discord.js';
-import { prisma } from '@wabi/shared';
 import { setupLinkMessage } from '../../lib/setup-link';
+import { UserService } from '../user/user.service';
 
 // One-time greeting that INVITES the first conversation. It must not enroll the user into
 // the recurring opt-in check-in cadence (ADR-0008) — the actual coaching happens when the
@@ -11,7 +11,10 @@ const WELCOME_OPENER =
 
 @Injectable()
 export class WelcomeService {
-  constructor(private readonly client: Client) {}
+  constructor(
+    private readonly client: Client,
+    private readonly userService: UserService,
+  ) {}
 
   /**
    * Decide which DM a freshly-joined member should receive and deliver it.
@@ -20,7 +23,7 @@ export class WelcomeService {
    * Closed-DM and other delivery failures are swallowed; this never throws.
    */
   async welcome(discordId: string): Promise<void> {
-    const user = await prisma.user.findUnique({ where: { discordId } });
+    const user = await this.userService.findByDiscordId(discordId);
 
     const content =
       user && user.consentAcceptedAt

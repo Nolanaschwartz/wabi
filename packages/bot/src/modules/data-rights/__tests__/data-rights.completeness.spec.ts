@@ -19,7 +19,11 @@ describe('Data Rights deletion completeness (ADR-0004/0011)', () => {
       .filter((name) => !EXCLUDED.includes(name));
 
     // coveredModels() reads only the static source list — the injected stores are never touched.
-    const service = new DataRightsService(undefined as any, undefined as any);
+    const service = new DataRightsService(
+      undefined as any,
+      undefined as any,
+      undefined as any,
+    );
     const covered = service.coveredModels();
 
     const missing = userScopedModels.filter((m) => !covered.includes(m as Prisma.ModelName));
