@@ -1,5 +1,6 @@
 import { lucia } from "@/lib/auth";
 import { isOperator } from "@/lib/admin";
+import { getDbUser } from "@/lib/db-user";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
@@ -38,8 +39,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 	}
 
 	if (path.startsWith('/dashboard')) {
-		const { prisma } = await import('@wabi/shared');
-		const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+		const dbUser = await getDbUser(user.id);
 		if (!dbUser?.consentAcceptedAt) {
 			return NextResponse.redirect(new URL('/consent', request.url));
 		}
