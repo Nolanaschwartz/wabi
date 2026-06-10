@@ -77,7 +77,7 @@ export class StrategyTrustGate {
     return ALLOWLISTED_SOURCES.some((domain) => sourceUrl.includes(domain));
   }
 
-  private async safetyFilter(draft: StrategyDraft): Promise<boolean> {
+  private async llmBooleanCheck(prompt: string, expectedValue: string): Promise<boolean> {
     try {
       const config = getProvider('classifier');
       const openai = createOpenAI({
@@ -87,44 +87,37 @@ export class StrategyTrustGate {
 
       const { text } = await generateText({
         model: openai(config.model),
-        prompt: `Evaluate if this strategy is safe. Return only "safe" or "unsafe":
-Title: ${draft.title}
-Technique: ${draft.technique}
-Source: ${draft.source}`,
+        prompt,
         maxOutputTokens: 10,
       });
 
-      return text.trim().toLowerCase() === 'safe';
+      return text.trim().toLowerCase() === expectedValue;
     } catch {
       return false;
     }
   }
 
+  private async safetyFilter(draft: StrategyDraft): Promise<boolean> {
+    return this.llmBooleanCheck(
+      `Evaluate if this strategy is safe. Return only "safe" or "unsafe":
+Title: ${draft.title}
+Technique: ${draft.technique}
+Source: ${draft.source}`,
+      'safe',
+    );
+  }
+
   private async faithfulnessCheck(draft: StrategyDraft): Promise<boolean> {
-    try {
-      const config = getProvider('classifier');
-      const openai = createOpenAI({
-        baseURL: config.baseUrl as string,
-        apiKey: config.apiKey,
-      });
-
-      const sourceTextSection = draft.sourceText
-        ? `\nSource Text: ${draft.sourceText}`
-        : '';
-
-      const { text } = await generateText({
-        model: openai(config.model),
-        prompt: `Does this technique actually appear in the cited source? Return only "faithful" or "unfaithful":
+    const sourceTextSection = draft.sourceText
+      ? `\nSource Text: ${draft.sourceText}`
+      : '';
+    return this.llmBooleanCheck(
+      `Does this technique actually appear in the cited source? Return only "faithful" or "unfaithful":
 Technique: ${draft.technique}
 Source: ${draft.source}
 Evidence: ${draft.evidence}${sourceTextSection}`,
-        maxOutputTokens: 10,
-      });
-
-      return text.trim().toLowerCase() === 'faithful';
-    } catch {
-      return false;
-    }
+      'faithful',
+    );
   }
 
   shouldQuarantine(negativeCount: number): boolean {
