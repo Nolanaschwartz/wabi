@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { safeFetch } from '../../lib/safe-fetch';
 export type MemoryEntry = {
   id: string;
   content: string;
@@ -8,6 +9,10 @@ interface Mem0CreateResponse {
   id?: string;
   events?: Array<{ id?: string; event?: string }>;
   memories?: Array<{ id?: string }>;
+}
+
+interface Mem0SearchResponse {
+  results?: Array<{ id?: string; memory?: string }>;
 }
 
 @Injectable()
@@ -45,25 +50,22 @@ export class MemoryStoreService {
     }
 
     try {
-      const res = await fetch(`${this.baseUrl}/memories`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [{ role: 'user', content: sessionText }],
-          user_id: `mem0_${userId}`,
-        }),
-      });
+      const json: Mem0CreateResponse | null = await safeFetch(
+        `${this.baseUrl}/memories`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: sessionText }],
+            user_id: `mem0_${userId}`,
+          }),
+        },
+        (status, body) => {
+          this.logOp('deriveAndStore', userId, 'http_error', { status, body });
+        },
+      );
 
-      if (!res.ok) {
-        const body = await res.text();
-        this.logOp('deriveAndStore', userId, 'http_error', {
-          status: res.status,
-          body: body.slice(0, 200),
-        });
-        return;
-      }
-
-      const json: Mem0CreateResponse = await res.json();
+      if (!json) return;
       const createdIds = this.extractCreatedIds(json);
       this.logOp('deriveAndStore', userId, 'success', {
         createdCount: createdIds.length,
@@ -87,24 +89,21 @@ export class MemoryStoreService {
     if (!this.enabled) return [];
 
     try {
-      const res = await fetch(`${this.baseUrl}/search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query,
-          user_id: `mem0_${userId}`,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        this.logOp('search', userId, 'http_error', {
-          status: res.status,
-          query,
-          body: body.slice(0, 200),
-        });
-        return [];
-      }
-      const json = await res.json();
+      const json = await safeFetch<Mem0SearchResponse>(
+        `${this.baseUrl}/search`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query,
+            user_id: `mem0_${userId}`,
+          }),
+        },
+        (status, body) => {
+          this.logOp('search', userId, 'http_error', { status, query, body });
+        },
+      );
+      if (!json) return [];
       const results = (json.results ?? []).map((r: any) => ({
         id: r.id,
         content: r.memory ?? '',
@@ -128,18 +127,14 @@ export class MemoryStoreService {
     if (!this.enabled) return [];
 
     try {
-      const res = await fetch(
+      const json = await safeFetch<Mem0SearchResponse>(
         `${this.baseUrl}/memories?user_id=${encodeURIComponent(`mem0_${userId}`)}`,
+        undefined,
+        (status, body) => {
+          this.logOp('getAll', userId, 'http_error', { status, body });
+        },
       );
-      if (!res.ok) {
-        const body = await res.text();
-        this.logOp('getAll', userId, 'http_error', {
-          status: res.status,
-          body: body.slice(0, 200),
-        });
-        return [];
-      }
-      const json = await res.json();
+      if (!json) return [];
       const results = (json.results ?? []).map((r: any) => ({
         id: r.id,
         content: r.memory ?? '',
@@ -161,18 +156,14 @@ export class MemoryStoreService {
     if (!this.enabled) return;
 
     try {
-      const res = await fetch(
+      const json = await safeFetch(
         `${this.baseUrl}/memories?user_id=${encodeURIComponent(`mem0_${userId}`)}`,
         { method: 'DELETE' },
+        (status, body) => {
+          this.logOp('deleteAll', userId, 'http_error', { status, body });
+        },
       );
-      if (!res.ok) {
-        const body = await res.text();
-        this.logOp('deleteAll', userId, 'http_error', {
-          status: res.status,
-          body: body.slice(0, 200),
-        });
-        return;
-      }
+      if (!json) return;
 
       this.logOp('deleteAll', userId, 'success', {
         deleted: true,

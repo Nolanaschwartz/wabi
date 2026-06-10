@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { QdrantClient } from '@qdrant/qdrant-js';
 import { getProvider } from '@wabi/shared';
+import { safeFetch } from '../../lib/safe-fetch';
 
 const COLLECTION_NAME = 'wabi_strategies';
 // The personal/strategy embedding dimensionality, in ONE place (also imported by the integration
@@ -113,7 +114,7 @@ export class StrategyRetrievalService {
     // Resolve the embedding provider lazily on every call — never cache env-derived config in a
     // field (the bot starts before inference env vars are populated; see CLAUDE.md).
     const config = getProvider('embedding');
-    const response = await fetch(
+    const data = await safeFetch<{ data?: { embedding?: number[] }[] }>(
       `${config.baseUrl}/api/embeddings`,
       {
         method: 'POST',
@@ -123,13 +124,10 @@ export class StrategyRetrievalService {
           input: text,
         }),
       },
+      (status) => {
+        throw new Error(`Embedding API error: ${status}`);
+      },
     );
-
-    if (!response.ok) {
-      throw new Error(`Embedding API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.data?.[0]?.embedding ?? [];
+    return data?.data?.[0]?.embedding ?? [];
   }
 }

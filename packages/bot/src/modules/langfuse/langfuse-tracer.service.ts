@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { safeFetch } from '../../lib/safe-fetch';
 
 export type TraceStep = 'classify' | 'coach' | 'retrieval';
 
@@ -94,22 +95,22 @@ export class LangfuseTracer {
         body,
       };
 
-      fetch(`${host}/api/public/ingestion`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Basic ${auth}`,
+      safeFetch(
+        `${host}/api/public/ingestion`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Basic ${auth}`,
+          },
+          body: JSON.stringify({ batch: [event] }),
         },
-        body: JSON.stringify({ batch: [event] }),
-      })
-        .then(async (res) => {
-          if (!res.ok) {
-            this.logger.warn(
-              `Langfuse ingest ${type} -> HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`,
-            );
-          }
-        })
-        .catch((err) => this.logger.warn(`Langfuse ingest ${type} failed: ${err}`));
+        (status, body) => {
+          this.logger.warn(
+            `Langfuse ingest ${type} -> HTTP ${status}: ${body}`,
+          );
+        },
+      ).catch((err) => this.logger.warn(`Langfuse ingest ${type} failed: ${err}`));
     } catch (err) {
       this.logger.warn(`Langfuse ingest ${type} threw: ${err}`);
     }
