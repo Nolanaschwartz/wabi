@@ -1,21 +1,17 @@
-import Stripe from 'stripe';
-import { validateRequest } from '@/lib/session';
+import { getDbUser } from '@/lib/db-user';
+import { requireAuthenticated } from '@/lib/auth-guard';
+import { getStripeClient } from '@/lib/stripe';
 
 export async function POST(): Promise<Response> {
-  const { user } = await validateRequest();
-  if (!user) {
-    return new Response('Unauthorized', { status: 401 });
-  }
+  const user = await requireAuthenticated();
+  if (user instanceof Response) return user;
 
-  const { prisma } = await import('@wabi/shared');
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+  const dbUser = await getDbUser(user.id);
   if (!dbUser?.stripeCustomerId) {
     return new Response('No subscription on file', { status: 400 });
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? '', {
-    apiVersion: '2026-05-27.dahlia',
-  });
+  const stripe = getStripeClient();
 
   const portal = await stripe.billingPortal.sessions.create({
     customer: dbUser.stripeCustomerId,

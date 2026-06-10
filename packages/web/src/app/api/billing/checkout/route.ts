@@ -1,15 +1,13 @@
-import Stripe from 'stripe';
 import { NextRequest } from 'next/server';
-import { validateRequest } from '@/lib/session';
+import { requireAuthenticated } from '@/lib/auth-guard';
+import { getDbUser } from '@/lib/db-user';
+import { getStripeClient } from '@/lib/stripe';
 
 export async function POST(req: NextRequest): Promise<Response> {
-  const { user } = await validateRequest();
-  if (!user) {
-    return new Response('Unauthorized', { status: 401 });
-  }
+  const user = await requireAuthenticated();
+  if (user instanceof Response) return user;
 
-  const { prisma } = await import('@wabi/shared');
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+  const dbUser = await getDbUser(user.id);
   if (!dbUser) {
     return new Response('User not found', { status: 404 });
   }
@@ -19,9 +17,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     return new Response('Missing STRIPE_PRICE_ID', { status: 500 });
   }
 
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? '', {
-    apiVersion: '2026-05-27.dahlia',
-  });
+  const stripe = getStripeClient();
 
   let customerId = dbUser.stripeCustomerId;
 
@@ -31,6 +27,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     });
     customerId = customer.id;
 
+    const { prisma } = await import('@wabi/shared');
     await prisma.user.update({
       where: { id: user.id },
       data: { stripeCustomerId: customerId },

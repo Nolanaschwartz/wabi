@@ -34,7 +34,7 @@ describe('admin strategies proxy', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it('returns 403 for an unauthenticated request', async () => {
+  it('returns 401 for an unauthenticated request', async () => {
     validateRequest.mockResolvedValue({ user: null, session: null });
     const fetchSpy = jest.fn();
     global.fetch = fetchSpy as any;
@@ -43,7 +43,7 @@ describe('admin strategies proxy', () => {
       params: Promise.resolve({ path: ['1', 'approve'] }),
     });
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
