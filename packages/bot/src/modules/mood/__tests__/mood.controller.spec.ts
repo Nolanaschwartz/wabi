@@ -90,4 +90,12 @@ describe('MoodController — first-use consent prompt', () => {
     expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
+
+  // /mood log registers for the hub Guild too (command-contexts.ts); a public reply would broadcast
+  // the person's mood to the channel. Inner-state never crosses to a social surface (ADR-0002/0017).
+  it('/mood log defers ephemerally so a guild-channel mood never leaks', async () => {
+    const interaction = mockInteraction();
+    await controller.log([interaction], { rating: 4 });
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
 });

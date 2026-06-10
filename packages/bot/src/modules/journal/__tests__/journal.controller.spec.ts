@@ -33,6 +33,7 @@ describe('JournalController — first-use consent prompt', () => {
   beforeEach(() => {
     journalService = {
       write: jest.fn().mockResolvedValue({ crisis: false, value: { reflection: 'Nice.', xpAwarded: 10 } }),
+      prompt: jest.fn().mockResolvedValue('Reflect on your day.'),
     } as any;
     consent = { prepareFirstUsePrompt: jest.fn() } as any;
     controller = new JournalController(journalService, consent);
@@ -82,5 +83,20 @@ describe('JournalController — first-use consent prompt', () => {
 
     expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
     expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  // Commands register for the hub Guild as well as the DM (command-contexts.ts), so a public reply
+  // would broadcast a journal entry to the whole channel. Inner-state never crosses to a social
+  // surface (ADR-0002/0017) → both subcommands must defer ephemerally.
+  it('/journal write defers ephemerally so a guild-channel entry never leaks', async () => {
+    const interaction = mockInteraction();
+    await controller.write([interaction], { content: 'I had a good day today' });
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+
+  it('/journal prompt defers ephemerally', async () => {
+    const interaction = mockInteraction();
+    await controller.prompt([interaction]);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
   });
 });

@@ -52,7 +52,7 @@ export class MoodController {
     @Context() [interaction]: SlashCommandContext,
     @Options() { rating, note }: MoodLogDto,
   ): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const clamped = Math.max(1, Math.min(5, rating ?? 3));
     const emoji = MoodService.ratingToEmoji(clamped);

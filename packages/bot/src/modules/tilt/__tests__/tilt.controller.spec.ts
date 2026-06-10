@@ -34,6 +34,8 @@ describe('TiltController — first-use consent prompt', () => {
   beforeEach(() => {
     tiltService = {
       start: jest.fn().mockResolvedValue({ crisis: false, value: 'Take a breath.' }),
+      resolve: jest.fn().mockResolvedValue(undefined),
+      stats: jest.fn().mockResolvedValue({ total: 0, avgSeverity: 0, commonTriggers: [] }),
     } as any;
     consent = { prepareFirstUsePrompt: jest.fn().mockResolvedValue(PROMPT) } as any;
     controller = new TiltController(tiltService, consent);
@@ -78,5 +80,26 @@ describe('TiltController — first-use consent prompt', () => {
 
     expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
     expect(interaction.followUp).not.toHaveBeenCalled();
+  });
+
+  // Tilt commands register for the hub Guild too (command-contexts.ts); a public reply would
+  // broadcast the trigger (start) or common triggers (stats) verbatim to the channel. Inner-state
+  // never crosses to a social surface (ADR-0002/0017) → every subcommand defers ephemerally.
+  it('/tilt start defers ephemerally so a guild-channel trigger never leaks', async () => {
+    const interaction = mockInteraction();
+    await controller.start([interaction], { severity: 5 });
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+
+  it('/tilt resolve defers ephemerally', async () => {
+    const interaction = mockInteraction();
+    await controller.resolve([interaction]);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  });
+
+  it('/tilt stats defers ephemerally so common triggers never leak', async () => {
+    const interaction = mockInteraction();
+    await controller.stats([interaction]);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
   });
 });

@@ -50,7 +50,7 @@ export class TiltController {
     @Context() [interaction]: SlashCommandContext,
     @Options() { trigger, severity }: TiltStartDto,
   ): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await this.handleStart(
       interaction,
       trigger,
@@ -60,13 +60,13 @@ export class TiltController {
 
   @Subcommand({ name: 'resolve', description: 'Resolve your current tilt session' })
   async resolve(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await this.handleResolve(interaction);
   }
 
   @Subcommand({ name: 'stats', description: 'View your tilt stats' })
   async stats(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await this.handleStats(interaction);
   }
 

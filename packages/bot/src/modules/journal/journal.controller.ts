@@ -37,7 +37,7 @@ export class JournalController {
 
   @Subcommand({ name: 'prompt', description: 'Get a reflective journaling prompt' })
   async prompt(@Context() [interaction]: SlashCommandContext): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await this.handlePrompt(interaction);
   }
 
@@ -46,7 +46,7 @@ export class JournalController {
     @Context() [interaction]: SlashCommandContext,
     @Options() { content }: JournalWriteDto,
   ): Promise<void> {
-    await interaction.deferReply();
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await this.handleWrite(interaction, content);
   }
 
