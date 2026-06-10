@@ -19,6 +19,7 @@ jest.mock('../../crisis/crisis-screening.service', () => ({
 describe('MoodService', () => {
   let service: MoodService;
   let screening: { guard: jest.Mock };
+  let innerStateMemory: { deriveIfConsented: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -30,7 +31,8 @@ describe('MoodService', () => {
         value: await persist(),
       })),
     };
-    service = new MoodService(screening as any);
+    innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) };
+    service = new MoodService(screening as any, innerStateMemory as any);
   });
 
   it('logs a mood record', async () => {
@@ -58,7 +60,7 @@ describe('MoodService', () => {
     });
   });
 
-  it('returns the crisis result and does not persist when the note trips screening', async () => {
+  it('returns the crisis result and neither persists nor derives when the note trips screening', async () => {
     const payload = { embeds: [{ title: '🚨 You matter' }] };
     screening.guard.mockResolvedValue({ crisis: true, response: payload });
 
@@ -70,6 +72,26 @@ describe('MoodService', () => {
 
     expect(result).toEqual({ crisis: true, response: payload });
     expect(prisma.mood.create).not.toHaveBeenCalled();
+    // Crisis text in a mood note never reaches derived Memory (ADR-0029).
+    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
+  });
+
+  it('derives the note (only) through the screened path for a safe note (ADR-0029)', async () => {
+    (prisma.mood.create as jest.Mock).mockResolvedValue({});
+
+    await service.log('123', { rating: 3, emoji: '😐', note: 'feeling okay' });
+
+    // Only the narrative note is handed over, prefixed — never the numeric rating.
+    expect(innerStateMemory.deriveIfConsented).toHaveBeenCalledWith('123', 'Mood note: feeling okay');
+  });
+
+  it('does NOT derive a structured-only mood — a rating with no note stays in Postgres (ADR-0029)', async () => {
+    (prisma.mood.create as jest.Mock).mockResolvedValue({});
+
+    await service.log('123', { rating: 4, emoji: '🙂' });
+
+    expect(prisma.mood.create).toHaveBeenCalled();
+    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
   });
 
   it('returns rolling average trend', async () => {

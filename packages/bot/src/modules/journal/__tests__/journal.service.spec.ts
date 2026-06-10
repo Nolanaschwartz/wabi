@@ -34,6 +34,7 @@ describe('JournalService', () => {
   let screening: { guard: jest.Mock };
   let coach: jest.Mocked<CoachService>;
   let habitEngagement: jest.Mocked<HabitEngagementService>;
+  let innerStateMemory: { deriveIfConsented: jest.Mock };
   const crisisPayload = { embeds: [{ title: '🚨 You matter' }] };
 
   beforeEach(() => {
@@ -47,7 +48,13 @@ describe('JournalService', () => {
     };
     coach = new CoachService() as any;
     habitEngagement = new HabitEngagementService(undefined as any, undefined as any) as any;
-    service = new JournalService(screening as any, coach, habitEngagement);
+    innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) };
+    service = new JournalService(
+      screening as any,
+      coach,
+      habitEngagement,
+      innerStateMemory as any,
+    );
   });
 
   it('returns a prompt', async () => {
@@ -95,7 +102,21 @@ describe('JournalService', () => {
     }
   });
 
-  it('on a crisis verdict returns the real escalation payload and does not save', async () => {
+  it('derives Memory through the screened path for a safe entry (ADR-0029)', async () => {
+    (coach.generate as jest.Mock).mockResolvedValue('Thanks for sharing that.');
+    (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
+
+    await service.write('123', 'I had a good day today');
+
+    // The content is handed to the consent-gated inner-state module prefixed with its source word,
+    // and carries no metric — the module decides whether it actually becomes Memory.
+    expect(innerStateMemory.deriveIfConsented).toHaveBeenCalledWith(
+      '123',
+      'Journal: I had a good day today',
+    );
+  });
+
+  it('on a crisis verdict returns the real escalation payload and neither saves nor derives', async () => {
     screening.guard.mockResolvedValue({ crisis: true, response: crisisPayload });
 
     const result = await service.write('123', 'I want to end it all');
@@ -106,6 +127,9 @@ describe('JournalService', () => {
     }
     expect(prisma.journalEntry.create).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
+    // Crisis text physically cannot reach derived Memory — derivation rides inside guard()'s
+    // success closure, which never runs on a crisis verdict (ADR-0029).
+    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
   });
 
   it('falls back to default reflection on coach error', async () => {

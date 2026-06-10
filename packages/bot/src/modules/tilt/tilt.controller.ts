@@ -10,6 +10,7 @@ import {
 } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { TiltService } from './tilt.service';
+import { InnerStateConsentService } from '../memory/inner-state-consent.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const TiltCommandGroup = createCommandGroupDecorator({
@@ -39,7 +40,10 @@ export class TiltStartDto {
 @Injectable()
 @TiltCommandGroup()
 export class TiltController {
-  constructor(private readonly tiltService: TiltService) {}
+  constructor(
+    private readonly tiltService: TiltService,
+    private readonly consent: InnerStateConsentService,
+  ) {}
 
   @Subcommand({ name: 'start', description: 'Start a tilt session' })
   async start(
@@ -49,7 +53,7 @@ export class TiltController {
     await interaction.deferReply();
     await this.handleStart(
       interaction,
-      trigger ?? 'unknown',
+      trigger,
       Math.max(1, Math.min(10, severity ?? 5)),
     );
   }
@@ -68,9 +72,12 @@ export class TiltController {
 
   private async handleStart(
     interaction: CommandInteraction,
-    trigger: string,
+    rawTrigger: string | undefined,
     severity: number,
   ): Promise<void> {
+    const hasTrigger = !!rawTrigger?.trim();
+    const trigger = hasTrigger ? rawTrigger! : 'unknown';
+
     const result = await this.tiltService.start(interaction.user.id, {
       trigger,
       severity,
@@ -82,8 +89,15 @@ export class TiltController {
       return;
     }
 
+    const base = `Tilt session started. Trigger: ${trigger} (Severity: ${severity}/10)\n\nReset technique: ${result.value}`;
+    // Only a start with a real free-text trigger is "using a free-text inner-state field"; a
+    // severity-only start offers no prompt (ADR-0029). The consent module gates display to once.
+    const prompt = hasTrigger
+      ? await this.consent.prepareFirstUsePrompt(interaction.user.id)
+      : null;
     await interaction.editReply({
-      content: `Tilt session started. Trigger: ${trigger} (Severity: ${severity}/10)\n\nReset technique: ${result.value}`,
+      content: prompt ? `${base}\n\n${prompt.content}` : base,
+      components: prompt ? prompt.components : [],
     });
   }
 

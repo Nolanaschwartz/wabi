@@ -4,6 +4,7 @@ import {
   CrisisScreeningService,
   ScreenedRecord,
 } from '../crisis/crisis-screening.service';
+import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 
 const MOOD_EMOJIS: Record<number, string> = {
   1: '😞',
@@ -22,7 +23,10 @@ export interface MoodLog {
 
 @Injectable()
 export class MoodService {
-  constructor(private readonly screening: CrisisScreeningService) {}
+  constructor(
+    private readonly screening: CrisisScreeningService,
+    private readonly innerStateMemory: InnerStateMemoryService,
+  ) {}
 
   // The mood `note` is free text a person can express distress into, so it crosses the shared
   // screened-record path before the record is written (ADR-0028). A crisis note escalates and is not
@@ -38,6 +42,12 @@ export class MoodService {
           context: mood.context ?? null,
         },
       });
+
+      // Only the narrative note feeds derived Memory, consent-gated and off by default (ADR-0029).
+      // The numeric rating stays in Postgres. A metrics-only mood (no note) derives nothing.
+      if (mood.note?.trim()) {
+        await this.innerStateMemory.deriveIfConsented(discordId, `Mood note: ${mood.note}`);
+      }
     });
   }
 

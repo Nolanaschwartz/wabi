@@ -6,6 +6,7 @@ import {
 } from '../crisis/crisis-screening.service';
 import { CoachService } from '../coaching/coach.service';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
+import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -31,6 +32,7 @@ export class JournalService {
     private readonly screening: CrisisScreeningService,
     private readonly coach: CoachService,
     private readonly habitEngagement: HabitEngagementService,
+    private readonly innerStateMemory: InnerStateMemoryService,
   ) {}
 
   async prompt(): Promise<string> {
@@ -56,6 +58,11 @@ export class JournalService {
       // Log the Engagement (XP + streak) through the single writer (ADR-0027). XP is awarded once per
       // engaged day, so a second entry the same day still saves but does not re-award.
       const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
+
+      // Feed the screened free text into derived Memory, consent-gated and off by default (ADR-0029).
+      // This runs inside guard()'s success closure, so crisis text never reaches it. No metric is
+      // included — only the narrative, prefixed with its source word for extractor context.
+      await this.innerStateMemory.deriveIfConsented(discordId, `Journal: ${content}`);
 
       return { reflection: reflection || '', xpAwarded };
     });

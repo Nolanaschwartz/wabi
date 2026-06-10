@@ -12,6 +12,7 @@ import {
 } from 'necord';
 import { MessageFlags } from 'discord.js';
 import { MoodService } from './mood.service';
+import { InnerStateConsentService } from '../memory/inner-state-consent.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const MoodCommandGroup = createCommandGroupDecorator({
@@ -41,7 +42,10 @@ export class MoodLogDto {
 @Injectable()
 @MoodCommandGroup()
 export class MoodController {
-  constructor(private readonly moodService: MoodService) {}
+  constructor(
+    private readonly moodService: MoodService,
+    private readonly consent: InnerStateConsentService,
+  ) {}
 
   @Subcommand({ name: 'log', description: 'Log your mood with a rating' })
   async log(
@@ -72,8 +76,15 @@ export class MoodController {
       ? "I'm sorry you're feeling down. Want to talk about it?"
       : "Thanks for checking in.";
 
+    const base = `${emoji} Mood logged.${trendText}\n${followUp}`;
+    // Only a mood that carries a free-text note is "using a free-text inner-state field" — a
+    // rating-only log offers no prompt (ADR-0029). The consent module still gates display to once.
+    const prompt = note?.trim()
+      ? await this.consent.prepareFirstUsePrompt(interaction.user.id)
+      : null;
     await interaction.editReply({
-      content: `${emoji} Mood logged.${trendText}\n${followUp}`,
+      content: prompt ? `${base}\n\n${prompt.content}` : base,
+      components: prompt ? prompt.components : [],
     });
   }
 }

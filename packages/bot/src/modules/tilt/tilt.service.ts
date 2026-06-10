@@ -6,6 +6,7 @@ import {
   CrisisScreeningService,
   ScreenedRecord,
 } from '../crisis/crisis-screening.service';
+import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 
 const TILT_DURATION_MINUTES = 30;
 const OFFER_TTL_MS = 5 * 60 * 1000;
@@ -59,6 +60,7 @@ export class TiltService {
     private readonly strategyRetrieval: StrategyRetrievalService,
     private readonly scheduler: SchedulerService,
     private readonly screening: CrisisScreeningService,
+    private readonly innerStateMemory: InnerStateMemoryService,
   ) {}
 
   async init(): Promise<void> {
@@ -180,14 +182,26 @@ export class TiltService {
   // The `/tilt start` command path: the user-supplied `trigger` is free text, so it crosses the
   // shared screened-record path before a session is created (ADR-0028). The offer-accept path
   // (acceptPendingOffer → acceptOffer) is NOT screened — its trigger is a detected keyword, not
-  // free-form user prose.
+  // free-form user prose — so it never derives Memory (screened ⟺ mineable, ADR-0029).
   async start(
     discordId: string,
     tilt: TiltSession,
   ): Promise<ScreenedRecord<string>> {
-    return this.screening.guard(discordId, tilt.trigger, () =>
-      this.acceptOffer(discordId, tilt),
-    );
+    return this.screening.guard(discordId, tilt.trigger, async () => {
+      const technique = await this.acceptOffer(discordId, tilt);
+
+      // Only the narrative trigger feeds derived Memory, consent-gated and off by default
+      // (ADR-0029). The numeric severity stays in Postgres. A structured-only start (no trigger
+      // text) derives nothing.
+      if (tilt.trigger?.trim()) {
+        await this.innerStateMemory.deriveIfConsented(
+          discordId,
+          `Tilt trigger: ${tilt.trigger}`,
+        );
+      }
+
+      return technique;
+    });
   }
 
   async resolve(discordId: string): Promise<void> {

@@ -4,9 +4,10 @@ import { TiltController } from './tilt.controller';
 import { StrategyRetrievalModule } from '../strategy-retrieval/strategy-retrieval.module';
 import { SchedulerModule } from '../scheduler/scheduler.module';
 import { CrisisModule } from '../crisis/crisis.module';
+import { MemoryModule } from '../memory/memory.module';
 
 @Module({
-  imports: [StrategyRetrievalModule, SchedulerModule, CrisisModule],
+  imports: [StrategyRetrievalModule, SchedulerModule, CrisisModule, MemoryModule],
   providers: [TiltService, TiltController],
   exports: [TiltService],
 })

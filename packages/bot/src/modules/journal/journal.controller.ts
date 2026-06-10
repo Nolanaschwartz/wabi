@@ -9,6 +9,7 @@ import {
 } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { JournalService } from './journal.service';
+import { InnerStateConsentService } from '../memory/inner-state-consent.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const JournalCommandGroup = createCommandGroupDecorator({
@@ -29,7 +30,10 @@ export class JournalWriteDto {
 @Injectable()
 @JournalCommandGroup()
 export class JournalController {
-  constructor(private readonly journalService: JournalService) {}
+  constructor(
+    private readonly journalService: JournalService,
+    private readonly consent: InnerStateConsentService,
+  ) {}
 
   @Subcommand({ name: 'prompt', description: 'Get a reflective journaling prompt' })
   async prompt(@Context() [interaction]: SlashCommandContext): Promise<void> {
@@ -69,8 +73,13 @@ export class JournalController {
       return;
     }
 
+    const base = `Entry saved. ${result.value.reflection} (+${result.value.xpAwarded} XP)`;
+    // A journal entry is always free-text inner state, so it's a first-use prompt candidate. The
+    // consent module decides whether to actually show it (at most once across all fields, ADR-0029).
+    const prompt = await this.consent.prepareFirstUsePrompt(interaction.user.id);
     await interaction.editReply({
-      content: `Entry saved. ${result.value.reflection} (+${result.value.xpAwarded} XP)`,
+      content: prompt ? `${base}\n\n${prompt.content}` : base,
+      components: prompt ? prompt.components : [],
     });
   }
 }
