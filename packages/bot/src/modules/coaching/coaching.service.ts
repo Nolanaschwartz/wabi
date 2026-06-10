@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { ClassifierService } from './classifier.service';
+import { ClassifierService } from '../crisis/classifier.service';
 import { CoachService } from './coach.service';
 import { buildCoachPrompt } from './coach-prompt';
 import { splitMessage } from './message-splitter';
@@ -14,7 +14,7 @@ import { AccessResolver } from '../billing/access-resolver';
 import { MemoryStoreService } from '../memory/memory-store.service';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { EscalationService } from '../crisis/escalation.service';
-import { StreaksService } from '../streaks/streaks.service';
+import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import { TiltService } from '../tilt/tilt.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 
@@ -34,7 +34,7 @@ export class CoachingService {
     private readonly memoryStore: MemoryStoreService,
     private readonly crisisAftermath: CrisisAftermathService,
     private readonly escalation: EscalationService,
-    private readonly streaks: StreaksService,
+    private readonly habitEngagement: HabitEngagementService,
     private readonly tilt: TiltService,
   ) {}
 
@@ -102,9 +102,11 @@ export class CoachingService {
         this.burstCoalescer.cancel(userId);
         this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
         // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
-        // + quarantine + ONE follow-up. No more hand-assembling the sequence here and again on the
-        // tripwire path. (ADR-0006/0010.)
-        await this.escalation.escalate(message, 'classifier');
+        // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
+        // DM channel. No more hand-assembling the sequence here and again on the tripwire path.
+        // (ADR-0006/0010/0028.)
+        const response = await this.escalation.escalate(userId, 'classifier');
+        await message.reply(response);
         return;
       }
 
@@ -159,7 +161,7 @@ export class CoachingService {
       await this.sessionBuffer.append(userId, 'user', message.content);
       await this.sessionBuffer.append(userId, 'assistant', reply);
 
-      const streakResult = await this.streaks.checkAndAward(userId, user.timezone ?? 'UTC').catch(() => null);
+      const streakResult = await this.habitEngagement.record(userId, 'coaching', user.timezone ?? 'UTC').catch(() => null);
 
       this.langfuseTracer.trace(traceId, 'coach', prompt, reply, { latencyMs: coachLatency });
 

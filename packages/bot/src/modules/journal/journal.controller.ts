@@ -9,6 +9,7 @@ import {
 } from 'necord';
 import { CommandInteraction } from 'discord.js';
 import { JournalService } from './journal.service';
+import { InnerStateConsentService } from '../memory/inner-state-consent.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const JournalCommandGroup = createCommandGroupDecorator({
@@ -29,7 +30,10 @@ export class JournalWriteDto {
 @Injectable()
 @JournalCommandGroup()
 export class JournalController {
-  constructor(private readonly journalService: JournalService) {}
+  constructor(
+    private readonly journalService: JournalService,
+    private readonly consent: InnerStateConsentService,
+  ) {}
 
   @Subcommand({ name: 'prompt', description: 'Get a reflective journaling prompt' })
   async prompt(@Context() [interaction]: SlashCommandContext): Promise<void> {
@@ -64,14 +68,18 @@ export class JournalController {
     const result = await this.journalService.write(interaction.user.id, content);
 
     if (result.crisis) {
-      await interaction.editReply({
-        content: "I'm hearing that things are really tough right now. If you're in crisis, please reach out to someone who can help. You matter.",
-      });
+      // Real locale Crisis Resources surfaced by screening (ADR-0028) — not a hand-rolled platitude.
+      await interaction.editReply(result.response);
       return;
     }
 
+    const base = `Entry saved. ${result.value.reflection} (+${result.value.xpAwarded} XP)`;
+    // A journal entry is always free-text inner state, so it's a first-use prompt candidate. The
+    // consent module decides whether to actually show it (at most once across all fields, ADR-0029).
+    const prompt = await this.consent.prepareFirstUsePrompt(interaction.user.id);
     await interaction.editReply({
-      content: `Entry saved. ${result.reflection} (+${result.xpAwarded} XP)`,
+      content: prompt ? `${base}\n\n${prompt.content}` : base,
+      components: prompt ? prompt.components : [],
     });
   }
 }

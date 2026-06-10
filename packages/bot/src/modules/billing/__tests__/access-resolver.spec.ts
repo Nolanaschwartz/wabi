@@ -1,7 +1,9 @@
-import { AccessResolver, decideAccess } from '../access-resolver';
-import { prisma } from '@wabi/shared';
+import { AccessResolver } from '../access-resolver';
+import { prisma, decideAccess, trialGrant } from '@wabi/shared';
 
+// Keep the real shared access logic (decideAccess) while mocking only prisma's I/O.
 jest.mock('@wabi/shared', () => ({
+  ...jest.requireActual('@wabi/shared'),
   prisma: {
     user: {
       findUnique: jest.fn(),
@@ -125,10 +127,13 @@ describe('decideAccess (pure)', () => {
     ).toBe(true);
   });
 
-  it('grants access for trialing stripe status', () => {
+  it('denies access for a trialing status once the trial date has passed (no auto-expiry job exists)', () => {
+    // A web Trial captures no card and has no Stripe subscription, so nothing ever flips its status
+    // off 'trialing'. Access MUST therefore require trialEndsAt > now — otherwise a lapsed trial keeps
+    // free coaching forever (the defect this corrects, ADR-0011).
     expect(
       decideAccess({ trialEndsAt: past, subscriptionStatus: 'trialing' }, now).hasActiveAccess,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('denies access for past_due', () => {
@@ -141,5 +146,27 @@ describe('decideAccess (pure)', () => {
     expect(
       decideAccess({ trialEndsAt: past, subscriptionStatus: 'canceled' }, now).hasActiveAccess,
     ).toBe(false);
+  });
+});
+
+describe('trialGrant (pure)', () => {
+  it('grants a 7-day trialing window from now by default', () => {
+    const now = new Date('2026-06-06T00:00:00Z');
+    const grant = trialGrant(now);
+
+    expect(grant.subscriptionStatus).toBe('trialing');
+    expect(grant.trialEndsAt.getTime()).toBe(now.getTime() + 7 * 86400000);
+  });
+
+  it('honours TRIAL_DAYS when set', () => {
+    const prev = process.env.TRIAL_DAYS;
+    process.env.TRIAL_DAYS = '14';
+    try {
+      const now = new Date('2026-06-06T00:00:00Z');
+      expect(trialGrant(now).trialEndsAt.getTime()).toBe(now.getTime() + 14 * 86400000);
+    } finally {
+      if (prev === undefined) delete process.env.TRIAL_DAYS;
+      else process.env.TRIAL_DAYS = prev;
+    }
   });
 });

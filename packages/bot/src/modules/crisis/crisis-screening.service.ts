@@ -1,7 +1,27 @@
 import { Injectable } from '@nestjs/common';
+import { ClassifierService } from './classifier.service';
+import { EscalationService, CrisisResponse } from './escalation.service';
+
+/** The outcome of screening one piece of free-text input. */
+export type ScreeningVerdict =
+  | { kind: 'crisis'; response: CrisisResponse }
+  | { kind: 'safe' };
+
+/**
+ * The outcome of a screened persist: either a crisis was caught (the record was NOT written and the
+ * caller renders `response`), or the free text cleared and the persist ran, yielding `value`.
+ */
+export type ScreenedRecord<T> =
+  | { crisis: true; response: CrisisResponse }
+  | { crisis: false; value: T };
 
 @Injectable()
 export class CrisisScreeningService {
+  constructor(
+    private readonly classifier: ClassifierService,
+    private readonly escalation: EscalationService,
+  ) {}
+
   private readonly explicitPatterns: RegExp[] = [
     /\bI don'?t want to live\b/i,
     /\bI don'?t want to be alive\b/i,
@@ -38,5 +58,55 @@ export class CrisisScreeningService {
       }
     }
     return false;
+  }
+
+  /**
+   * Full screening for one piece of a person's free-text input from any atomic surface — a Journal
+   * Entry, a Mood note, a Tilt trigger (ADR-0028). Runs the two crisis-detection layers cheap-first
+   * (tripwire then classifier) and, on a hit, performs a Crisis Escalation that surfaces resources +
+   * records one Escalation Event but does NOT open the DM-session aftermath window (a logged field is
+   * not a Conversation, so `startAftermath: false`). Returns the renderable crisis response for the
+   * caller to send on its own surface, or `{ kind: 'safe' }`.
+   */
+  async screen(userId: string, content: string): Promise<ScreeningVerdict> {
+    if (this.tripwire(content)) {
+      const response = await this.escalation.escalate(userId, 'tripwire', {
+        startAftermath: false,
+      });
+      return { kind: 'crisis', response };
+    }
+
+    const classification = await this.classifier.classify(content);
+    if (classification === 'crisis') {
+      const response = await this.escalation.escalate(userId, 'classifier', {
+        startAftermath: false,
+      });
+      return { kind: 'crisis', response };
+    }
+
+    return { kind: 'safe' };
+  }
+
+  /**
+   * The shared screened-record path (ADR-0028): any surface persisting a free-text inner-state field
+   * calls this instead of writing directly, so screening can never be silently skipped. Screens the
+   * free text first; on a crisis it escalates and returns the response WITHOUT running `persist`. When
+   * the text clears — or is absent (a structured-only record) — it runs `persist` and returns its
+   * value.
+   */
+  async guard<T>(
+    userId: string,
+    content: string | null | undefined,
+    persist: () => Promise<T>,
+  ): Promise<ScreenedRecord<T>> {
+    if (content && content.trim().length > 0) {
+      const verdict = await this.screen(userId, content);
+      if (verdict.kind === 'crisis') {
+        return { crisis: true, response: verdict.response };
+      }
+    }
+
+    const value = await persist();
+    return { crisis: false, value };
   }
 }

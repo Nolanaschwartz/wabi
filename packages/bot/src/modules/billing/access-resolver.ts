@@ -1,31 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { prisma } from '@wabi/shared';
-import type { AccessState } from './stripe-access-mapper';
+import { prisma, decideAccess, type AccessState } from '@wabi/shared';
 
-/**
- * Pure access decision (issue #38). No I/O — given the user's billing fields and the current
- * time, returns the access state. Formula: access = (now < trialEndsAt) OR
- * (stripeStatus ∈ {active, trialing}). Kept separate from `resolve()` so it can be unit-tested
- * over inputs without a database.
- */
-export function decideAccess(
-  user: { trialEndsAt: Date | null; subscriptionStatus: string } | null,
-  now: Date,
-): AccessState {
-  if (!user) {
-    return { hasActiveAccess: false, subscriptionStatus: 'canceled' };
-  }
-
-  const trialActive = user.trialEndsAt != null && user.trialEndsAt > now;
-  const stripeActive =
-    user.subscriptionStatus === 'active' || user.subscriptionStatus === 'trialing';
-
-  return {
-    hasActiveAccess: trialActive || stripeActive,
-    subscriptionStatus: user.subscriptionStatus as AccessState['subscriptionStatus'],
-  };
-}
-
+// decideAccess (the pure Active Access decision) now lives in @wabi/shared so the bot's gate and the
+// web dashboard share ONE formula. This service is the bot's I/O wrapper around it.
 @Injectable()
 export class AccessResolver {
   async resolve(discordId: string): Promise<AccessState> {

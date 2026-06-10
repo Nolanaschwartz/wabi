@@ -1,11 +1,16 @@
 import { CrisisAftermathService } from '../crisis-aftermath.service';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
+import { ContactPolicyService } from '../../contact-policy/contact-policy.service';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
     escalationEvent: {
       create: jest.fn(),
+      findFirst: jest.fn(),
+    },
+    user: {
+      findUnique: jest.fn().mockResolvedValue({ timezone: 'UTC' }),
     },
   },
 }));
@@ -19,7 +24,9 @@ describe('CrisisAftermathService', () => {
   let service: CrisisAftermathService;
   let sessionBuffer: jest.Mocked<SessionBufferService>;
   let coachingSession: { quarantine: jest.Mock };
-  let scheduler: { work: jest.Mock; schedule: jest.Mock; available: boolean };
+  let scheduler: { work: jest.Mock; sendAfter: jest.Mock; available: boolean };
+  let client: { users: { send: jest.Mock } };
+  let followUpHandler: (job: unknown[]) => Promise<void>;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -28,11 +35,20 @@ describe('CrisisAftermathService', () => {
     coachingSession = { quarantine: jest.fn().mockResolvedValue(undefined) };
     scheduler = {
       work: jest.fn().mockResolvedValue(undefined),
-      schedule: jest.fn().mockResolvedValue(undefined),
+      sendAfter: jest.fn().mockResolvedValue(undefined),
       available: true,
     };
-    service = new CrisisAftermathService(sessionBuffer, coachingSession as any, scheduler as any);
+    client = { users: { send: jest.fn().mockResolvedValue(undefined) } };
+    service = new CrisisAftermathService(
+      sessionBuffer,
+      coachingSession as any,
+      scheduler as any,
+      client as any,
+      new ContactPolicyService(),
+    );
     await service.init();
+    // init() registers the follow-up worker; capture its handler to exercise the job directly.
+    followUpHandler = scheduler.work.mock.calls[0]?.[1];
   });
 
   it('clears buffer on escalation', async () => {
@@ -45,12 +61,12 @@ describe('CrisisAftermathService', () => {
     expect(coachingSession.quarantine).toHaveBeenCalledWith('123');
   });
 
-  it('schedules the delayed follow-up through the Scheduler', async () => {
+  it('enqueues the delayed follow-up as a one-off job (~30 min during waking hours)', async () => {
     await service.onEscalation('123');
-    expect(scheduler.schedule).toHaveBeenCalledWith(
+    expect(scheduler.sendAfter).toHaveBeenCalledWith(
       'crisis-follow-up',
-      '30 minutes',
-      expect.objectContaining({ userId: '123' }),
+      expect.objectContaining({ userId: '123', message: expect.any(String) }),
+      expect.any(Number),
     );
   });
 
@@ -62,7 +78,18 @@ describe('CrisisAftermathService', () => {
     // Safety state (do-not-mine + buffer clear) is unconditional; only the follow-up needs the queue.
     expect(coachingSession.quarantine).toHaveBeenCalledWith('123');
     expect(sessionBuffer.clearAndQuarantine).toHaveBeenCalledWith('123');
-    expect(scheduler.schedule).not.toHaveBeenCalled();
+    expect(scheduler.sendAfter).not.toHaveBeenCalled();
+  });
+
+  it('delivers the gentle follow-up DM and records a content-free event when the job fires', async () => {
+    await followUpHandler([{ userId: '123', message: 'How are you doing now?' }]);
+
+    expect(client.users.send).toHaveBeenCalledWith('123', {
+      content: 'How are you doing now?',
+    });
+    expect(prisma.escalationEvent.create).toHaveBeenCalledWith({
+      data: { userId: '123', layer: 'follow-up' },
+    });
   });
 
   describe('isQuarantined (reads the buffer through its interface, not the raw client)', () => {
@@ -84,6 +111,23 @@ describe('CrisisAftermathService', () => {
     it('returns false when there is no live session and no aftermath window', async () => {
       sessionBuffer.getContext = jest.fn().mockResolvedValue(null) as any;
       sessionBuffer.inAftermathWindow = jest.fn().mockResolvedValue(false) as any;
+
+      await expect(service.isQuarantined('123')).resolves.toBe(false);
+    });
+
+    it('fails CLOSED on a Redis error: consults the durable EscalationEvent and quarantines if a recent escalation exists (ADR-0021)', async () => {
+      sessionBuffer.getContext = jest.fn().mockRejectedValue(new Error('redis down')) as any;
+      (prisma.escalationEvent.findFirst as jest.Mock).mockResolvedValue({
+        userId: '123',
+        layer: 'classifier',
+      });
+
+      await expect(service.isQuarantined('123')).resolves.toBe(true);
+    });
+
+    it('returns false on a Redis error when there is no recent escalation', async () => {
+      sessionBuffer.getContext = jest.fn().mockRejectedValue(new Error('redis down')) as any;
+      (prisma.escalationEvent.findFirst as jest.Mock).mockResolvedValue(null);
 
       await expect(service.isQuarantined('123')).resolves.toBe(false);
     });

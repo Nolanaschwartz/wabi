@@ -1,12 +1,8 @@
-import type { SubscriptionStatus } from '@wabi/shared';
+import type { AccessState, SubscriptionStatus } from '@wabi/shared';
 
-export type { SubscriptionStatus };
-
-export interface AccessState {
-  /** Derived (decideAccess) — used for runtime gating, never persisted. */
-  hasActiveAccess: boolean;
-  subscriptionStatus: SubscriptionStatus;
-}
+// The entitlement vocabulary lives in @wabi/shared (the single source of truth for the access
+// decision). Re-exported here so existing local importers keep working.
+export type { AccessState, SubscriptionStatus };
 
 export class StripeAccessMapper {
   static map(event: StripeWebhookEvent): AccessState | null {

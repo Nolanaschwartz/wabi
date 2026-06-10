@@ -44,23 +44,23 @@ describe('StrategyRetrievalService', () => {
     expect(results).toEqual([]);
   });
 
-  it('handles upsert errors gracefully', async () => {
+  it('reports false when the upsert fails (no silent success)', async () => {
     (service as any).qdrant.upsert = jest.fn().mockRejectedValue(new Error('connection refused'));
     await expect(
       service.upsert('1', 'test content', 'test evidence'),
-    ).resolves.not.toThrow();
+    ).resolves.toBe(false);
   });
 
-  it('removes a point from the collection on delete', async () => {
+  it('removes a point from the collection on delete and reports success', async () => {
     const mockDelete = jest.fn().mockResolvedValue(true);
     (service as any).qdrant.delete = mockDelete;
-    await service.delete('strat_1');
+    await expect(service.delete('strat_1')).resolves.toBe(true);
     expect(mockDelete).toHaveBeenCalledWith('wabi_strategies', { points: ['strat_1'] });
   });
 
-  it('handles delete errors gracefully', async () => {
+  it('reports false when the delete fails (drift becomes observable)', async () => {
     (service as any).qdrant.delete = jest.fn().mockRejectedValue(new Error('connection refused'));
-    await expect(service.delete('strat_1')).resolves.not.toThrow();
+    await expect(service.delete('strat_1')).resolves.toBe(false);
   });
 
   it('uses vector search (not scroll) for retrieval', async () => {

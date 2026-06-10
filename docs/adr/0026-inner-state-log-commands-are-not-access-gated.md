@@ -25,3 +25,7 @@ Whether an inner-state write should require **consent** (a `consentAcceptedAt` u
 - The inner-state log command handlers (`mood`, `journal`, `tilt`, `playtime`, and the `xp`/`streaks` writes they drive) intentionally carry **no** `accessResolver.resolve` / `hasActiveAccess` call. This is the sanctioned state, not an oversight — a future architecture review should not "fix" it by adding a gate without revisiting this ADR.
 - ADR-0011's four-line rule should be read with this scoping: its `new logging` clause covers coaching-pipeline writes, not standalone log commands.
 - If the open consent question is resolved as "consent required," only a consent check is added at those write sites; the no-access-gate decision stands.
+
+## Amendment (2026-06-09)
+
+The claim in *Scope and bounds* that "the structured commands (`/mood`, `/tilt`, `/playtime`) take no free-text body, so they present no crisis surface" is **incorrect**: `/mood log` has an optional `note` and `/tilt start` an optional `trigger`, both free text and both previously unscreened. Crisis Screening of **all** free-text inner-state fields is now required by **ADR-0028**, and the `/journal` crisis response is upgraded there from a generic platitude to real resources + an Escalation Event. This does **not** change the access-gating decision recorded here — screening is unconditional and orthogonal to Active Access.

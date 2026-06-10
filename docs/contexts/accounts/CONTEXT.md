@@ -21,8 +21,8 @@ A time-limited (~7-day) period of full access granted to a new User at no cost �
 _Avoid_: free tier, demo
 
 **Active Access**:
-Whether a User may currently use coaching/logging — true while trialing or subscribed, false once lapsed/expired. Represented by the `hasActiveAccess` field, which replaced the former `isPro`/`isTeam` (ADR-0005).
-_Avoid_: Pro status, premium flag
+Whether a User may currently use coaching right now. **Derived on read, never stored**: `active` subscription, OR `trialing` with an unexpired Trial (`trialEndsAt > now`). `past_due`, `canceled`, and an expired Trial are all false — a `trialing` status alone does **not** grant access once the Trial date has passed. The single decision lives in `@wabi/shared` (`decideAccess`) so the bot's gate and the web dashboard agree by construction. Replaced the former `isPro`/`isTeam` (ADR-0005); the persisted `hasActiveAccess` column was dropped once access became a pure derivation.
+_Avoid_: Pro status, premium flag, "the hasActiveAccess field" (no longer exists)
 
 **Entitlement**:
 What Active Access unlocks: *new* AI Coach conversations, new logging, and proactive check-ins. Crisis Escalation is **not** an entitlement — it is unconditional and fires even without Active Access (ADR-0005). Neither are Data Rights.

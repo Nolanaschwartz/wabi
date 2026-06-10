@@ -1,5 +1,5 @@
 import { CoachingService } from '../coaching.service';
-import { ClassifierService } from '../classifier.service';
+import { ClassifierService } from '../../crisis/classifier.service';
 import { CoachService } from '../coach.service';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
@@ -10,7 +10,7 @@ import { LangfuseTracer } from '../../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../../billing/access-resolver';
 import { MemoryStoreService } from '../../memory/memory-store.service';
 import { CrisisAftermathService } from '../../crisis-aftermath/crisis-aftermath.service';
-import { StreaksService } from '../../streaks/streaks.service';
+import { HabitEngagementService } from '../../habit-engagement/habit-engagement.service';
 import { TiltService } from '../../tilt/tilt.service';
 
 jest.mock('@wabi/shared', () => ({
@@ -27,7 +27,7 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-jest.mock('../classifier.service', () => ({
+jest.mock('../../crisis/classifier.service', () => ({
   ClassifierService: jest.fn().mockImplementation(() => ({
     classify: jest.fn(),
   })),
@@ -99,9 +99,9 @@ jest.mock('../../crisis-aftermath/crisis-aftermath.service', () => ({
   })),
 }));
 
-jest.mock('../../streaks/streaks.service', () => ({
-  StreaksService: jest.fn(() => ({
-    checkAndAward: jest.fn().mockResolvedValue({ streak: 1, message: '' }),
+jest.mock('../../habit-engagement/habit-engagement.service', () => ({
+  HabitEngagementService: jest.fn(() => ({
+    record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }),
   })),
 }));
 
@@ -126,7 +126,7 @@ describe('CoachingService', () => {
   let memoryStore: jest.Mocked<MemoryStoreService>;
   let crisisAftermath: jest.Mocked<CrisisAftermathService>;
   let escalation: { escalate: jest.Mock };
-  let streaks: jest.Mocked<StreaksService>;
+  let habitEngagement: jest.Mocked<HabitEngagementService>;
   let tilt: jest.Mocked<TiltService>;
 
   const mockMessage = {
@@ -137,6 +137,9 @@ describe('CoachingService', () => {
     content: 'test message',
     reply: jest.fn().mockResolvedValue({}),
   } as any;
+
+  // Escalation now returns a renderable payload (no transport coupling); the DM path renders it.
+  const crisisPayload = { embeds: [{ title: '🚨 You matter' }] };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -150,8 +153,8 @@ describe('CoachingService', () => {
     coachingSession = new CoachingSessionService() as any;
     memoryStore = new MemoryStoreService() as any;
     crisisAftermath = (CrisisAftermathService as jest.Mock)() as any;
-    escalation = { escalate: jest.fn().mockResolvedValue(undefined) };
-    streaks = (StreaksService as jest.Mock)() as any;
+    escalation = { escalate: jest.fn().mockResolvedValue(crisisPayload) };
+    habitEngagement = (HabitEngagementService as jest.Mock)() as any;
     tilt = (TiltService as jest.Mock)() as any;
     service = new CoachingService(
       classifier,
@@ -165,7 +168,7 @@ describe('CoachingService', () => {
       memoryStore,
       crisisAftermath,
       escalation as any,
-      streaks,
+      habitEngagement,
       tilt,
     );
   });
@@ -243,7 +246,7 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     // Crisis response fires; the lapsed user is NOT handed a subscribe prompt instead.
-    expect(escalation.escalate).toHaveBeenCalledWith(mockMessage, 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
     expect(mockMessage.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
@@ -269,7 +272,9 @@ describe('CoachingService', () => {
     // The classifier path now crosses ONE seam for the whole crisis response — it no longer
     // hand-assembles quarantine/log/aftermath inline (which used to double-fire via onCrisis).
     expect(escalation.escalate).toHaveBeenCalledTimes(1);
-    expect(escalation.escalate).toHaveBeenCalledWith(mockMessage, 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    // The returned crisis payload is rendered on the DM channel.
+    expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
     expect(coach.generate).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
     expect(langfuseTracer.trace).toHaveBeenCalledWith(

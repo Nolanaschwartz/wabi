@@ -5,6 +5,9 @@ import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retriev
 import { SchedulerService } from '../scheduler/scheduler.service';
 
 const DEMOTE_QUEUE = 'strategy-demote';
+const RECONCILE_QUEUE = 'strategy-reconcile';
+// Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
+const RECONCILE_CRON = '0 * * * *';
 
 @Injectable()
 export class StrategyAdminService {
@@ -18,12 +21,20 @@ export class StrategyAdminService {
     // Register the demote worker on the shared Scheduler. When degraded, this no-ops and
     // enqueueDemote falls back to synchronous processing (below).
     await this.scheduler.work(DEMOTE_QUEUE, this.demoteJob.bind(this));
+    // Periodic reconcile sweep keeps the Qdrant index in agreement with Postgres status.
+    await this.scheduler.cron(RECONCILE_QUEUE, RECONCILE_CRON, async () => {
+      await this.reconcile();
+    });
   }
 
   async submitDraft(draft: StrategyDraft): Promise<StrategyDraft> {
     const result = await this.trustGate.evaluate(draft);
+    const wantsPublish = result.decision === 'publish';
 
-    const status = result.decision === 'publish' ? 'published' : 'pending-review';
+    // Index BEFORE declaring 'published', so a published Draft is always retrievable (ADR-0012). If
+    // the index write fails, fall back to pending-review rather than persisting something invisible.
+    const indexed = wantsPublish ? await this.publishToQdrant(draft) : false;
+    const status = wantsPublish && indexed ? 'published' : 'pending-review';
 
     const persisted = await prisma.strategyDraft.create({
       data: {
@@ -39,11 +50,7 @@ export class StrategyAdminService {
       },
     });
 
-    const persistedDraft = this.toDraft(persisted);
-    if (status === 'published') {
-      await this.publishToQdrant(persistedDraft);
-    }
-    return persistedDraft;
+    return this.toDraft(persisted);
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {
@@ -62,16 +69,18 @@ export class StrategyAdminService {
     const existing = await prisma.strategyDraft.findUnique({ where: { id } });
     if (!existing || existing.status !== 'pending-review') return null;
 
+    // Index FIRST: a Draft only becomes 'published' once it is actually in the Qdrant index, so the
+    // index can never silently lag Postgres (ADR-0012). A failed upsert leaves it pending-review for
+    // a later retry (admin or the reconcile sweep), never published-but-unretrievable.
+    const indexed = await this.publishToQdrant(this.toDraft(existing));
+    if (!indexed) return null;
+
     const updated = await prisma.strategyDraft.update({
       where: { id },
       data: { status: 'published' },
     }).catch(() => null);
 
-    if (!updated) return null;
-
-    const draft = this.toDraft(updated);
-    await this.publishToQdrant(draft);
-    return draft;
+    return updated ? this.toDraft(updated) : null;
   }
 
   async rejectDraft(id: string): Promise<StrategyDraft | null> {
@@ -148,12 +157,37 @@ export class StrategyAdminService {
     await this.retrieval.delete(draftId);
   }
 
-  private async publishToQdrant(draft: StrategyDraft): Promise<void> {
-    await this.retrieval.upsert(
+  private async publishToQdrant(draft: StrategyDraft): Promise<boolean> {
+    return this.retrieval.upsert(
       draft.id,
       `${draft.title}: ${draft.technique}`,
       draft.evidence,
     );
+  }
+
+  /**
+   * Re-assert the Qdrant index from Postgres (the source of truth for status): every 'published'
+   * Draft must be present in the index, every 'quarantined' one absent. Idempotent, so it heals a
+   * transient index failure on approve/reject AND a rebuilt or migrated collection (ADR-0012). Runs
+   * on a Scheduler cron; safe to call directly.
+   */
+  async reconcile(): Promise<{ reindexed: number; removed: number }> {
+    const [published, quarantined] = await Promise.all([
+      prisma.strategyDraft.findMany({ where: { status: 'published' } }),
+      prisma.strategyDraft.findMany({ where: { status: 'quarantined' } }),
+    ]);
+
+    let reindexed = 0;
+    for (const row of published) {
+      if (await this.publishToQdrant(this.toDraft(row))) reindexed++;
+    }
+
+    let removed = 0;
+    for (const row of quarantined) {
+      if (await this.retrieval.delete(row.id)) removed++;
+    }
+
+    return { reindexed, removed };
   }
 
   async getPublishedDrafts(): Promise<StrategyDraft[]> {

@@ -12,7 +12,9 @@ jest.mock('@/lib/auth', () => ({
   },
 }));
 
+// Keep the real shared trialGrant (the Trial window/status) while mocking only prisma's I/O.
 jest.mock('@wabi/shared', () => ({
+  ...jest.requireActual('@wabi/shared'),
   prisma: {
     user: {
       upsert: jest.fn(),

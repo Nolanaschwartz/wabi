@@ -1,10 +1,19 @@
 import { Injectable } from '@nestjs/common';
-import { Message } from 'discord.js';
+import type { APIEmbed } from 'discord.js';
 import { prisma } from '@wabi/shared';
 import { CrisisResourcesService } from './crisis-resources.service';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 
 export type EscalationLayer = 'tripwire' | 'classifier';
+
+/**
+ * A surface-agnostic crisis response: a renderable payload the caller sends on its own channel
+ * (`message.reply` for a DM, `interaction.editReply` for a slash command). Decoupling the response
+ * from `discord.js`'s `Message` is what lets every surface escalate through one seam (ADR-0028).
+ */
+export interface CrisisResponse {
+  embeds: APIEmbed[];
+}
 
 @Injectable()
 export class EscalationService {
@@ -13,23 +22,29 @@ export class EscalationService {
     private readonly crisisAftermath: CrisisAftermathService,
   ) {}
 
-  // The single entry for a Crisis Escalation, from either detection layer (ADR-0006). Surfaces
-  // resources, records exactly ONE content-free Escalation Event tagged with the layer that fired,
-  // then hands off to the Crisis Aftermath (quarantine + one gentle follow-up, ADR-0010). Both the
-  // tripwire path (EchoController) and the classifier path (CoachingService) call this exactly
-  // once — so a classifier crisis can no longer also log a phantom 'tripwire' Event or
-  // double-schedule the follow-up, the way the two hand-assembled paths used to.
-  async escalate(message: Message, layer: EscalationLayer): Promise<void> {
-    const userId = message.author.id;
-    await this.surfaceResources(message);
+  /**
+   * The single entry for a Crisis Escalation, from either detection layer (ADR-0006) and any surface
+   * (DM, `/journal`, `/mood` note, `/tilt` trigger — ADR-0028). It returns the locale resources as a
+   * renderable payload rather than replying itself (no transport coupling), records exactly ONE
+   * content-free Escalation Event tagged with the layer, then optionally hands off to the Crisis
+   * Aftermath. A logged inner-state field passes `{ startAftermath: false }`: it escalates resources +
+   * Event but is not a Conversation, so it never opens the DM-session aftermath window
+   * (ADR-0010/0016/0028).
+   */
+  async escalate(
+    userId: string,
+    layer: EscalationLayer,
+    opts: { startAftermath?: boolean } = {},
+  ): Promise<CrisisResponse> {
+    const { startAftermath = true } = opts;
+    const response = await this.buildResponse(userId);
     await this.logEvent(userId, layer);
-    await this.crisisAftermath.onEscalation(userId);
+    if (startAftermath) await this.crisisAftermath.onEscalation(userId);
+    return response;
   }
 
-  private async surfaceResources(message: Message): Promise<void> {
-    const user = await prisma.user.findUnique({
-      where: { discordId: message.author.id },
-    });
+  private async buildResponse(userId: string): Promise<CrisisResponse> {
+    const user = await prisma.user.findUnique({ where: { discordId: userId } });
     const locale = user?.locale ?? 'en-US';
     const resources = this.crisisResources.resourcesFor(locale);
 
@@ -39,7 +54,7 @@ export class EscalationService {
       return `• ${r.name}: ${r.phone}`;
     });
 
-    const embed = {
+    const embed: APIEmbed = {
       color: 0x000000,
       title: '🚨 You matter',
       description:
@@ -54,7 +69,7 @@ export class EscalationService {
       footer: { text: 'These numbers are free and confidential' },
     };
 
-    await message.reply({ embeds: [embed] });
+    return { embeds: [embed] };
   }
 
   private async logEvent(userId: string, layer: EscalationLayer): Promise<void> {

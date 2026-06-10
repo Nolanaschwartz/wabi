@@ -1,9 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { XpService } from '../xp/xp.service';
 
 const STREAK_GRACE_DAYS = 1;
-const XP_PER_COACHING_TURN = 10;
 
 function startOfDayInTZ(tz: string, d: Date = new Date()): Date {
   try {
@@ -18,19 +16,23 @@ function startOfDayInTZ(tz: string, d: Date = new Date()): Date {
   }
 }
 
+export interface StreakTransition {
+  streak: number;
+  message: string;
+  /** Whether this is the first Engagement of the day — the signal HabitEngagement uses to award XP
+   * and log a row exactly once per engaged day (no inflation from repeat same-day activity). */
+  isNewDay: boolean;
+}
+
 @Injectable()
 export class StreaksService {
-  // XP is awarded through XpService — the sole writer of the xpEntry ledger. Streaks still READS
-  // xpEntry to infer daily engagement (see the double-duty note below), but never writes it raw.
-  constructor(private readonly xp: XpService) {}
-
-  async checkAndAward(
+  // Streaks is a read model over the Engagement log (the xpEntry table). It never writes XP — that is
+  // the one writer's job (HabitEngagementService, ADR-0027). `advance` computes the streak transition
+  // from the log as it stands BEFORE the new Engagement is recorded.
+  async advance(
     discordId: string,
     timezone: string = 'UTC',
-  ): Promise<{
-    streak: number;
-    message: string;
-  }> {
+  ): Promise<StreakTransition> {
     const today = startOfDayInTZ(timezone);
     const lastEntry = await prisma.xpEntry.findFirst({
       where: { userId: discordId },
@@ -38,10 +40,10 @@ export class StreaksService {
     });
 
     if (!lastEntry) {
-      await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
       return {
         streak: 1,
         message: "Welcome! Your streak has begun.",
+        isNewDay: true,
       };
     }
 
@@ -49,33 +51,35 @@ export class StreaksService {
     const daysSince = Math.floor((today.getTime() - lastDay.getTime()) / 86400000);
 
     if (daysSince === 0) {
+      // Already engaged today — the streak is unchanged and no new Engagement is logged.
       return {
         streak: await this.getCurrentStreak(discordId, timezone),
         message: '',
+        isNewDay: false,
       };
     }
 
     if (daysSince === 1) {
-      await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
       const streak = (await this.getCurrentStreak(discordId, timezone)) + 1;
       return {
         streak,
         message: streak >= 7 ? `🔥 ${streak}-day streak! You're on fire.` : "Great to see you again! Your streak continues.",
+        isNewDay: true,
       };
     }
 
     if (daysSince <= STREAK_GRACE_DAYS + 1) {
-      await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
       return {
         streak: await this.getCurrentStreak(discordId, timezone),
         message: "Welcome back! No worries about the break.",
+        isNewDay: true,
       };
     }
 
-    await this.xp.award(discordId, XP_PER_COACHING_TURN, 'coaching');
     return {
       streak: 1,
       message: "Welcome back! Fresh start, no pressure.",
+      isNewDay: true,
     };
   }
 
@@ -118,17 +122,14 @@ export class StreaksService {
     const days = 30;
     const since = new Date(Date.now() - days * 86400000);
 
-    const [xpEntries, journals] = await Promise.all([
-      prisma.xpEntry.findMany({
-        where: { userId: discordId, createdAt: { gte: since } },
-      }),
-      prisma.journalEntry.findMany({
-        where: { userId: discordId, createdAt: { gte: since } },
-      }),
-    ]);
+    // Wellness reads the Engagement log only — each habit-event counted once (ADR-0027), never Mood
+    // or Tilt (ADR-0002). A journal write logs one Engagement row, so it is no longer added a second
+    // time from the journalEntry table (the prior double-count).
+    const engagements = await prisma.xpEntry.findMany({
+      where: { userId: discordId, createdAt: { gte: since } },
+    });
 
-    const activities = xpEntries.length + journals.length;
-    const score = Math.min(100, Math.round((activities / days) * 100));
+    const score = Math.min(100, Math.round((engagements.length / days) * 100));
 
     const level = score >= 80 ? '🌟 Wellness Champion' :
                   score >= 60 ? '✨ Wellness Explorer' :

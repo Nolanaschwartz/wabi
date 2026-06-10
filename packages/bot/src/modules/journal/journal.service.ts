@@ -1,13 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import { ClassifierService } from '../coaching/classifier.service';
+import {
+  CrisisScreeningService,
+  ScreenedRecord,
+} from '../crisis/crisis-screening.service';
 import { CoachService } from '../coaching/coach.service';
-import { XpService } from '../xp/xp.service';
-
-// A saved journal entry is worth this much XP. The award belongs to "writing an entry",
-// so it lives here next to the persist — not at the call site, where a second caller would
-// have to re-encode it (and a crisis entry could accidentally still be rewarded).
-const JOURNAL_XP_AWARD = 10;
+import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
+import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -22,12 +21,18 @@ const PROMPTS = [
   "What made you smile today?",
 ];
 
+export type JournalWriteResult = ScreenedRecord<{
+  reflection: string;
+  xpAwarded: number;
+}>;
+
 @Injectable()
 export class JournalService {
   constructor(
-    private readonly classifier: ClassifierService,
+    private readonly screening: CrisisScreeningService,
     private readonly coach: CoachService,
-    private readonly xp: XpService,
+    private readonly habitEngagement: HabitEngagementService,
+    private readonly innerStateMemory: InnerStateMemoryService,
   ) {}
 
   async prompt(): Promise<string> {
@@ -35,30 +40,32 @@ export class JournalService {
     return PROMPTS[idx];
   }
 
-  async write(
-    discordId: string,
-    content: string,
-  ): Promise<{ crisis: boolean; reflection: string; xpAwarded: number }> {
-    const classification = await this.classifier.classify(content);
+  async write(discordId: string, content: string): Promise<JournalWriteResult> {
+    // The entry content crosses the shared screened-record path before persisting (ADR-0028). A
+    // crisis hit surfaces the real locale Crisis Resources + records one Escalation Event — but no
+    // DM-session aftermath, since a journal entry is not a Conversation — and the entry is not saved.
+    return this.screening.guard(discordId, content, async () => {
+      const reflection = await this.generateReflection(content);
 
-    if (classification === 'crisis') {
-      // No persist, no reward — a crisis entry is handed off to safety, not gamified.
-      return { crisis: true, reflection: '', xpAwarded: 0 };
-    }
+      await prisma.journalEntry.create({
+        data: {
+          userId: discordId,
+          content,
+          reflection: reflection || null,
+        },
+      });
 
-    const reflection = await this.generateReflection(content);
+      // Log the Engagement (XP + streak) through the single writer (ADR-0027). XP is awarded once per
+      // engaged day, so a second entry the same day still saves but does not re-award.
+      const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
 
-    await prisma.journalEntry.create({
-      data: {
-        userId: discordId,
-        content,
-        reflection: reflection || null,
-      },
+      // Feed the screened free text into derived Memory, consent-gated and off by default (ADR-0029).
+      // This runs inside guard()'s success closure, so crisis text never reaches it. No metric is
+      // included — only the narrative, prefixed with its source word for extractor context.
+      await this.innerStateMemory.deriveIfConsented(discordId, `Journal: ${content}`);
+
+      return { reflection: reflection || '', xpAwarded };
     });
-
-    await this.xp.award(discordId, JOURNAL_XP_AWARD, 'journal');
-
-    return { crisis: false, reflection: reflection || '', xpAwarded: JOURNAL_XP_AWARD };
   }
 
   private async generateReflection(content: string): Promise<string> {

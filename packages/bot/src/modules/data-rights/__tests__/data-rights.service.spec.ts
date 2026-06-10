@@ -1,5 +1,6 @@
 import { DataRightsService } from '../data-rights.service';
 import { MemoryStoreService } from '../../memory/memory-store.service';
+import { SessionBufferService } from '../../session-buffer/session-buffer.service';
 import { prisma } from '@wabi/shared';
 
 // Capturable transaction client so tests can assert which deletes fired inside the atomic tx.
@@ -11,6 +12,7 @@ const mockTx = {
   escalationEvent: { deleteMany: jest.fn() },
   session: { deleteMany: jest.fn() },
   tiltSession: { deleteMany: jest.fn() },
+  aiConversation: { deleteMany: jest.fn() },
   coachingSession: { deleteMany: jest.fn() },
 };
 
@@ -24,6 +26,7 @@ jest.mock('@wabi/shared', () => ({
     escalationEvent: { findMany: jest.fn(), deleteMany: jest.fn() },
     session: { findMany: jest.fn(), deleteMany: jest.fn() },
     tiltSession: { findMany: jest.fn(), deleteMany: jest.fn() },
+    aiConversation: { findMany: jest.fn().mockResolvedValue([]), deleteMany: jest.fn() },
     $transaction: jest.fn((fn) => fn(mockTx)),
   },
 }));
@@ -35,14 +38,22 @@ jest.mock('../../memory/memory-store.service', () => ({
   })),
 }));
 
+jest.mock('../../session-buffer/session-buffer.service', () => ({
+  SessionBufferService: jest.fn().mockImplementation(() => ({
+    purge: jest.fn(),
+  })),
+}));
+
 describe('DataRightsService', () => {
   let service: DataRightsService;
   let memoryStore: jest.Mocked<MemoryStoreService>;
+  let sessionBuffer: jest.Mocked<SessionBufferService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     memoryStore = new MemoryStoreService() as any;
-    service = new DataRightsService(memoryStore);
+    sessionBuffer = new SessionBufferService() as any;
+    service = new DataRightsService(memoryStore, sessionBuffer);
   });
 
   it('exports user data including tilt sessions and memory', async () => {
@@ -104,5 +115,17 @@ describe('DataRightsService', () => {
     expect(mockTx.coachingSession.deleteMany).toHaveBeenCalledWith({
       where: { discordId: '123' },
     });
+  });
+
+  it('purges the Redis session buffer + quarantine key (verbatim turns must not linger, ADR-0011)', async () => {
+    await service.delete('123');
+
+    expect(sessionBuffer.purge).toHaveBeenCalledWith('123');
+  });
+
+  it('surfaces a failure instead of silently swallowing a partial delete', async () => {
+    (memoryStore.deleteAllForUser as jest.Mock).mockRejectedValue(new Error('mem0 down'));
+
+    await expect(service.delete('123')).rejects.toThrow(/incomplete/i);
   });
 });

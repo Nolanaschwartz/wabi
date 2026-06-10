@@ -24,7 +24,8 @@ export class EchoController {
       // for this user (e.g. a benign first message still debouncing), so no cheerful reply is
       // sent alongside the crisis resources. (Issue #06 / #25.)
       this.coaching.cancelPending(message.author.id);
-      await this.escalation.escalate(message, 'tripwire');
+      const response = await this.escalation.escalate(message.author.id, 'tripwire');
+      await message.reply(response);
       return;
     }
 

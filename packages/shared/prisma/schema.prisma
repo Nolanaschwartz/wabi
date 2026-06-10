@@ -21,6 +21,8 @@ model User {
   timezone              String   @default("UTC")
   checkInsEnabled       Boolean  @default(false)
   checkInCadence        String   @default("daily")
+  innerStateMemoryEnabled Boolean @default(false)
+  innerStateMemoryPromptedAt DateTime?
   quietHoursStart       Int      @default(22)
   quietHoursEnd         Int      @default(8)
   lastCheckIn           DateTime?

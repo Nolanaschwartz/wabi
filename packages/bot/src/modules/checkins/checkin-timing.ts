@@ -1,27 +1,19 @@
 import { prisma } from '@wabi/shared';
+import { ContactPolicyService } from '../contact-policy/contact-policy.service';
 
-const DEFAULT_QUIET_HOURS_START = 22;
-const DEFAULT_QUIET_HOURS_END = 8;
 const LATE_NIGHT_HOUR = 23;
+
+// Quiet hours are owned by the one Contact Policy (ADR-0008) so check-ins and the crisis-aftermath
+// follow-up share a single implementation. CheckInTiming delegates to it (the service is stateless,
+// reads no env, so a module-level instance is safe).
+const contactPolicy = new ContactPolicyService();
 
 export const CHECK_IN_CADENCES = ['daily', 'every-other', 'weekly'] as const;
 export type CheckInCadence = (typeof CHECK_IN_CADENCES)[number];
 
 export class CheckInTiming {
   static isWithinQuietHours(userTimezone: string): boolean {
-    try {
-      const now = new Date();
-      const userHour = now.toLocaleString('en-US', {
-        timeZone: userTimezone || 'UTC',
-        hour: 'numeric',
-        hour12: false,
-      });
-
-      const hour = parseInt(userHour, 10);
-      return hour >= DEFAULT_QUIET_HOURS_START || hour < DEFAULT_QUIET_HOURS_END;
-    } catch {
-      return true; // Safe default: assume quiet hours on invalid timezone
-    }
+    return contactPolicy.inQuietHours(userTimezone);
   }
 
   static isLateNightForUser(userTimezone: string): boolean {

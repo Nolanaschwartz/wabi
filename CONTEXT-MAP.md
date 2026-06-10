@@ -10,7 +10,7 @@ Wabi is a non-clinical wellness companion for gamers on Discord, delivered **DM-
 
 ## Relationships
 
-- **Accounts → Wellbeing**: Accounts owns the `User` and is the source of truth for identity (`UserId`, Discord ID) and entitlement (`hasActiveAccess`). Wellbeing references a person by `UserId` only. All personal data is global to the `User` — there is no per-server scoping in v1.
+- **Accounts → Wellbeing**: Accounts owns the `User` and is the source of truth for identity (`UserId`, Discord ID) and entitlement (Active Access, derived on read via `@wabi/shared`). Wellbeing references a person by `UserId` only. All personal data is global to the `User` — there is no per-server scoping in v1.
 - **Crisis escalation** (ADR-0001) is owned by Wellbeing (the AI coach) and is cross-cutting: it overrides all coaching behaviour.
 - **Inner-state privacy** (ADR-0002): inner-state data (Mood, Tilt, Journal) never crosses into a social surface. Trivially satisfied in DM-first v1; binding if/when the Community layer lands.
 

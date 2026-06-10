@@ -137,7 +137,8 @@ describe('EchoController', () => {
     it('escalates through one seam and cancels a pending coach turn when a tripwire crisis arrives mid-burst', async () => {
       const cancelPending = jest.fn();
       const handle = jest.fn();
-      const escalate = jest.fn().mockResolvedValue(undefined);
+      const crisisPayload = { embeds: [{ title: '🚨 You matter' }] };
+      const escalate = jest.fn().mockResolvedValue(crisisPayload);
       const controller = new EchoController(
         { tripwire: jest.fn().mockReturnValue(true) } as any,
         { escalate } as any,
@@ -156,9 +157,11 @@ describe('EchoController', () => {
       // Pending coach turn is canceled (no cheerful reply), and we don't run the coach pipeline.
       expect(cancelPending).toHaveBeenCalledWith('123');
       expect(handle).not.toHaveBeenCalled();
-      // The whole crisis response goes through the single Escalation seam, tagged 'tripwire'.
+      // The whole crisis response goes through the single Escalation seam, tagged 'tripwire' and
+      // keyed by userId — and the returned payload is rendered on the DM channel.
       expect(escalate).toHaveBeenCalledTimes(1);
-      expect(escalate).toHaveBeenCalledWith(message, 'tripwire');
+      expect(escalate).toHaveBeenCalledWith('123', 'tripwire');
+      expect(message.reply).toHaveBeenCalledWith(crisisPayload);
     });
   });
 });

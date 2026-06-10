@@ -72,13 +72,27 @@ export class SchedulerService {
     await this.boss.send(queue, data);
   }
 
-  /** Schedule a job with pg-boss schedule semantics + payload (e.g. the crisis follow-up). No-op when degraded. */
+  /** Schedule a recurring job with a pg-boss cron expression + payload. No-op when degraded. */
   async schedule(queue: string, cronOrInterval: string, data: object): Promise<void> {
     if (!this.boss) return;
     try {
       await this.boss.schedule(queue, cronOrInterval, data);
     } catch {
       // best-effort schedule
+    }
+  }
+
+  /**
+   * Enqueue a ONE-OFF job to run after a delay (seconds) — the right primitive for a delayed
+   * follow-up (pg-boss `schedule` is for recurring crons, not a single deferred run). Best-effort;
+   * no-op when degraded.
+   */
+  async sendAfter(queue: string, data: object, startAfterSeconds: number): Promise<void> {
+    if (!this.boss) return;
+    try {
+      await this.boss.send(queue, data, { startAfter: startAfterSeconds });
+    } catch {
+      // best-effort enqueue
     }
   }
 }

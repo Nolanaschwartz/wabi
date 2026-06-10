@@ -35,17 +35,18 @@ describe('StrategyAdminService', () => {
   let trustGate: jest.Mocked<StrategyTrustGate>;
   let retrieval: jest.Mocked<StrategyRetrievalService>;
   // Plain scheduler stub; `available` is flipped per-test to exercise durable vs synchronous demote.
-  let scheduler: { work: jest.Mock; send: jest.Mock; available: boolean };
+  let scheduler: { work: jest.Mock; cron: jest.Mock; send: jest.Mock; available: boolean };
 
   beforeEach(() => {
     jest.clearAllMocks();
     trustGate = new StrategyTrustGate() as any;
     retrieval = {
-      upsert: jest.fn().mockResolvedValue(undefined),
-      delete: jest.fn().mockResolvedValue(undefined),
+      upsert: jest.fn().mockResolvedValue(true),
+      delete: jest.fn().mockResolvedValue(true),
     } as any;
     scheduler = {
       work: jest.fn().mockResolvedValue(undefined),
+      cron: jest.fn().mockResolvedValue(undefined),
       send: jest.fn().mockResolvedValue('job_1'),
       available: true,
     };
@@ -183,9 +184,12 @@ describe('StrategyAdminService', () => {
     expect(pending[0].status).toBe('pending-review');
   });
 
-  it('approves a pending-review draft', async () => {
+  it('approves a pending-review draft (indexing first, then marking published)', async () => {
     (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
       id: '1',
+      title: 'Test',
+      technique: 'Test',
+      evidence: 'Test',
       status: 'pending-review',
     });
     (prisma.strategyDraft.update as jest.Mock).mockResolvedValue({
@@ -204,6 +208,35 @@ describe('StrategyAdminService', () => {
     const result = await service.approveDraft('1');
     expect(result?.status).toBe('published');
     expect(retrieval.upsert).toHaveBeenCalledWith('1', expect.any(String), 'Test');
+  });
+
+  it('does NOT mark a draft published if the index upsert fails (published => retrievable)', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      title: 'Test',
+      technique: 'Test',
+      evidence: 'Test',
+      status: 'pending-review',
+    });
+    (retrieval.upsert as jest.Mock).mockResolvedValue(false);
+
+    const result = await service.approveDraft('1');
+
+    expect(result).toBeNull();
+    // The status was never flipped to published — it stays pending-review for retry.
+    expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+  });
+
+  it('reconcile re-asserts the index from Postgres: re-indexes published, removes quarantined', async () => {
+    (prisma.strategyDraft.findMany as jest.Mock)
+      .mockResolvedValueOnce([{ id: 'p1', title: 'A', technique: 'a', evidence: 'e' }]) // published
+      .mockResolvedValueOnce([{ id: 'q1' }]); // quarantined
+
+    const result = await service.reconcile();
+
+    expect(retrieval.upsert).toHaveBeenCalledWith('p1', expect.any(String), 'e');
+    expect(retrieval.delete).toHaveBeenCalledWith('q1');
+    expect(result).toEqual({ reindexed: 1, removed: 1 });
   });
 
   it('rejects a pending-review draft', async () => {
