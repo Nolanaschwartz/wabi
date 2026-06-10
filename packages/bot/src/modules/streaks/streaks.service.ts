@@ -1,20 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
+import { startOfDayInTZ } from '../../lib/timezone-util';
+import { XpService } from '../xp/xp.service';
 
 const STREAK_GRACE_DAYS = 1;
-
-function startOfDayInTZ(tz: string, d: Date = new Date()): Date {
-  try {
-    const utcStr = d.toLocaleString('en-US', { timeZone: tz });
-    const dt = new Date(utcStr);
-    dt.setHours(0, 0, 0, 0);
-    return dt;
-  } catch {
-    const fallback = new Date(d);
-    fallback.setHours(0, 0, 0, 0);
-    return fallback;
-  }
-}
 
 export interface StreakTransition {
   streak: number;
@@ -26,6 +15,8 @@ export interface StreakTransition {
 
 @Injectable()
 export class StreaksService {
+  constructor(private readonly xpService: XpService) {}
+
   // Streaks is a read model over the Engagement log (the xpEntry table). It never writes XP — that is
   // the one writer's job (HabitEngagementService, ADR-0027). `advance` computes the streak transition
   // from the log as it stands BEFORE the new Engagement is recorded.
@@ -146,7 +137,7 @@ export class StreaksService {
     wellnessLevel: string;
   }> {
     const [totalXp, streakData, wellness] = await Promise.all([
-      this.getTotalXp(discordId),
+      this.xpService.total(discordId),
       this.getCurrentStreak(discordId),
       this.wellnessScore(discordId),
     ]);
@@ -159,11 +150,4 @@ export class StreaksService {
     };
   }
 
-  private async getTotalXp(discordId: string): Promise<number> {
-    const entries = await prisma.xpEntry.findMany({
-      where: { userId: discordId },
-    });
-
-    return entries.reduce((acc, e) => acc + e.amount, 0);
-  }
 }

@@ -1,4 +1,5 @@
 import { StreaksService } from '../streaks.service';
+import { XpService } from '../../xp/xp.service';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
@@ -10,11 +11,16 @@ jest.mock('@wabi/shared', () => ({
 
 describe('StreaksService', () => {
   let service: StreaksService;
+  let xpService: jest.Mocked<XpService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Streaks is a pure read model now — no XpService dependency (the one writer is HabitEngagement).
-    service = new StreaksService();
+    xpService = {
+      total: jest.fn().mockResolvedValue(0),
+      award: jest.fn(),
+      recent: jest.fn(),
+    } as jest.Mocked<XpService>;
+    service = new StreaksService(xpService);
   });
 
   it('starts a new streak (and a fresh engagement day) for a first-time user', async () => {
@@ -85,6 +91,7 @@ describe('StreaksService', () => {
   });
 
   it('returns profile with XP and wellness score', async () => {
+    xpService.total.mockResolvedValue(0);
     (prisma.xpEntry.findMany as jest.Mock).mockResolvedValue([]);
 
     const profile = await service.profile('123');

@@ -1,5 +1,6 @@
 import { prisma } from '@wabi/shared';
 import { ContactPolicyService } from '../contact-policy/contact-policy.service';
+import { currentHourInTZ } from '../../lib/timezone-util';
 
 const LATE_NIGHT_HOUR = 23;
 
@@ -17,18 +18,9 @@ export class CheckInTiming {
   }
 
   static isLateNightForUser(userTimezone: string): boolean {
-    try {
-      const now = new Date();
-      const userHour = now.toLocaleString('en-US', {
-        timeZone: userTimezone || 'UTC',
-        hour: 'numeric',
-        hour12: false,
-      });
-
-      return parseInt(userHour, 10) >= LATE_NIGHT_HOUR;
-    } catch {
-      return true; // Safe default: assume late night on invalid timezone
-    }
+    const hour = currentHourInTZ(userTimezone || 'UTC');
+    // Unknown/invalid timezone → assume late night, the conservative contact-suppressing default.
+    return hour === null || hour >= LATE_NIGHT_HOUR;
   }
 
   static isCheckInDue(user: {
