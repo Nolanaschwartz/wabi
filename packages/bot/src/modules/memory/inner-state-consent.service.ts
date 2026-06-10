@@ -31,8 +31,9 @@ export class InnerStateConsentService {
 
   /**
    * If this person has neither opted in nor been asked, mark them asked *now* and return the
-   * first-use prompt to append to the current reply. Otherwise return null — we never re-prompt.
-   * Marking on display (not on click) is what makes the ask happen at most once across all fields.
+   * first-use prompt for the controller to surface (as a separate ephemeral follow-up, so answering
+   * it never edits the log confirmation away). Otherwise return null — we never re-prompt. Marking
+   * on display (not on click) is what makes the ask happen at most once across all fields.
    */
   async prepareFirstUsePrompt(userId: string): Promise<ConsentSurface | null> {
     const user = await this.userService.findByDiscordId(userId, {

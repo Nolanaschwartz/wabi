@@ -8,7 +8,7 @@ import {
   Subcommand,
   createCommandGroupDecorator,
 } from 'necord';
-import { CommandInteraction } from 'discord.js';
+import { CommandInteraction, MessageFlags } from 'discord.js';
 import { TiltService } from './tilt.service';
 import { InnerStateConsentService } from '../memory/inner-state-consent.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
@@ -90,15 +90,21 @@ export class TiltController {
     }
 
     const base = `Tilt session started. Trigger: ${trigger} (Severity: ${severity}/10)\n\nReset technique: ${result.value}`;
+    await interaction.editReply({ content: base });
+
     // Only a start with a real free-text trigger is "using a free-text inner-state field"; a
     // severity-only start offers no prompt (ADR-0029). The consent module gates display to once.
+    // The prompt rides a separate ephemeral follow-up so answering it can't erase this confirmation.
     const prompt = hasTrigger
       ? await this.consent.prepareFirstUsePrompt(interaction.user.id)
       : null;
-    await interaction.editReply({
-      content: prompt ? `${base}\n\n${prompt.content}` : base,
-      components: prompt ? prompt.components : [],
-    });
+    if (prompt) {
+      await interaction.followUp({
+        content: prompt.content,
+        components: prompt.components,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 
   private async handleResolve(interaction: CommandInteraction): Promise<void> {

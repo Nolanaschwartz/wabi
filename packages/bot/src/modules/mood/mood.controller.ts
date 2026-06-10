@@ -77,15 +77,21 @@ export class MoodController {
       : "Thanks for checking in.";
 
     const base = `${emoji} Mood logged.${trendText}\n${followUp}`;
+    await interaction.editReply({ content: base });
+
     // Only a mood that carries a free-text note is "using a free-text inner-state field" — a
     // rating-only log offers no prompt (ADR-0029). The consent module still gates display to once.
+    // The prompt rides a separate ephemeral follow-up so answering it can't erase this confirmation.
     const prompt = note?.trim()
       ? await this.consent.prepareFirstUsePrompt(interaction.user.id)
       : null;
-    await interaction.editReply({
-      content: prompt ? `${base}\n\n${prompt.content}` : base,
-      components: prompt ? prompt.components : [],
-    });
+    if (prompt) {
+      await interaction.followUp({
+        content: prompt.content,
+        components: prompt.components,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 }
 

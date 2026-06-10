@@ -7,7 +7,7 @@ import {
   Subcommand,
   createCommandGroupDecorator,
 } from 'necord';
-import { CommandInteraction } from 'discord.js';
+import { CommandInteraction, MessageFlags } from 'discord.js';
 import { JournalService } from './journal.service';
 import { InnerStateConsentService } from '../memory/inner-state-consent.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
@@ -74,12 +74,19 @@ export class JournalController {
     }
 
     const base = `Entry saved. ${result.value.reflection} (+${result.value.xpAwarded} XP)`;
+    await interaction.editReply({ content: base });
+
     // A journal entry is always free-text inner state, so it's a first-use prompt candidate. The
     // consent module decides whether to actually show it (at most once across all fields, ADR-0029).
+    // The prompt rides a separate ephemeral follow-up, never the saved-entry reply: answering it
+    // edits that follow-up, so the confirmation can't be erased, and the privacy ask stays private.
     const prompt = await this.consent.prepareFirstUsePrompt(interaction.user.id);
-    await interaction.editReply({
-      content: prompt ? `${base}\n\n${prompt.content}` : base,
-      components: prompt ? prompt.components : [],
-    });
+    if (prompt) {
+      await interaction.followUp({
+        content: prompt.content,
+        components: prompt.components,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
   }
 }

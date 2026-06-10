@@ -20,6 +20,7 @@ jest.mock('../mood.service', () => ({
   },
 }));
 
+import { MessageFlags } from 'discord.js';
 import { MoodController } from '../mood.controller';
 import { MoodService } from '../mood.service';
 import { InnerStateConsentService } from '../../memory/inner-state-consent.service';
@@ -28,6 +29,7 @@ function mockInteraction() {
   return {
     deferReply: jest.fn().mockResolvedValue({}),
     editReply: jest.fn().mockResolvedValue({}),
+    followUp: jest.fn().mockResolvedValue({}),
     user: { id: 'user_1' },
   } as any;
 }
@@ -48,15 +50,24 @@ describe('MoodController — first-use consent prompt', () => {
     controller = new MoodController(moodService, consent);
   });
 
-  it('appends the prompt when the mood carries a free-text note', async () => {
+  it('offers the prompt as a separate ephemeral follow-up when the mood carries a free-text note', async () => {
     const interaction = mockInteraction();
 
     await controller.log([interaction], { rating: 3, note: 'feeling okay' });
 
     expect(consent.prepareFirstUsePrompt).toHaveBeenCalledWith('user_1');
+
+    // The mood confirmation stands alone — no prompt copy, no buttons to erase it.
     const reply = interaction.editReply.mock.calls.at(-1)![0];
-    expect(reply.content).toContain('CONSENT_PROMPT');
-    expect(reply.components).toEqual(['row']);
+    expect(reply.content).toContain('Mood logged');
+    expect(reply.content).not.toContain('CONSENT_PROMPT');
+    expect(reply.components ?? []).toEqual([]);
+
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'CONSENT_PROMPT',
+      components: ['row'],
+      flags: MessageFlags.Ephemeral,
+    });
   });
 
   it('does NOT offer the prompt for a rating-only mood (no free text used)', async () => {
@@ -67,6 +78,7 @@ describe('MoodController — first-use consent prompt', () => {
     expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
     const reply = interaction.editReply.mock.calls.at(-1)![0];
     expect(reply.components ?? []).toEqual([]);
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
   it('never offers the prompt on a crisis note', async () => {
@@ -76,5 +88,6 @@ describe('MoodController — first-use consent prompt', () => {
     await controller.log([interaction], { rating: 1, note: 'I want to die' });
 
     expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@ jest.mock('@wabi/shared', () => ({ prisma: {} }));
 // JournalService transitively imports crisis-screening → escalation → pg-boss (ESM); stub it.
 jest.mock('../journal.service', () => ({ JournalService: class {} }));
 
+import { MessageFlags } from 'discord.js';
 import { JournalController } from '../journal.controller';
 import { JournalService } from '../journal.service';
 import { InnerStateConsentService } from '../../memory/inner-state-consent.service';
@@ -17,6 +18,7 @@ function mockInteraction() {
   return {
     deferReply: jest.fn().mockResolvedValue({}),
     editReply: jest.fn().mockResolvedValue({}),
+    followUp: jest.fn().mockResolvedValue({}),
     user: { id: 'user_1' },
   } as any;
 }
@@ -36,27 +38,40 @@ describe('JournalController — first-use consent prompt', () => {
     controller = new JournalController(journalService, consent);
   });
 
-  it('appends the consent prompt to a saved entry when the person has not been asked', async () => {
+  it('offers the consent prompt as a separate ephemeral follow-up, leaving the saved-entry confirmation intact', async () => {
     consent.prepareFirstUsePrompt.mockResolvedValue(PROMPT as any);
     const interaction = mockInteraction();
 
     await controller.write([interaction], { content: 'I had a good day today' });
 
     expect(consent.prepareFirstUsePrompt).toHaveBeenCalledWith('user_1');
+
+    // The confirmation reply carries the saved-entry copy — and neither the prompt text nor its
+    // buttons — so answering the prompt later can't edit this message away.
     const reply = interaction.editReply.mock.calls.at(-1)![0];
-    expect(reply.content).toContain('CONSENT_PROMPT');
-    expect(reply.components).toEqual(['row']);
+    expect(reply.content).toContain('Entry saved');
+    expect(reply.content).not.toContain('CONSENT_PROMPT');
+    expect(reply.components ?? []).toEqual([]);
+
+    // The prompt rides on its own ephemeral follow-up message instead.
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: 'CONSENT_PROMPT',
+      components: ['row'],
+      flags: MessageFlags.Ephemeral,
+    });
   });
 
-  it('does not append a prompt (no components) when the person was already asked', async () => {
+  it('does not follow up when the person was already asked', async () => {
     consent.prepareFirstUsePrompt.mockResolvedValue(null);
     const interaction = mockInteraction();
 
     await controller.write([interaction], { content: 'I had a good day today' });
 
     const reply = interaction.editReply.mock.calls.at(-1)![0];
+    expect(reply.content).toContain('Entry saved');
     expect(reply.content).not.toContain('CONSENT_PROMPT');
     expect(reply.components ?? []).toEqual([]);
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
   it('never offers the prompt on a crisis entry', async () => {
@@ -66,5 +81,6 @@ describe('JournalController — first-use consent prompt', () => {
     await controller.write([interaction], { content: 'I want to end it all' });
 
     expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
+    expect(interaction.followUp).not.toHaveBeenCalled();
   });
 });
