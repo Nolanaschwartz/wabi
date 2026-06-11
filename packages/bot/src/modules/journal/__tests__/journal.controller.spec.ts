@@ -6,97 +6,87 @@ jest.mock('necord', () => ({
   createCommandGroupDecorator: () => () => () => {},
 }));
 jest.mock('@wabi/shared', () => ({ prisma: {} }));
-// JournalService transitively imports crisis-screening → escalation → pg-boss (ESM); stub it.
+// JournalService transitively imports coach/habit-engagement; stub it. We inject a plain mock.
 jest.mock('../journal.service', () => ({ JournalService: class {} }));
+// Stub the logger module so its discord.js + crisis/memory imports never load; we inject a mock.
+jest.mock('../../inner-state-logger/inner-state-logger.service', () => ({
+  InnerStateLoggerService: class {},
+}));
 
 import { MessageFlags } from 'discord.js';
 import { JournalController } from '../journal.controller';
 import { JournalService } from '../journal.service';
-import { InnerStateConsentService } from '../../memory/inner-state-consent.service';
+import { InnerStateLoggerService } from '../../inner-state-logger/inner-state-logger.service';
 
 function mockInteraction() {
   return {
     deferReply: jest.fn().mockResolvedValue({}),
     editReply: jest.fn().mockResolvedValue({}),
-    followUp: jest.fn().mockResolvedValue({}),
     user: { id: 'user_1' },
   } as any;
 }
 
-const PROMPT = { content: 'CONSENT_PROMPT', components: ['row'] };
-
-describe('JournalController — first-use consent prompt', () => {
+describe('JournalController', () => {
   let controller: JournalController;
   let journalService: jest.Mocked<JournalService>;
-  let consent: jest.Mocked<InnerStateConsentService>;
+  let logger: jest.Mocked<InnerStateLoggerService>;
 
   beforeEach(() => {
     journalService = {
-      write: jest.fn().mockResolvedValue({ crisis: false, value: { reflection: 'Nice.', xpAwarded: 10 } }),
+      write: jest.fn().mockResolvedValue({ reflection: 'Nice.', xpAwarded: 10 }),
       prompt: jest.fn().mockResolvedValue('Reflect on your day.'),
     } as any;
-    consent = { prepareFirstUsePrompt: jest.fn() } as any;
-    controller = new JournalController(journalService, consent);
+    logger = { log: jest.fn().mockResolvedValue({ kind: 'logged' }) } as any;
+    controller = new JournalController(journalService, logger);
   });
 
-  it('offers the consent prompt as a separate ephemeral follow-up, leaving the saved-entry confirmation intact', async () => {
-    consent.prepareFirstUsePrompt.mockResolvedValue(PROMPT as any);
-    const interaction = mockInteraction();
+  describe('/journal write — routes through the inner-state logger', () => {
+    it('passes the entry content as the screened free text under the "Journal" prefix', async () => {
+      await controller.write([mockInteraction()], { content: 'I had a good day today' });
 
-    await controller.write([interaction], { content: 'I had a good day today' });
+      const write = logger.log.mock.calls[0][0];
+      expect(write.freeText).toEqual({ value: 'I had a good day today', derivePrefix: 'Journal' });
+    });
 
-    expect(consent.prepareFirstUsePrompt).toHaveBeenCalledWith('user_1');
+    it('validate rejects an entry under 10 characters before any screening or persist', async () => {
+      await controller.write([mockInteraction()], { content: 'short' });
 
-    // The confirmation reply carries the saved-entry copy — and neither the prompt text nor its
-    // buttons — so answering the prompt later can't edit this message away.
-    const reply = interaction.editReply.mock.calls.at(-1)![0];
-    expect(reply.content).toContain('Entry saved');
-    expect(reply.content).not.toContain('CONSENT_PROMPT');
-    expect(reply.components ?? []).toEqual([]);
+      const write = logger.log.mock.calls[0][0];
+      expect(write.validate!()).toContain("a bit short");
+    });
 
-    // The prompt rides on its own ephemeral follow-up message instead.
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'CONSENT_PROMPT',
-      components: ['row'],
-      flags: MessageFlags.Ephemeral,
+    it('validate passes for a long-enough entry', async () => {
+      await controller.write([mockInteraction()], { content: 'I had a good day today' });
+
+      const write = logger.log.mock.calls[0][0];
+      expect(write.validate!()).toBeNull();
+    });
+
+    it('persist saves through the journal service and returns the value-typed reflection + XP', async () => {
+      await controller.write([mockInteraction()], { content: 'I had a good day today' });
+
+      const write = logger.log.mock.calls[0][0];
+      const value = await write.persist();
+
+      expect(journalService.write).toHaveBeenCalledWith('user_1', 'I had a good day today');
+      expect(value).toEqual({ reflection: 'Nice.', xpAwarded: 10 });
+    });
+
+    it('confirm renders the standalone "Entry saved" copy from the typed value (no cast)', async () => {
+      await controller.write([mockInteraction()], { content: 'I had a good day today' });
+
+      const write = logger.log.mock.calls[0][0];
+      const text = write.confirm({ reflection: 'Nice.', xpAwarded: 10 });
+      expect(text).toBe('Entry saved. Nice. (+10 XP)');
     });
   });
 
-  it('does not follow up when the person was already asked', async () => {
-    consent.prepareFirstUsePrompt.mockResolvedValue(null);
-    const interaction = mockInteraction();
-
-    await controller.write([interaction], { content: 'I had a good day today' });
-
-    const reply = interaction.editReply.mock.calls.at(-1)![0];
-    expect(reply.content).toContain('Entry saved');
-    expect(reply.content).not.toContain('CONSENT_PROMPT');
-    expect(reply.components ?? []).toEqual([]);
-    expect(interaction.followUp).not.toHaveBeenCalled();
-  });
-
-  it('never offers the prompt on a crisis entry', async () => {
-    journalService.write.mockResolvedValue({ crisis: true, response: { content: 'resources' } } as any);
-    const interaction = mockInteraction();
-
-    await controller.write([interaction], { content: 'I want to end it all' });
-
-    expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
-    expect(interaction.followUp).not.toHaveBeenCalled();
-  });
-
-  // Commands register for the hub Guild as well as the DM (command-contexts.ts), so a public reply
-  // would broadcast a journal entry to the whole channel. Inner-state never crosses to a social
-  // surface (ADR-0002/0017) → both subcommands must defer ephemerally.
-  it('/journal write defers ephemerally so a guild-channel entry never leaks', async () => {
-    const interaction = mockInteraction();
-    await controller.write([interaction], { content: 'I had a good day today' });
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-  });
-
-  it('/journal prompt defers ephemerally', async () => {
+  // /journal prompt writes no inner state, so it keeps its own ephemeral defer.
+  it('/journal prompt defers ephemerally and replies with a prompt', async () => {
     const interaction = mockInteraction();
     await controller.prompt([interaction]);
+
     expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(interaction.editReply).toHaveBeenCalled();
   });
 });

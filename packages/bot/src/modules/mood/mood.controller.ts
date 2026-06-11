@@ -10,9 +10,8 @@ import {
   Subcommand,
   createCommandGroupDecorator,
 } from 'necord';
-import { MessageFlags } from 'discord.js';
 import { MoodService } from './mood.service';
-import { InnerStateConsentService } from '../memory/inner-state-consent.service';
+import { InnerStateLoggerService } from '../inner-state-logger/inner-state-logger.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const MoodCommandGroup = createCommandGroupDecorator({
@@ -44,7 +43,7 @@ export class MoodLogDto {
 export class MoodController {
   constructor(
     private readonly moodService: MoodService,
-    private readonly consent: InnerStateConsentService,
+    private readonly logger: InnerStateLoggerService,
   ) {}
 
   @Subcommand({ name: 'log', description: 'Log your mood with a rating' })
@@ -52,46 +51,35 @@ export class MoodController {
     @Context() [interaction]: SlashCommandContext,
     @Options() { rating, note }: MoodLogDto,
   ): Promise<void> {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
     const clamped = Math.max(1, Math.min(5, rating ?? 3));
     const emoji = MoodService.ratingToEmoji(clamped);
 
-    const result = await this.moodService.log(interaction.user.id, {
-      rating: clamped,
-      emoji,
-      note: note ?? undefined,
+    // The note is the one free-text field; the logger screens it, derives it (prefixed), and offers
+    // the at-most-once consent prompt. A rating-only log carries no free text, so none of that runs.
+    await this.logger.log({
+      interaction,
+      freeText: { value: note, derivePrefix: 'Mood note' },
+      // The 7-day trend is awaited here (inside the safe-path closure) and threaded through T, so the
+      // synchronous confirm can render it without an await of its own.
+      persist: async () => {
+        await this.moodService.create(interaction.user.id, {
+          rating: clamped,
+          emoji,
+          note,
+        });
+        return { trend: await this.moodService.trend(interaction.user.id) };
+      },
+      confirm: ({ trend }) => {
+        const trendText =
+          trend > 0
+            ? `\nYour ${Math.round(trend * 10) / 10}-day average: ${'⭐'.repeat(Math.round(trend))}`
+            : '';
+        const followUp = MoodService.isLowMood(clamped)
+          ? "I'm sorry you're feeling down. Want to talk about it?"
+          : 'Thanks for checking in.';
+        return `${emoji} Mood logged.${trendText}\n${followUp}`;
+      },
     });
-
-    if (result.crisis) {
-      // The note tripped Crisis Screening — surface real resources, skip the mood confirmation.
-      await interaction.editReply(result.response);
-      return;
-    }
-
-    const trend = await this.moodService.trend(interaction.user.id);
-    const trendText = trend > 0 ? `\nYour ${Math.round(trend * 10) / 10}-day average: ${'⭐'.repeat(Math.round(trend))}` : '';
-
-    const followUp = MoodService.isLowMood(clamped)
-      ? "I'm sorry you're feeling down. Want to talk about it?"
-      : "Thanks for checking in.";
-
-    const base = `${emoji} Mood logged.${trendText}\n${followUp}`;
-    await interaction.editReply({ content: base });
-
-    // Only a mood that carries a free-text note is "using a free-text inner-state field" — a
-    // rating-only log offers no prompt (ADR-0029). The consent module still gates display to once.
-    // The prompt rides a separate ephemeral follow-up so answering it can't erase this confirmation.
-    const prompt = note?.trim()
-      ? await this.consent.prepareFirstUsePrompt(interaction.user.id)
-      : null;
-    if (prompt) {
-      await interaction.followUp({
-        content: prompt.content,
-        components: prompt.components,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
   }
 }
 
@@ -100,35 +88,40 @@ export class FeelingDto {
     name: 'rating',
     description: 'How you feel right now, 1 (low) to 5 (great)',
     required: false,
+    min_value: 1,
+    max_value: 5,
   })
   rating?: number;
 }
 
 @Injectable()
 export class FeelingController {
-  constructor(private readonly moodService: MoodService) {}
+  constructor(
+    private readonly moodService: MoodService,
+    private readonly logger: InnerStateLoggerService,
+  ) {}
 
   @SlashCommand({ name: 'feeling', description: 'Quick mood check-in', ...COMMAND_CONTEXTS })
   async execute(
     @Context() [interaction]: SlashCommandContext,
     @Options() { rating }: FeelingDto,
   ): Promise<void> {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    const value = rating ?? 3;
+    // rating is a float NumberOption, so round + clamp to the 1..5 Int column before persisting
+    // (Discord enforces the min/max, but a client could still send a fractional value).
+    const value = Math.max(1, Math.min(5, Math.round(rating ?? 3)));
     const emoji = MoodService.ratingToEmoji(value);
-
-    await this.moodService.log(interaction.user.id, {
-      rating: value,
-      emoji,
-    });
-
     const followUp = MoodService.isLowMood(value)
       ? "I'm sorry you're feeling down. Want to talk about it?"
       : "Thanks for sharing how you feel. I'm here if you want to chat.";
 
-    await interaction.editReply({
-      content: `${emoji} Logged your mood. ${followUp}`,
+    // /feeling has no free-text field — a rating-only check-in — but it still routes through the
+    // logger (no freeText) so there is no mood-render path that bypasses screening.
+    await this.logger.log({
+      interaction,
+      persist: async () => {
+        await this.moodService.create(interaction.user.id, { rating: value, emoji });
+      },
+      confirm: () => `${emoji} Logged your mood. ${followUp}`,
     });
   }
 }

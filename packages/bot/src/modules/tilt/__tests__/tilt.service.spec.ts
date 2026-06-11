@@ -28,39 +28,21 @@ jest.mock('../../scheduler/scheduler.service', () => ({
   })),
 }));
 
-// TiltService imports the screening class for DI; stub the module so its transitive
-// escalation→pg-boss (ESM) imports never load. We inject a plain mock anyway.
-jest.mock('../../crisis/crisis-screening.service', () => ({
-  CrisisScreeningService: class {},
-}));
-
 import { SchedulerService } from '../../scheduler/scheduler.service';
 
+// TiltService is now a plain persist + state-machine service: crisis screening of the trigger and the
+// consent-gated derivation moved to InnerStateLogger (ADR-0028/0029). `acceptOffer` is the shared
+// create primitive the `/tilt start` controller persists through.
 describe('TiltService', () => {
   let service: TiltService;
   let strategyRetrieval: jest.Mocked<StrategyRetrievalService>;
   let scheduler: jest.Mocked<SchedulerService>;
-  let screening: { guard: jest.Mock };
-  let innerStateMemory: { deriveIfConsented: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
     strategyRetrieval = new StrategyRetrievalService() as any;
     scheduler = new SchedulerService() as any;
-    // Default: guard runs the persist and reports safe (screening behaviour tested separately).
-    screening = {
-      guard: jest.fn(async (_id, _content, persist) => ({
-        crisis: false,
-        value: await persist(),
-      })),
-    };
-    innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) };
-    service = new TiltService(
-      strategyRetrieval,
-      scheduler,
-      screening as any,
-      innerStateMemory as any,
-    );
+    service = new TiltService(strategyRetrieval, scheduler);
   });
 
   it('detects tilt language', () => {
@@ -182,7 +164,7 @@ describe('TiltService', () => {
     expect(offer.trigger).toBe('raging');
   });
 
-  it('accepting offer starts a tilt session', async () => {
+  it('acceptOffer — the shared create primitive — writes a session and returns the technique', async () => {
     (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
     (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
 
@@ -199,62 +181,6 @@ describe('TiltService', () => {
       }),
     });
     expect(technique).toBeTruthy();
-  });
-
-  it('screens the trigger then starts a tilt session', async () => {
-    (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
-    (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
-
-    const result = await service.start('123', {
-      trigger: 'lost ranked again',
-      severity: 7,
-    });
-
-    // The user-supplied trigger crosses the shared screened-record path (ADR-0028).
-    expect(screening.guard).toHaveBeenCalledWith('123', 'lost ranked again', expect.any(Function));
-    expect(prisma.tiltSession.create).toHaveBeenCalled();
-    expect(result.crisis).toBe(false);
-    if (!result.crisis) {
-      expect(result.value).toBeTruthy();
-    }
-  });
-
-  it('derives the trigger (only) through the screened path for a safe trigger (ADR-0029)', async () => {
-    (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
-    (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
-
-    await service.start('123', { trigger: 'lost ranked again', severity: 7 });
-
-    // Only the narrative trigger is handed over, prefixed — never the numeric severity.
-    expect(innerStateMemory.deriveIfConsented).toHaveBeenCalledWith(
-      '123',
-      'Tilt trigger: lost ranked again',
-    );
-  });
-
-  it('returns the crisis response and neither starts a session nor derives when the trigger trips screening', async () => {
-    const payload = { embeds: [{ title: '🚨 You matter' }] };
-    screening.guard.mockResolvedValue({ crisis: true, response: payload });
-
-    const result = await service.start('123', {
-      trigger: 'I want to end it all',
-      severity: 9,
-    });
-
-    expect(result).toEqual({ crisis: true, response: payload });
-    expect(prisma.tiltSession.create).not.toHaveBeenCalled();
-    // Crisis text in a tilt trigger never reaches derived Memory (ADR-0029).
-    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
-  });
-
-  it('does NOT derive a structured-only tilt — severity with no trigger stays in Postgres (ADR-0029)', async () => {
-    (prisma.tiltSession.create as jest.Mock).mockResolvedValue({});
-    (strategyRetrieval.search as jest.Mock).mockResolvedValue([]);
-
-    await service.start('123', { trigger: '', severity: 8 });
-
-    expect(prisma.tiltSession.create).toHaveBeenCalled();
-    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
   });
 
   it('resolves active tilt sessions', async () => {

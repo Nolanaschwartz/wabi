@@ -19,83 +19,104 @@ jest.mock('../mood.service', () => ({
     }
   },
 }));
+// Stub the logger module so its discord.js + crisis/memory imports never load; we inject a mock.
+jest.mock('../../inner-state-logger/inner-state-logger.service', () => ({
+  InnerStateLoggerService: class {},
+}));
 
-import { MessageFlags } from 'discord.js';
-import { MoodController } from '../mood.controller';
+import { MoodController, FeelingController } from '../mood.controller';
 import { MoodService } from '../mood.service';
-import { InnerStateConsentService } from '../../memory/inner-state-consent.service';
+import { InnerStateLoggerService } from '../../inner-state-logger/inner-state-logger.service';
 
 function mockInteraction() {
-  return {
-    deferReply: jest.fn().mockResolvedValue({}),
-    editReply: jest.fn().mockResolvedValue({}),
-    followUp: jest.fn().mockResolvedValue({}),
-    user: { id: 'user_1' },
-  } as any;
+  return { user: { id: 'user_1' } } as any;
 }
 
-const PROMPT = { content: 'CONSENT_PROMPT', components: ['row'] };
-
-describe('MoodController — first-use consent prompt', () => {
+describe('MoodController — routes through the inner-state logger', () => {
   let controller: MoodController;
   let moodService: jest.Mocked<MoodService>;
-  let consent: jest.Mocked<InnerStateConsentService>;
+  let logger: jest.Mocked<InnerStateLoggerService>;
 
   beforeEach(() => {
     moodService = {
-      log: jest.fn().mockResolvedValue({ crisis: false, value: undefined }),
+      create: jest.fn().mockResolvedValue(undefined),
       trend: jest.fn().mockResolvedValue(0),
     } as any;
-    consent = { prepareFirstUsePrompt: jest.fn().mockResolvedValue(PROMPT) } as any;
-    controller = new MoodController(moodService, consent);
+    logger = { log: jest.fn().mockResolvedValue({ kind: 'logged' }) } as any;
+    controller = new MoodController(moodService, logger);
   });
 
-  it('offers the prompt as a separate ephemeral follow-up when the mood carries a free-text note', async () => {
-    const interaction = mockInteraction();
+  it('logs the note as the screened free text under the "Mood note" prefix', async () => {
+    await controller.log([mockInteraction()], { rating: 3, note: 'feeling okay' });
 
-    await controller.log([interaction], { rating: 3, note: 'feeling okay' });
+    const write = logger.log.mock.calls[0][0];
+    expect(write.freeText).toEqual({ value: 'feeling okay', derivePrefix: 'Mood note' });
+  });
 
-    expect(consent.prepareFirstUsePrompt).toHaveBeenCalledWith('user_1');
+  it('persist writes the clamped mood and threads the 7-day trend through T (so confirm stays sync)', async () => {
+    moodService.trend.mockResolvedValue(3.2);
+    await controller.log([mockInteraction()], { rating: 9, note: 'great run' });
 
-    // The mood confirmation stands alone — no prompt copy, no buttons to erase it.
-    const reply = interaction.editReply.mock.calls.at(-1)![0];
-    expect(reply.content).toContain('Mood logged');
-    expect(reply.content).not.toContain('CONSENT_PROMPT');
-    expect(reply.components ?? []).toEqual([]);
+    const write = logger.log.mock.calls[0][0];
+    const value = await write.persist();
 
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      content: 'CONSENT_PROMPT',
-      components: ['row'],
-      flags: MessageFlags.Ephemeral,
+    // rating clamped to 1..5, emoji from the static, note passed through.
+    expect(moodService.create).toHaveBeenCalledWith('user_1', {
+      rating: 5,
+      emoji: '🙂',
+      note: 'great run',
     });
+    expect(value).toEqual({ trend: 3.2 });
   });
 
-  it('does NOT offer the prompt for a rating-only mood (no free text used)', async () => {
-    const interaction = mockInteraction();
+  it('confirm renders the standalone "Mood logged" copy including the trend', async () => {
+    await controller.log([mockInteraction()], { rating: 3, note: 'feeling okay' });
 
-    await controller.log([interaction], { rating: 4 });
+    const write = logger.log.mock.calls[0][0];
+    const text = write.confirm({ trend: 3.2 });
+    expect(text).toContain('Mood logged');
+    expect(text).toContain('3.2-day average');
+  });
+});
 
-    expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
-    const reply = interaction.editReply.mock.calls.at(-1)![0];
-    expect(reply.components ?? []).toEqual([]);
-    expect(interaction.followUp).not.toHaveBeenCalled();
+describe('FeelingController — rating-only, but never bypasses the logger', () => {
+  let controller: FeelingController;
+  let moodService: jest.Mocked<MoodService>;
+  let logger: jest.Mocked<InnerStateLoggerService>;
+
+  beforeEach(() => {
+    moodService = { create: jest.fn().mockResolvedValue(undefined) } as any;
+    logger = { log: jest.fn().mockResolvedValue({ kind: 'logged' }) } as any;
+    controller = new FeelingController(moodService, logger);
   });
 
-  it('never offers the prompt on a crisis note', async () => {
-    moodService.log.mockResolvedValue({ crisis: true, response: { content: 'resources' } } as any);
-    const interaction = mockInteraction();
+  it('/feeling routes through the logger with NO free text (no screen, no derive, no prompt)', async () => {
+    await controller.execute([mockInteraction()], { rating: 4 });
 
-    await controller.log([interaction], { rating: 1, note: 'I want to die' });
+    const write = logger.log.mock.calls[0][0];
+    expect(write.freeText).toBeUndefined();
 
-    expect(consent.prepareFirstUsePrompt).not.toHaveBeenCalled();
-    expect(interaction.followUp).not.toHaveBeenCalled();
+    await write.persist();
+    expect(moodService.create).toHaveBeenCalledWith('user_1', { rating: 4, emoji: '🙂' });
+    expect(write.confirm(undefined)).toContain('Logged your mood');
   });
 
-  // /mood log registers for the hub Guild too (command-contexts.ts); a public reply would broadcast
-  // the person's mood to the channel. Inner-state never crosses to a social surface (ADR-0002/0017).
-  it('/mood log defers ephemerally so a guild-channel mood never leaks', async () => {
-    const interaction = mockInteraction();
-    await controller.log([interaction], { rating: 4 });
-    expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+  // FeelingDto.rating is a float NumberOption, so it must be rounded + clamped to 1..5 before it
+  // reaches the Int Mood.rating column — otherwise a fractional rating throws on write and the
+  // ephemeral defer is never resolved (parity with /mood log's clamp).
+  it('rounds a fractional /feeling rating before persisting', async () => {
+    await controller.execute([mockInteraction()], { rating: 3.7 });
+
+    const write = logger.log.mock.calls[0][0];
+    await write.persist();
+    expect(moodService.create).toHaveBeenCalledWith('user_1', { rating: 4, emoji: '🙂' });
+  });
+
+  it('clamps an out-of-range /feeling rating to 1..5 before persisting', async () => {
+    await controller.execute([mockInteraction()], { rating: 100 });
+
+    const write = logger.log.mock.calls[0][0];
+    await write.persist();
+    expect(moodService.create).toHaveBeenCalledWith('user_1', { rating: 5, emoji: '🙂' });
   });
 });

@@ -30,6 +30,10 @@ _Avoid_: screen time, usage
 A written reflection by the person in response to a prompt, optionally annotated with an AI insight.
 _Avoid_: note, diary post
 
+**Screened-record write**:
+The single path every person-initiated free-text **Inner-state record** (a Mood note, a Tilt trigger, a Journal Entry) crosses on its way to storage — ephemeral reply, **Crisis Screening**, persist, consent-gated **Memory** derivation, then the first-use consent prompt — so the privacy choreography is identical regardless of which command surfaced the words (ADR-0028 calls it the "shared screened-record path"; ADR-0029 routes derived Memory through it). The "did this write carry minable free text" condition is decided **once** and gates both derivation and the consent prompt together. A structured-only log (a rating-only Mood) crosses it but derives no Memory; **Playtime** never enters it (no free-text field). Owned by one deep module, `InnerStateLogger`.
+_Avoid_: log helper, write wrapper, screened path (when precision matters)
+
 ### Coaching
 
 **AI Coach** (the act: **Coaching**):

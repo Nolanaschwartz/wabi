@@ -10,7 +10,7 @@ import {
 } from 'necord';
 import { CommandInteraction, MessageFlags } from 'discord.js';
 import { TiltService } from './tilt.service';
-import { InnerStateConsentService } from '../memory/inner-state-consent.service';
+import { InnerStateLoggerService } from '../inner-state-logger/inner-state-logger.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const TiltCommandGroup = createCommandGroupDecorator({
@@ -42,7 +42,7 @@ export class TiltStartDto {
 export class TiltController {
   constructor(
     private readonly tiltService: TiltService,
-    private readonly consent: InnerStateConsentService,
+    private readonly logger: InnerStateLoggerService,
   ) {}
 
   @Subcommand({ name: 'start', description: 'Start a tilt session' })
@@ -50,12 +50,24 @@ export class TiltController {
     @Context() [interaction]: SlashCommandContext,
     @Options() { trigger, severity }: TiltStartDto,
   ): Promise<void> {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    await this.handleStart(
+    const clampedSeverity = Math.max(1, Math.min(10, severity ?? 5));
+    // The raw trigger is the one free-text field. The stored trigger falls back to 'unknown' for a
+    // severity-only start, but only the raw trigger is screened/derived — so a severity-only start
+    // mines nothing (the logger gates derive + prompt on freeText.value, not the stored fallback).
+    const storedTrigger = trigger?.trim() ? trigger : 'unknown';
+
+    // The logger owns the ephemeral defer for this screened-record write.
+    await this.logger.log({
       interaction,
-      trigger,
-      Math.max(1, Math.min(10, severity ?? 5)),
-    );
+      freeText: { value: trigger, derivePrefix: 'Tilt trigger' },
+      persist: () =>
+        this.tiltService.acceptOffer(interaction.user.id, {
+          trigger: storedTrigger,
+          severity: clampedSeverity,
+        }),
+      confirm: (technique) =>
+        `Tilt session started. Trigger: ${storedTrigger} (Severity: ${clampedSeverity}/10)\n\nReset technique: ${technique}`,
+    });
   }
 
   @Subcommand({ name: 'resolve', description: 'Resolve your current tilt session' })
@@ -68,43 +80,6 @@ export class TiltController {
   async stats(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     await this.handleStats(interaction);
-  }
-
-  private async handleStart(
-    interaction: CommandInteraction,
-    rawTrigger: string | undefined,
-    severity: number,
-  ): Promise<void> {
-    const hasTrigger = !!rawTrigger?.trim();
-    const trigger = hasTrigger ? rawTrigger! : 'unknown';
-
-    const result = await this.tiltService.start(interaction.user.id, {
-      trigger,
-      severity,
-    });
-
-    if (result.crisis) {
-      // The trigger tripped Crisis Screening — surface real resources, skip the session confirmation.
-      await interaction.editReply(result.response);
-      return;
-    }
-
-    const base = `Tilt session started. Trigger: ${trigger} (Severity: ${severity}/10)\n\nReset technique: ${result.value}`;
-    await interaction.editReply({ content: base });
-
-    // Only a start with a real free-text trigger is "using a free-text inner-state field"; a
-    // severity-only start offers no prompt (ADR-0029). The consent module gates display to once.
-    // The prompt rides a separate ephemeral follow-up so answering it can't erase this confirmation.
-    const prompt = hasTrigger
-      ? await this.consent.prepareFirstUsePrompt(interaction.user.id)
-      : null;
-    if (prompt) {
-      await interaction.followUp({
-        content: prompt.content,
-        components: prompt.components,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
   }
 
   private async handleResolve(interaction: CommandInteraction): Promise<void> {

@@ -1,12 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import {
-  CrisisScreeningService,
-  ScreenedRecord,
-} from '../crisis/crisis-screening.service';
 import { CoachService } from '../coaching/coach.service';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
-import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -21,18 +16,16 @@ const PROMPTS = [
   "What made you smile today?",
 ];
 
-export type JournalWriteResult = ScreenedRecord<{
+export interface JournalWriteResult {
   reflection: string;
   xpAwarded: number;
-}>;
+}
 
 @Injectable()
 export class JournalService {
   constructor(
-    private readonly screening: CrisisScreeningService,
     private readonly coach: CoachService,
     private readonly habitEngagement: HabitEngagementService,
-    private readonly innerStateMemory: InnerStateMemoryService,
   ) {}
 
   async prompt(): Promise<string> {
@@ -40,32 +33,26 @@ export class JournalService {
     return PROMPTS[idx];
   }
 
+  // Plain persist: reflect → save the entry → log the Engagement (XP + streak) through the single
+  // writer (ADR-0027). Crisis screening of the entry content and consent-gated derivation are owned by
+  // InnerStateLogger (ADR-0028/0029), so this only ever runs from inside that logger's safe-path
+  // closure — crisis text never reaches it.
   async write(discordId: string, content: string): Promise<JournalWriteResult> {
-    // The entry content crosses the shared screened-record path before persisting (ADR-0028). A
-    // crisis hit surfaces the real locale Crisis Resources + records one Escalation Event — but no
-    // DM-session aftermath, since a journal entry is not a Conversation — and the entry is not saved.
-    return this.screening.guard(discordId, content, async () => {
-      const reflection = await this.generateReflection(content);
+    const reflection = await this.generateReflection(content);
 
-      await prisma.journalEntry.create({
-        data: {
-          userId: discordId,
-          content,
-          reflection: reflection || null,
-        },
-      });
-
-      // Log the Engagement (XP + streak) through the single writer (ADR-0027). XP is awarded once per
-      // engaged day, so a second entry the same day still saves but does not re-award.
-      const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
-
-      // Feed the screened free text into derived Memory, consent-gated and off by default (ADR-0029).
-      // This runs inside guard()'s success closure, so crisis text never reaches it. No metric is
-      // included — only the narrative, prefixed with its source word for extractor context.
-      await this.innerStateMemory.deriveIfConsented(discordId, `Journal: ${content}`);
-
-      return { reflection: reflection || '', xpAwarded };
+    await prisma.journalEntry.create({
+      data: {
+        userId: discordId,
+        content,
+        reflection: reflection || null,
+      },
     });
+
+    // XP is awarded once per engaged day, so a second entry the same day still saves but does not
+    // re-award.
+    const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
+
+    return { reflection: reflection || '', xpAwarded };
   }
 
   private async generateReflection(content: string): Promise<string> {

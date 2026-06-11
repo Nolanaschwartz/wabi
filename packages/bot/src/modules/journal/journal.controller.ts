@@ -9,7 +9,7 @@ import {
 } from 'necord';
 import { CommandInteraction, MessageFlags } from 'discord.js';
 import { JournalService } from './journal.service';
-import { InnerStateConsentService } from '../memory/inner-state-consent.service';
+import { InnerStateLoggerService } from '../inner-state-logger/inner-state-logger.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 export const JournalCommandGroup = createCommandGroupDecorator({
@@ -32,7 +32,7 @@ export class JournalWriteDto {
 export class JournalController {
   constructor(
     private readonly journalService: JournalService,
-    private readonly consent: InnerStateConsentService,
+    private readonly logger: InnerStateLoggerService,
   ) {}
 
   @Subcommand({ name: 'prompt', description: 'Get a reflective journaling prompt' })
@@ -46,8 +46,19 @@ export class JournalController {
     @Context() [interaction]: SlashCommandContext,
     @Options() { content }: JournalWriteDto,
   ): Promise<void> {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    await this.handleWrite(interaction, content);
+    // A journal entry is always free-text inner state, so it always screens, derives (prefixed), and
+    // is a first-use consent-prompt candidate. The too-short check is a pre-screen reject (no
+    // classifier call); the logger renders it on the ephemeral reply and owns the defer.
+    await this.logger.log({
+      interaction,
+      freeText: { value: content, derivePrefix: 'Journal' },
+      validate: () =>
+        content.length < 10
+          ? "That's a bit short. Try writing a few sentences about how you're feeling."
+          : null,
+      persist: () => this.journalService.write(interaction.user.id, content),
+      confirm: ({ reflection, xpAwarded }) => `Entry saved. ${reflection} (+${xpAwarded} XP)`,
+    });
   }
 
   private async handlePrompt(interaction: CommandInteraction): Promise<void> {
@@ -55,38 +66,5 @@ export class JournalController {
     await interaction.editReply({
       content: `Here's a prompt to get you thinking:\n"${prompt}"`,
     });
-  }
-
-  private async handleWrite(interaction: CommandInteraction, content: string): Promise<void> {
-    if (content.length < 10) {
-      await interaction.editReply({
-        content: "That's a bit short. Try writing a few sentences about how you're feeling.",
-      });
-      return;
-    }
-
-    const result = await this.journalService.write(interaction.user.id, content);
-
-    if (result.crisis) {
-      // Real locale Crisis Resources surfaced by screening (ADR-0028) — not a hand-rolled platitude.
-      await interaction.editReply(result.response);
-      return;
-    }
-
-    const base = `Entry saved. ${result.value.reflection} (+${result.value.xpAwarded} XP)`;
-    await interaction.editReply({ content: base });
-
-    // A journal entry is always free-text inner state, so it's a first-use prompt candidate. The
-    // consent module decides whether to actually show it (at most once across all fields, ADR-0029).
-    // The prompt rides a separate ephemeral follow-up, never the saved-entry reply: answering it
-    // edits that follow-up, so the confirmation can't be erased, and the privacy ask stays private.
-    const prompt = await this.consent.prepareFirstUsePrompt(interaction.user.id);
-    if (prompt) {
-      await interaction.followUp({
-        content: prompt.content,
-        components: prompt.components,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
   }
 }

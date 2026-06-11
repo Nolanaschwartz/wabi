@@ -3,11 +3,10 @@ import { TiltService } from './tilt.service';
 import { TiltController } from './tilt.controller';
 import { StrategyRetrievalModule } from '../strategy-retrieval/strategy-retrieval.module';
 import { SchedulerModule } from '../scheduler/scheduler.module';
-import { CrisisModule } from '../crisis/crisis.module';
-import { MemoryModule } from '../memory/memory.module';
+import { InnerStateLoggerModule } from '../inner-state-logger/inner-state-logger.module';
 
 @Module({
-  imports: [StrategyRetrievalModule, SchedulerModule, CrisisModule, MemoryModule],
+  imports: [StrategyRetrievalModule, SchedulerModule, InnerStateLoggerModule],
   providers: [TiltService, TiltController],
   exports: [TiltService],
 })

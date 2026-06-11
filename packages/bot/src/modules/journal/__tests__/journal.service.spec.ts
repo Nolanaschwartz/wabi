@@ -11,12 +11,6 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-// JournalService imports the screening class for DI; stub the module so its transitive
-// escalation→pg-boss (ESM) imports never load. We inject a plain mock anyway.
-jest.mock('../../crisis/crisis-screening.service', () => ({
-  CrisisScreeningService: class {},
-}));
-
 jest.mock('../../coaching/coach.service', () => ({
   CoachService: jest.fn().mockImplementation(() => ({
     generate: jest.fn(),
@@ -29,32 +23,19 @@ jest.mock('../../habit-engagement/habit-engagement.service', () => ({
   })),
 }));
 
+// JournalService is now a plain persist service: crisis screening of the entry and consent-gated
+// derivation moved to InnerStateLogger (ADR-0028/0029). `write` returns the reflection + XP directly
+// (no ScreenedRecord), so the controller reads the value without a cast.
 describe('JournalService', () => {
   let service: JournalService;
-  let screening: { guard: jest.Mock };
   let coach: jest.Mocked<CoachService>;
   let habitEngagement: jest.Mocked<HabitEngagementService>;
-  let innerStateMemory: { deriveIfConsented: jest.Mock };
-  const crisisPayload = { embeds: [{ title: '🚨 You matter' }] };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Default: guard runs the persist and reports safe (screening behaviour tested separately).
-    screening = {
-      guard: jest.fn(async (_id, _content, persist) => ({
-        crisis: false,
-        value: await persist(),
-      })),
-    };
     coach = new CoachService() as any;
     habitEngagement = new HabitEngagementService(undefined as any, undefined as any) as any;
-    innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) };
-    service = new JournalService(
-      screening as any,
-      coach,
-      habitEngagement,
-      innerStateMemory as any,
-    );
+    service = new JournalService(coach, habitEngagement);
   });
 
   it('returns a prompt', async () => {
@@ -62,86 +43,34 @@ describe('JournalService', () => {
     expect(prompt.length).toBeGreaterThan(10);
   });
 
-  it('screens the entry content as the free-text field before persisting (ADR-0028)', async () => {
-    (coach.generate as jest.Mock).mockResolvedValue('Thanks for sharing that.');
-    (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
-
-    await service.write('123', 'I had a good day today');
-
-    expect(screening.guard).toHaveBeenCalledWith(
-      '123',
-      'I had a good day today',
-      expect.any(Function),
-    );
-  });
-
-  it('saves entry with AI-generated reflection for safe content', async () => {
+  it('saves the entry with an AI-generated reflection and returns it', async () => {
     (coach.generate as jest.Mock).mockResolvedValue('Thanks for sharing that.');
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
     const result = await service.write('123', 'I had a good day today');
 
-    expect(result.crisis).toBe(false);
-    if (!result.crisis) {
-      expect(result.value.reflection).toBeTruthy();
-    }
+    expect(result.reflection).toBe('Thanks for sharing that.');
     expect(coach.generate).toHaveBeenCalled();
     expect(prisma.journalEntry.create).toHaveBeenCalled();
   });
 
-  it('logs a journal Engagement through the single writer on a saved entry (ADR-0027)', async () => {
+  it('logs a journal Engagement through the single writer and returns the awarded XP (ADR-0027)', async () => {
     (coach.generate as jest.Mock).mockResolvedValue('Nice.');
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
     const result = await service.write('123', 'I had a good day today');
 
     expect(habitEngagement.record).toHaveBeenCalledWith('123', 'journal');
-    expect(result.crisis).toBe(false);
-    if (!result.crisis) {
-      expect(result.value.xpAwarded).toBe(10);
-    }
+    expect(result.xpAwarded).toBe(10);
   });
 
-  it('derives Memory through the screened path for a safe entry (ADR-0029)', async () => {
-    (coach.generate as jest.Mock).mockResolvedValue('Thanks for sharing that.');
-    (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
-
-    await service.write('123', 'I had a good day today');
-
-    // The content is handed to the consent-gated inner-state module prefixed with its source word,
-    // and carries no metric — the module decides whether it actually becomes Memory.
-    expect(innerStateMemory.deriveIfConsented).toHaveBeenCalledWith(
-      '123',
-      'Journal: I had a good day today',
-    );
-  });
-
-  it('on a crisis verdict returns the real escalation payload and neither saves nor derives', async () => {
-    screening.guard.mockResolvedValue({ crisis: true, response: crisisPayload });
-
-    const result = await service.write('123', 'I want to end it all');
-
-    expect(result.crisis).toBe(true);
-    if (result.crisis) {
-      expect(result.response).toBe(crisisPayload);
-    }
-    expect(prisma.journalEntry.create).not.toHaveBeenCalled();
-    expect(coach.generate).not.toHaveBeenCalled();
-    // Crisis text physically cannot reach derived Memory — derivation rides inside guard()'s
-    // success closure, which never runs on a crisis verdict (ADR-0029).
-    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
-  });
-
-  it('falls back to default reflection on coach error', async () => {
+  it('falls back to a default reflection on coach error', async () => {
     (coach.generate as jest.Mock).mockRejectedValue(new Error('API down'));
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
     const result = await service.write('123', 'I had a good day today');
 
-    expect(result.crisis).toBe(false);
-    if (!result.crisis) {
-      expect(result.value.reflection).toBeTruthy();
-    }
+    expect(result.reflection).toBeTruthy();
     expect(prisma.journalEntry.create).toHaveBeenCalled();
   });
 });

@@ -1,10 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
-import {
-  CrisisScreeningService,
-  ScreenedRecord,
-} from '../crisis/crisis-screening.service';
-import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 
 const MOOD_EMOJIS: Record<number, string> = {
   1: '😞',
@@ -23,31 +18,18 @@ export interface MoodLog {
 
 @Injectable()
 export class MoodService {
-  constructor(
-    private readonly screening: CrisisScreeningService,
-    private readonly innerStateMemory: InnerStateMemoryService,
-  ) {}
-
-  // The mood `note` is free text a person can express distress into, so it crosses the shared
-  // screened-record path before the record is written (ADR-0028). A crisis note escalates and is not
-  // persisted; the controller renders the returned resources.
-  async log(discordId: string, mood: MoodLog): Promise<ScreenedRecord<void>> {
-    return this.screening.guard(discordId, mood.note, async () => {
-      await prisma.mood.create({
-        data: {
-          userId: discordId,
-          rating: mood.rating,
-          emoji: mood.emoji,
-          note: mood.note ?? null,
-          context: mood.context ?? null,
-        },
-      });
-
-      // Only the narrative note feeds derived Memory, consent-gated and off by default (ADR-0029).
-      // The numeric rating stays in Postgres. A metrics-only mood (no note) derives nothing.
-      if (mood.note?.trim()) {
-        await this.innerStateMemory.deriveIfConsented(discordId, `Mood note: ${mood.note}`);
-      }
+  // Plain persist: writes the mood record. Crisis screening of the free-text `note` and the
+  // consent-gated derivation of it are owned by InnerStateLogger now (ADR-0028/0029); a mood is only
+  // ever written from inside that logger's safe-path closure, so this method just touches Postgres.
+  async create(discordId: string, mood: MoodLog): Promise<void> {
+    await prisma.mood.create({
+      data: {
+        userId: discordId,
+        rating: mood.rating,
+        emoji: mood.emoji,
+        note: mood.note ?? null,
+        context: mood.context ?? null,
+      },
     });
   }
 

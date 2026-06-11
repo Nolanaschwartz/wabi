@@ -1,11 +1,10 @@
 import { Module } from '@nestjs/common';
 import { MoodService } from './mood.service';
 import { MoodController, FeelingController } from './mood.controller';
-import { CrisisModule } from '../crisis/crisis.module';
-import { MemoryModule } from '../memory/memory.module';
+import { InnerStateLoggerModule } from '../inner-state-logger/inner-state-logger.module';
 
 @Module({
-  imports: [CrisisModule, MemoryModule],
+  imports: [InnerStateLoggerModule],
   providers: [MoodService, MoodController, FeelingController],
   exports: [MoodService],
 })

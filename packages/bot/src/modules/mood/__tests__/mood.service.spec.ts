@@ -10,34 +10,19 @@ jest.mock('@wabi/shared', () => ({
   },
 }));
 
-// MoodService imports the screening class for DI; stub the module so its transitive
-// escalation→pg-boss (ESM) imports never load. We inject a plain mock anyway.
-jest.mock('../../crisis/crisis-screening.service', () => ({
-  CrisisScreeningService: class {},
-}));
-
+// MoodService is now a plain persist + read service: crisis screening of the note and consent-gated
+// derivation moved to InnerStateLogger (ADR-0028/0029), so the service no longer touches either seam.
 describe('MoodService', () => {
   let service: MoodService;
-  let screening: { guard: jest.Mock };
-  let innerStateMemory: { deriveIfConsented: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Default: guard runs the persist and reports safe. The screen-then-escalate behaviour itself is
-    // covered in crisis-screening.spec; here we only verify MoodService routes through the seam.
-    screening = {
-      guard: jest.fn(async (_id, _content, persist) => ({
-        crisis: false,
-        value: await persist(),
-      })),
-    };
-    innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) };
-    service = new MoodService(screening as any, innerStateMemory as any);
+    service = new MoodService();
   });
 
-  it('logs a mood record', async () => {
+  it('creates a mood record with a null note when none is given', async () => {
     (prisma.mood.create as jest.Mock).mockResolvedValue({});
-    await service.log('123', { rating: 4, emoji: '🙂' });
+    await service.create('123', { rating: 4, emoji: '🙂' });
 
     expect(prisma.mood.create).toHaveBeenCalledWith({
       data: {
@@ -50,48 +35,13 @@ describe('MoodService', () => {
     });
   });
 
-  it('screens the note as the free-text field before persisting (ADR-0028)', async () => {
+  it('persists the free-text note verbatim when present', async () => {
     (prisma.mood.create as jest.Mock).mockResolvedValue({});
-    await service.log('123', { rating: 3, emoji: '😐', note: 'feeling okay' });
+    await service.create('123', { rating: 3, emoji: '😐', note: 'feeling okay' });
 
-    expect(screening.guard).toHaveBeenCalledWith('123', 'feeling okay', expect.any(Function));
     expect(prisma.mood.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ note: 'feeling okay' }),
     });
-  });
-
-  it('returns the crisis result and neither persists nor derives when the note trips screening', async () => {
-    const payload = { embeds: [{ title: '🚨 You matter' }] };
-    screening.guard.mockResolvedValue({ crisis: true, response: payload });
-
-    const result = await service.log('123', {
-      rating: 1,
-      emoji: '😞',
-      note: 'I want to die',
-    });
-
-    expect(result).toEqual({ crisis: true, response: payload });
-    expect(prisma.mood.create).not.toHaveBeenCalled();
-    // Crisis text in a mood note never reaches derived Memory (ADR-0029).
-    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
-  });
-
-  it('derives the note (only) through the screened path for a safe note (ADR-0029)', async () => {
-    (prisma.mood.create as jest.Mock).mockResolvedValue({});
-
-    await service.log('123', { rating: 3, emoji: '😐', note: 'feeling okay' });
-
-    // Only the narrative note is handed over, prefixed — never the numeric rating.
-    expect(innerStateMemory.deriveIfConsented).toHaveBeenCalledWith('123', 'Mood note: feeling okay');
-  });
-
-  it('does NOT derive a structured-only mood — a rating with no note stays in Postgres (ADR-0029)', async () => {
-    (prisma.mood.create as jest.Mock).mockResolvedValue({});
-
-    await service.log('123', { rating: 4, emoji: '🙂' });
-
-    expect(prisma.mood.create).toHaveBeenCalled();
-    expect(innerStateMemory.deriveIfConsented).not.toHaveBeenCalled();
   });
 
   it('returns rolling average trend', async () => {
