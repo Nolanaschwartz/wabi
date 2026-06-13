@@ -3,7 +3,18 @@ import { safeFetch } from '../../lib/safe-fetch';
 export type MemoryEntry = {
   id: string;
   content: string;
+  /** mem0 similarity score for the search query; present on search hits, omitted elsewhere. */
+  similarity?: number;
+  /** When mem0 last touched this fact, epoch ms (from updated_at, falling back to created_at). */
+  updatedAt?: number;
 };
+
+/**
+ * How many hits to pull from mem0 on search. Wider than the prompt's display budget so the recency
+ * re-ranker (memory-ranker) can promote an older-but-relevant fact instead of it being cut by mem0's
+ * raw similarity sort before recency is ever weighed.
+ */
+export const SEARCH_CANDIDATE_LIMIT = 20;
 
 interface Mem0CreateResponse {
   id?: string;
@@ -12,7 +23,21 @@ interface Mem0CreateResponse {
 }
 
 interface Mem0SearchResponse {
-  results?: Array<{ id?: string; memory?: string }>;
+  results?: Array<{
+    id?: string;
+    memory?: string;
+    score?: number;
+    updated_at?: string;
+    created_at?: string;
+  }>;
+}
+
+/** mem0 returns ISO timestamps; convert to epoch ms, preferring updated_at, undefined if neither parses. */
+function parseRecency(updatedAt?: string, createdAt?: string): number | undefined {
+  const iso = updatedAt ?? createdAt;
+  if (!iso) return undefined;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? undefined : ms;
 }
 
 @Injectable()
@@ -97,6 +122,7 @@ export class MemoryStoreService {
           body: JSON.stringify({
             query,
             user_id: `mem0_${userId}`,
+            limit: SEARCH_CANDIDATE_LIMIT,
           }),
         },
         (status, body) => {
@@ -104,9 +130,11 @@ export class MemoryStoreService {
         },
       );
       if (!json) return [];
-      const results = (json.results ?? []).map((r: any) => ({
-        id: r.id,
+      const results: MemoryEntry[] = (json.results ?? []).map((r) => ({
+        id: r.id ?? '',
         content: r.memory ?? '',
+        similarity: r.score ?? 0,
+        updatedAt: parseRecency(r.updated_at, r.created_at),
       }));
       this.logOp('search', userId, 'success', {
         query,

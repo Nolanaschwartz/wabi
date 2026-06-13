@@ -1,4 +1,7 @@
-import { MemoryStoreService } from '../memory-store.service';
+import {
+  MemoryStoreService,
+  SEARCH_CANDIDATE_LIMIT,
+} from '../memory-store.service';
 
 describe('MemoryStoreService', () => {
   let store: MemoryStoreService;
@@ -78,14 +81,71 @@ describe('MemoryStoreService when enabled (hybrid graph era, ADR-0025)', () => {
     expect(results).toEqual([]);
   });
 
-  it('maps mem0 search hits to {id, content}', async () => {
+  // Recency-aware retrieval needs mem0's similarity score and recency timestamp on every hit — the
+  // ranker blends them. We surface `updated_at` (mem0 bumps it on reinforce/merge) as `updatedAt` in
+  // epoch ms, plus the raw `score` as `similarity`.
+  it('surfaces similarity score and updatedAt (epoch ms) on each search hit', async () => {
+    const updatedIso = '2026-06-01T00:00:00.000Z';
     fetchMock.mockResolvedValue({
       ok: true,
-      json: async () => ({ results: [{ id: 'm1', memory: 'tilts in ranked' }] }),
+      json: async () => ({
+        results: [
+          { id: 'm1', memory: 'tilts in ranked', score: 0.42, updated_at: updatedIso },
+        ],
+      }),
     });
 
     const results = await store.search('user-42', 'ranked');
 
-    expect(results).toEqual([{ id: 'm1', content: 'tilts in ranked' }]);
+    expect(results).toEqual([
+      {
+        id: 'm1',
+        content: 'tilts in ranked',
+        similarity: 0.42,
+        updatedAt: Date.parse(updatedIso),
+      },
+    ]);
+  });
+
+  // Re-ranking can only promote an older-but-relevant fact if it's actually in the candidate set, so
+  // search must pull a pool wider than the handful the prompt ultimately renders.
+  it('requests a wider candidate pool than the prompt display budget', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ results: [] }) });
+
+    await store.search('user-42', 'ranked');
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body);
+    expect(body.limit).toBe(SEARCH_CANDIDATE_LIMIT);
+    expect(SEARCH_CANDIDATE_LIMIT).toBeGreaterThan(5);
+  });
+
+  // Graph-derived hits may arrive without a timestamp — the entry must still come back (ranker treats
+  // missing recency as similarity-only), never throwing or dropping the fact.
+  it('leaves updatedAt undefined when a hit carries no timestamp', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ results: [{ id: 'm1', memory: 'plays valorant', score: 0.3 }] }),
+    });
+
+    const results = await store.search('user-42', 'games');
+
+    expect(results).toEqual([
+      { id: 'm1', content: 'plays valorant', similarity: 0.3, updatedAt: undefined },
+    ]);
+  });
+
+  it('falls back to created_at when updated_at is absent', async () => {
+    const createdIso = '2026-05-15T12:00:00.000Z';
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [{ id: 'm1', memory: 'new main', score: 0.5, created_at: createdIso }],
+      }),
+    });
+
+    const results = await store.search('user-42', 'main');
+
+    expect(results[0].updatedAt).toBe(Date.parse(createdIso));
   });
 });
