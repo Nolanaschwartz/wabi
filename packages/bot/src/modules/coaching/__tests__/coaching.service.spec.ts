@@ -47,7 +47,9 @@ jest.mock('../message-splitter', () => ({
 jest.mock('../../session-buffer/session-buffer.service', () => ({
   SessionBufferService: jest.fn().mockImplementation(() => ({
     append: jest.fn(),
-    getContext: jest.fn(),
+    // getContext is async in the real service; default it to a resolved null so every path (now
+    // including the pre-classifier context fetch) gets a thenable, not bare undefined.
+    getContext: jest.fn().mockResolvedValue(null),
     clearAndQuarantine: jest.fn(),
   })),
 }));
@@ -117,6 +119,8 @@ jest.mock('../../tilt/tilt.service', () => ({
     // The offer lifecycle now lives behind two methods on TiltService (#J deepening).
     respondToPendingOffer: jest.fn().mockResolvedValue({ kind: 'none' }),
     maybeOffer: jest.fn().mockReturnValue(null),
+    // Read by the classifier-context builder; defaults to "not in a session" for every other test.
+    hasActiveSession: jest.fn().mockResolvedValue(false),
   })),
 }));
 
@@ -231,7 +235,10 @@ describe('CoachingService', () => {
 
     // The LLM classifier is the only layer that catches a paraphrased, no-keyword crisis. It MUST
     // run for a consented-but-lapsed user — coaching is gated, safety is not.
-    expect(classifier.classify).toHaveBeenCalledWith('i guess things are fine');
+    expect(classifier.classify).toHaveBeenCalledWith(
+      'i guess things are fine',
+      expect.objectContaining({ inTiltSession: false }),
+    );
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
         // Dashboard carries the Subscribe control that starts checkout (issue #28).
@@ -336,6 +343,36 @@ describe('CoachingService', () => {
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
 
+  it('orders recalled memories by recency before building the coach prompt', async () => {
+    // Recency-aware recall: equally-relevant facts should reach the prompt newest-first, so the coach
+    // leans on what has been salient lately rather than a stale one-off. Search returns them oldest-
+    // first to prove the service re-ranks rather than passing mem0's order straight through.
+    const DAY = 24 * 60 * 60 * 1000;
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+      timezone: 'UTC',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
+    classifier.classify.mockResolvedValue('safe');
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: true,
+      subscriptionStatus: 'trialing',
+    });
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    (memoryStore.search as jest.Mock).mockResolvedValue([
+      { id: 'old', content: 'STALE FACT', similarity: 0.8, updatedAt: Date.now() - 90 * DAY },
+      { id: 'new', content: 'FRESH FACT', similarity: 0.8, updatedAt: Date.now() - 1 * DAY },
+    ]);
+    coach.generate.mockResolvedValue('ok');
+
+    await service.handle(mockMessage);
+
+    const prompt = coach.generate.mock.calls[0][1];
+    expect(prompt.indexOf('FRESH FACT')).toBeLessThan(prompt.indexOf('STALE FACT'));
+  });
+
   it('sends the coach reply without waiting on memory persistence', async () => {
     // mem0 ADD now runs hybrid vector+graph extraction (~20s+). deriveAndStore must NOT block the
     // user-visible reply — otherwise the bot appears to never respond. Simulate a persist that never
@@ -386,7 +423,10 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    expect(classifier.classify).toHaveBeenCalledWith('test message');
+    expect(classifier.classify).toHaveBeenCalledWith(
+      'test message',
+      expect.objectContaining({ inTiltSession: false }),
+    );
     expect(strategyRetrieval.search).toHaveBeenCalledWith('test message');
     expect(coach.generate).toHaveBeenCalled();
     expect(memoryStore.deriveAndStore).toHaveBeenCalledWith(
@@ -510,6 +550,62 @@ describe('CoachingService', () => {
     // Declining short-circuits before classification/coaching.
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
     expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('feeds active-tilt-session context to the classifier so technique-frustration is not misread as crisis', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: "it's not helping" });
+    // The exact false-positive scenario: user mid tilt-reset replies that the technique isn't working.
+    (tilt.hasActiveSession as jest.Mock).mockResolvedValue(true);
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue('Want to try a different reset?');
+
+    await service.handle(mockMessage);
+
+    // Classifier is told it's a tilt-reset reply — the context-blind false positive can't fire.
+    expect(classifier.classify).toHaveBeenCalledWith(
+      "it's not helping",
+      expect.objectContaining({ inTiltSession: true }),
+    );
+    expect(escalation.escalate).not.toHaveBeenCalled();
+  });
+
+  it('always passes a context object — cold messages carry inTiltSession:false, not a missing arg', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'just chatting' });
+    (tilt.hasActiveSession as jest.Mock).mockResolvedValue(false);
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue('hey');
+
+    await service.handle(mockMessage);
+
+    // Uniform: every screening call gets a context object; cold just means inTiltSession false / no turns.
+    expect(classifier.classify).toHaveBeenCalledWith(
+      'just chatting',
+      expect.objectContaining({ inTiltSession: false }),
+    );
+  });
+
+  it('still classifies when gathering context throws — safety degrades to inTiltSession:false, never blocks', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'rough night' });
+    (tilt.hasActiveSession as jest.Mock).mockRejectedValue(new Error('db down'));
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue('hey');
+
+    await service.handle(mockMessage);
+
+    // A failed tilt lookup degrades to inTiltSession:false; it must NOT throw past handle.
+    expect(classifier.classify).toHaveBeenCalledWith(
+      'rough night',
+      expect.objectContaining({ inTiltSession: false }),
+    );
   });
 
   it('coaches even when retrieval fails (graceful degradation)', async () => {

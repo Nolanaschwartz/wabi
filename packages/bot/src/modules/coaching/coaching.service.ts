@@ -1,16 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ClassifierService } from '../crisis/classifier.service';
+import { ClassifierService, type ClassifierContext } from '../crisis/classifier.service';
 import { CoachService } from './coach.service';
 import { buildCoachPrompt } from './coach-prompt';
 import { splitMessage } from './message-splitter';
 import { Message, DMChannel } from 'discord.js';
-import { SessionBufferService } from '../session-buffer/session-buffer.service';
+import { SessionBufferService, type SessionContext } from '../session-buffer/session-buffer.service';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../billing/access-resolver';
 import { MemoryStoreService } from '../memory/memory-store.service';
+import { rankByRecency } from '../memory/memory-ranker';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { EscalationService } from '../crisis/escalation.service';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
@@ -92,8 +93,16 @@ export class CoachingService {
       }
       const batch = coalesced.text;
 
+      // Disambiguating context for the safety classifier. The classifier is otherwise context-blind,
+      // and its fail-closed bias tips bare ambiguous phrases ("it's not helping", said about a tilt-
+      // reset technique) to 'crisis'. We fetch the live session once here and reuse it for the coach
+      // prompt below. Gathering context must NEVER block classification: any failure degrades to a
+      // context-free classify (the prior behaviour), with the tripwire floor still upstream. (ADR-0021.)
+      const session = await this.sessionBuffer.getContext(userId).catch(() => null);
+      const classifierContext = await this.buildClassifierContext(userId, session);
+
       const [classification, strategies] = await Promise.all([
-        this.classifier.classify(batch),
+        this.classifier.classify(batch, classifierContext),
         this.strategyRetrieval.search(batch).catch(() => []),
       ]);
 
@@ -135,14 +144,21 @@ export class CoachingService {
         }
       }
 
-      // Gather context (I/O), then hand it to the pure prompt assembler. CoachingService never
-      // shapes the prompt string itself — buildCoachPrompt owns persona + layout + read-back labels.
-      const session = await this.sessionBuffer.getContext(userId);
+      // Hand the already-fetched session (gathered above for the classifier) to the pure prompt
+      // assembler. CoachingService never shapes the prompt string itself — buildCoachPrompt owns
+      // persona + layout + read-back labels.
+      // Recency-aware recall: search pulls a wide candidate pool; re-rank so recently-salient facts
+      // lead before buildCoachPrompt truncates to its display budget (PRD recency-aware-memory-
+      // retrieval). similarity defaults to 0 for any hit mem0 returns without a score.
       const memories = await this.memoryStore.search(userId, batch);
+      const rankedMemories = rankByRecency(
+        memories.map((m) => ({ ...m, similarity: m.similarity ?? 0 })),
+        Date.now(),
+      );
       const { system, prompt } = buildCoachPrompt({
         currentMessage: batch,
         turns: session?.turns ?? [],
-        memories,
+        memories: rankedMemories,
         strategies,
         inAftermath,
       });
@@ -180,6 +196,28 @@ export class CoachingService {
     } finally {
       if (typingInterval) clearInterval(typingInterval);
     }
+  }
+
+  /**
+   * Assemble disambiguation context for the crisis classifier. Always returns an object so EVERY
+   * screening call carries context (empty when the message is cold) — the classifier wraps it in a
+   * uniform envelope either way. Every source is best-effort: a failed tilt lookup must not stop the
+   * classifier running, so it degrades to `inTiltSession: false` rather than throwing. (ADR-0021.)
+   */
+  private async buildClassifierContext(
+    userId: string,
+    session: SessionContext | null,
+  ): Promise<ClassifierContext> {
+    let inTiltSession = false;
+    try {
+      inTiltSession = await this.tilt.hasActiveSession(userId);
+    } catch {
+      inTiltSession = false;
+    }
+
+    const recentTurns = session?.turns?.length ? session.turns : undefined;
+
+    return { inTiltSession, recentTurns };
   }
 
   cancelPending(userId: string): void {
