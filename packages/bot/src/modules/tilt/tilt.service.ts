@@ -172,6 +172,22 @@ export class TiltService {
     return strategy ?? "Take a deep breath and step away for a bit.";
   }
 
+  /**
+   * Is the user mid tilt-reset right now? A session counts only while unresolved AND unexpired. The
+   * crisis classifier reads this to disambiguate technique-frustration from self-harm during a reset
+   * (e.g. "it's not helping" said about a breathing exercise). Read-only; never gates safety on its own.
+   */
+  async hasActiveSession(discordId: string): Promise<boolean> {
+    const count = await prisma.tiltSession.count({
+      where: {
+        userId: discordId,
+        resolved: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+    return count > 0;
+  }
+
   async resolve(discordId: string): Promise<void> {
     await prisma.tiltSession.updateMany({
       where: {

@@ -8,6 +8,7 @@ jest.mock('@wabi/shared', () => ({
       create: jest.fn(),
       updateMany: jest.fn(),
       findMany: jest.fn(),
+      count: jest.fn(),
     },
   },
 }));
@@ -228,6 +229,27 @@ describe('TiltService', () => {
     expect(stats.total).toBe(3);
     expect(stats.avgSeverity).toBeCloseTo(6.7, 1);
     expect(stats.commonTriggers[0].trigger).toBe('tilt');
+  });
+
+  // The crisis classifier reads this to disambiguate technique-frustration ("it's not helping") from
+  // self-harm during a reset — a session counts as active only while unresolved AND unexpired.
+  describe('hasActiveSession', () => {
+    it('is true when an unresolved, unexpired session exists', async () => {
+      (prisma.tiltSession.count as jest.Mock).mockResolvedValue(1);
+
+      const active = await service.hasActiveSession('123');
+
+      expect(active).toBe(true);
+      expect(prisma.tiltSession.count).toHaveBeenCalledWith({
+        where: { userId: '123', resolved: false, expiresAt: expect.any(Object) },
+      });
+    });
+
+    it('is false when no session is open', async () => {
+      (prisma.tiltSession.count as jest.Mock).mockResolvedValue(0);
+
+      expect(await service.hasActiveSession('123')).toBe(false);
+    });
   });
 
   it('returns empty stats when no sessions', async () => {
