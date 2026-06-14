@@ -1,4 +1,6 @@
 import { CoachingService } from '../coaching.service';
+import { CoachHandler } from '../coach-handler';
+import { DmRouterService } from '../dm-router.service';
 import { ClassifierService } from '../../crisis/classifier.service';
 import { CoachService } from '../coach.service';
 import { prisma } from '@wabi/shared';
@@ -146,6 +148,9 @@ describe('CoachingService', () => {
   let habitEngagement: jest.Mocked<HabitEngagementService>;
   let tilt: jest.Mocked<TiltService>;
   let userService: jest.Mocked<UserService>;
+  let intentRouter: { route: jest.Mock };
+  let journalDmHandler: { handle: jest.Mock; beginConversation: jest.Mock };
+  let journalSession: { isPending: jest.Mock; consume: jest.Mock; clear: jest.Mock };
 
   const mockMessage = {
     author: { id: '123', bot: false },
@@ -175,21 +180,48 @@ describe('CoachingService', () => {
     habitEngagement = (HabitEngagementService as jest.Mock)() as any;
     tilt = (TiltService as jest.Mock)() as any;
     userService = new UserService() as any;
+    // Observe-only intent router: defaults to coach/0 so dispatch behaviour is unchanged. Individual
+    // tests override route() to assert tracing.
+    intentRouter = { route: jest.fn().mockResolvedValue({ intent: 'coach', confidence: 0 }) };
+    // The coach body now lives in CoachHandler, reached via DmRouterService. Wire the REAL router +
+    // handler around the same leaf mocks so every behaviour assertion below (coach.generate, memory
+    // recency, session append, streak, derive) still exercises the real path end-to-end — the
+    // extraction is behaviour-identical, and these tests prove it.
+    const coachHandler = new CoachHandler(
+      coach,
+      sessionBuffer,
+      langfuseTracer,
+      memoryStore,
+      habitEngagement,
+    );
+    // Journal handler is mocked, but the router is REAL — so a confident inline journal verdict really
+    // routes here (proved below). Most tests drive the coach path (intent defaults to coach/0).
+    journalDmHandler = {
+      handle: jest.fn().mockResolvedValue(undefined),
+      beginConversation: jest.fn().mockResolvedValue(undefined),
+    };
+    // No journal capture armed by default; consume returns false unless a test arms it.
+    journalSession = {
+      isPending: jest.fn().mockResolvedValue(false),
+      consume: jest.fn().mockResolvedValue(true),
+      clear: jest.fn().mockResolvedValue(undefined),
+    };
+    const dmRouter = new DmRouterService(coachHandler, journalDmHandler as any, journalSession as any);
     service = new CoachingService(
       classifier,
-      coach,
       sessionBuffer,
       coachingSession,
       strategyRetrieval,
       burstCoalescer,
       langfuseTracer,
       accessResolver,
-      memoryStore,
       crisisAftermath,
       escalation as any,
-      habitEngagement,
       tilt,
       userService,
+      dmRouter,
+      intentRouter as any,
+      journalSession as any,
     );
   });
 
@@ -432,6 +464,116 @@ describe('CoachingService', () => {
     expect(memoryStore.deriveAndStore).toHaveBeenCalledWith(
       '123',
       expect.stringContaining('test message'),
+    );
+  });
+
+  it('runs the intent router in the parallel block and traces its verdict on a safe turn', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'want to journal about tonight' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generate.mockResolvedValue('ok');
+    // Sub-threshold journal verdict: still traced for tuning, but dispatch falls back to the coach.
+    intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.5 });
+
+    await service.handle(mockMessage);
+
+    expect(intentRouter.route).toHaveBeenCalledWith(
+      'want to journal about tonight',
+      expect.objectContaining({ recentTurns: undefined }),
+    );
+    // The verdict is traced for threshold tuning...
+    expect(langfuseTracer.trace).toHaveBeenCalledWith(
+      expect.any(String),
+      'intent',
+      'want to journal about tonight',
+      'journal',
+      { confidence: 0.5 },
+    );
+    // ...and below θ the turn still reaches the coach (coaching is the fallback).
+    expect(coach.generate).toHaveBeenCalled();
+  });
+
+  it('routes a confident inline journal turn to the journal handler instead of the coach', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
+      kind: 'ready',
+      text: 'journal: had a rough ranked night, feel worthless at the game',
+    });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.9 });
+
+    await service.handle(mockMessage);
+
+    // Real router → journal dispatch with the extracted entry content; coach is not consulted.
+    expect(journalDmHandler.handle).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '123' }),
+      'had a rough ranked night, feel worthless at the game',
+    );
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('skips the intent-router LLM call when a journal capture is pending, and captures the turn', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
+      kind: 'ready',
+      text: 'today i actually felt ok, won a couple games',
+    });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    journalSession.isPending.mockResolvedValue(true);
+    journalSession.consume.mockResolvedValue(true);
+
+    await service.handle(mockMessage);
+
+    // The router LLM is predetermined-away — no call.
+    expect(intentRouter.route).not.toHaveBeenCalled();
+    // The pending turn is consumed and written verbatim as the entry; coaching does not run.
+    expect(journalSession.consume).toHaveBeenCalledWith('123');
+    expect(journalDmHandler.handle).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '123' }),
+      'today i actually felt ok, won a couple games',
+    );
+    expect(coach.generate).not.toHaveBeenCalled();
+  });
+
+  it('clears the pending journal marker and escalates when the capture turn is a crisis', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: "i don't want to be here anymore" });
+    classifier.classify.mockResolvedValue('crisis');
+    strategyRetrieval.search.mockResolvedValue([]);
+    journalSession.isPending.mockResolvedValue(true);
+
+    await service.handle(mockMessage);
+
+    // The crisis text never reaches the journal writer; the marker is cleared so a later DM routes fresh.
+    expect(journalSession.clear).toHaveBeenCalledWith('123');
+    expect(journalDmHandler.handle).not.toHaveBeenCalled();
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+  });
+
+  it('discards the intent verdict on a crisis turn (never traced as intent, never dispatched)', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'i want to end it' });
+    classifier.classify.mockResolvedValue('crisis');
+    strategyRetrieval.search.mockResolvedValue([]);
+    intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.95 });
+
+    await service.handle(mockMessage);
+
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    expect(coach.generate).not.toHaveBeenCalled();
+    // The crisis short-circuit happens before the intent trace — the routing verdict is dropped.
+    expect(langfuseTracer.trace).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'intent',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
     );
   });
 
