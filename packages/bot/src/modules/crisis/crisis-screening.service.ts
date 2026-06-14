@@ -1,11 +1,26 @@
 import { Injectable } from '@nestjs/common';
 import { ClassifierService } from './classifier.service';
 import { EscalationService, CrisisResponse } from './escalation.service';
+import { Screened } from './screened';
+
+/** The optional free-text field a screened-record write may carry, with its Memory derive prefix. */
+export interface FreeTextField {
+  value: string | null | undefined;
+  derivePrefix: string;
+}
 
 /** The outcome of screening one piece of free-text input. */
 export type ScreeningVerdict =
   | { kind: 'crisis'; response: CrisisResponse }
   | { kind: 'safe' };
+
+/**
+ * The result of screening a write for the record tail: a crisis (the caller renders `response` and
+ * never records), or a clear screen carrying the `Screened` proof the recorder requires (ADR-0031).
+ */
+export type ScreenedForRecord =
+  | { crisis: true; response: CrisisResponse }
+  | { crisis: false; screened: Screened };
 
 /**
  * The outcome of a screened persist: either a crisis was caught (the record was NOT written and the
@@ -105,4 +120,54 @@ export class CrisisScreeningService {
     const value = await persist();
     return { crisis: false, value };
   }
+
+  /**
+   * The slash mint site for the transport-agnostic screened-record write (ADR-0031). Screens the
+   * field's free text first; on a crisis it escalates and returns the response WITHOUT a proof, so the
+   * caller cannot record. When the text clears — or is absent/blank (a structured-only record) — it
+   * returns a `Screened` proof carrying the exact safe text (or `null`) for the recorder to persist
+   * and derive. This is the only place a fresh classifier run mints a proof; the DM surface mints from
+   * its upstream verdict instead, so a journal-from-DM save is never re-screened.
+   */
+  async screenForRecord(
+    userId: string,
+    freeText?: FreeTextField,
+  ): Promise<ScreenedForRecord> {
+    const value = freeText?.value;
+    if (value && value.trim().length > 0) {
+      const verdict = await this.screen(userId, value);
+      if (verdict.kind === 'crisis') {
+        return { crisis: true, response: verdict.response };
+      }
+      return { crisis: false, screened: mintScreened(value, freeText!.derivePrefix) };
+    }
+    return { crisis: false, screened: mintScreened(null, null) };
+  }
+
+  /**
+   * The DM mint site (ADR-0031). On the DM coaching path the turn's free text was ALREADY screened by
+   * the upstream Crisis Classifier this turn — a spoke handler only runs on a turn that cleared it
+   * (ADR-0021/0030). This converts that standing verdict into a `Screened` proof WITHOUT a second,
+   * serial classifier call (the latency ADR-0030 protects). The caller MUST pass the exact text that
+   * was screened — the coalesced batch, persisted byte-identical — so the proof's integrity holds; a
+   * surface that transforms the text before persisting must re-screen via {@link screenForRecord}.
+   */
+  screenedFromUpstream(content: string, derivePrefix: string): Screened {
+    return mintScreened(content, derivePrefix);
+  }
+}
+
+/**
+ * The single auditable forge of a `Screened` proof. Co-located with screening so the cast lives
+ * beside the classifier call that justifies it (ADR-0031), and the single place blank/whitespace text
+ * is normalised to the structured-only shape: a mint with no minable text — `null`, `''`, or all
+ * whitespace — always yields `{ freeText: null, derivePrefix: null }`, so the recorder never derives an
+ * empty body or prompts for consent over a non-entry, regardless of which surface minted it. The exact
+ * (un-trimmed) screened string is preserved for the minable case, keeping derive ≡ persisted text.
+ */
+function mintScreened(freeText: string | null, derivePrefix: string | null): Screened {
+  if (freeText !== null && freeText.trim().length > 0) {
+    return { freeText, derivePrefix } as unknown as Screened;
+  }
+  return { freeText: null, derivePrefix: null } as unknown as Screened;
 }
