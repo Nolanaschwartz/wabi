@@ -39,6 +39,7 @@ jest.mock('../../crisis/classifier.service', () => ({
 jest.mock('../coach.service', () => ({
   CoachService: jest.fn().mockImplementation(() => ({
     generate: jest.fn(),
+    generateDetailed: jest.fn(),
   })),
 }));
 
@@ -72,7 +73,7 @@ jest.mock('../../burst-coalescer/burst-coalescer.service', () => ({
 
 jest.mock('../../langfuse/langfuse-tracer.service', () => ({
   LangfuseTracer: jest.fn().mockImplementation(() => ({
-    trace: jest.fn(),
+    span: jest.fn(),
     score: jest.fn(),
   })),
 }));
@@ -184,7 +185,7 @@ describe('CoachingService', () => {
     // tests override route() to assert tracing.
     intentRouter = { route: jest.fn().mockResolvedValue({ intent: 'coach', confidence: 0 }) };
     // The coach body now lives in CoachHandler, reached via DmRouterService. Wire the REAL router +
-    // handler around the same leaf mocks so every behaviour assertion below (coach.generate, memory
+    // handler around the same leaf mocks so every behaviour assertion below (coach.generateDetailed, memory
     // recency, session append, streak, derive) still exercises the real path end-to-end — the
     // extraction is behaviour-identical, and these tests prove it.
     const coachHandler = new CoachHandler(
@@ -280,7 +281,7 @@ describe('CoachingService', () => {
         content: expect.stringContaining('https://wabi.gg/dashboard'),
       }),
     );
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('escalates a lapsed user in crisis instead of paywalling them (ADR-0011/0021)', async () => {
@@ -308,7 +309,7 @@ describe('CoachingService', () => {
     expect(mockMessage.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('escalates on classifier crisis and quarantines session', async () => {
@@ -333,14 +334,15 @@ describe('CoachingService', () => {
     expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
     // The returned crisis payload is rendered on the DM channel.
     expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
-    expect(langfuseTracer.trace).toHaveBeenCalledWith(
-      expect.any(String),
-      'classify',
-      'batch',
-      'crisis',
-      { isCrisis: true },
+    expect(langfuseTracer.span).toHaveBeenCalledWith(
+      expect.objectContaining({
+        span: 'classify',
+        input: 'batch',
+        output: 'crisis',
+        isCrisis: true,
+      }),
     );
   });
 
@@ -361,17 +363,17 @@ describe('CoachingService', () => {
     (memoryStore.search as jest.Mock).mockResolvedValue([
       { id: 'm1', content: 'Tilts in ranked after losing two games in a row' },
     ]);
-    coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
+    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach' });
 
     await service.handle(mockMessage);
 
-    expect(coach.generate).toHaveBeenCalled();
+    expect(coach.generateDetailed).toHaveBeenCalled();
     expect(strategyRetrieval.search).toHaveBeenCalled();
     expect(sessionBuffer.append).toHaveBeenCalled();
     // Read-back: retrieved memory is injected into the coach prompt (now the 2nd arg — the assembled
     // prompt — with the system persona as the 1st; shaping lives in buildCoachPrompt).
     expect(memoryStore.search).toHaveBeenCalledWith('123', 'test message');
-    expect(coach.generate).toHaveBeenCalledWith(
+    expect(coach.generateDetailed).toHaveBeenCalledWith(
       expect.stringContaining('compassionate DM companion'),
       expect.stringContaining('Tilts in ranked'),
     );
@@ -400,11 +402,11 @@ describe('CoachingService', () => {
       { id: 'old', content: 'STALE FACT', similarity: 0.8, updatedAt: Date.now() - 90 * DAY },
       { id: 'new', content: 'FRESH FACT', similarity: 0.8, updatedAt: Date.now() - 1 * DAY },
     ]);
-    coach.generate.mockResolvedValue('ok');
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
 
     await service.handle(mockMessage);
 
-    const prompt = coach.generate.mock.calls[0][1];
+    const prompt = coach.generateDetailed.mock.calls[0][1];
     expect(prompt.indexOf('FRESH FACT')).toBeLessThan(prompt.indexOf('STALE FACT'));
   });
 
@@ -425,7 +427,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue('That sounds tough. Hang in there.');
+    coach.generateDetailed.mockResolvedValue({ text: 'That sounds tough. Hang in there.', model: 'test-coach' });
     // Never resolves — mimics a slow/hung hybrid extraction.
     (memoryStore.deriveAndStore as jest.Mock).mockReturnValue(new Promise<void>(() => {}));
 
@@ -454,7 +456,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
+    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach' });
 
     await service.handle(mockMessage);
 
@@ -463,7 +465,7 @@ describe('CoachingService', () => {
       expect.objectContaining({ inTiltSession: false }),
     );
     expect(strategyRetrieval.search).toHaveBeenCalledWith('test message');
-    expect(coach.generate).toHaveBeenCalled();
+    expect(coach.generateDetailed).toHaveBeenCalled();
     expect(memoryStore.deriveAndStore).toHaveBeenCalledWith(
       '123',
       expect.stringContaining('test message'),
@@ -476,7 +478,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue('ok');
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
     // Sub-threshold journal verdict: still traced for tuning, but dispatch falls back to the coach.
     intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.5 });
 
@@ -486,16 +488,43 @@ describe('CoachingService', () => {
       'want to journal about tonight',
       expect.objectContaining({ recentTurns: undefined }),
     );
-    // The verdict is traced for threshold tuning...
-    expect(langfuseTracer.trace).toHaveBeenCalledWith(
-      expect.any(String),
-      'intent',
-      'want to journal about tonight',
-      'journal',
-      { confidence: 0.5 },
+    // The verdict is traced for threshold tuning (intent span carries confidence + router latency)...
+    expect(langfuseTracer.span).toHaveBeenCalledWith(
+      expect.objectContaining({
+        span: 'intent',
+        input: 'want to journal about tonight',
+        output: 'journal',
+        confidence: 0.5,
+      }),
     );
     // ...and below θ the turn still reaches the coach (coaching is the fallback).
-    expect(coach.generate).toHaveBeenCalled();
+    expect(coach.generateDetailed).toHaveBeenCalled();
+  });
+
+  it('emits a retrieval span with strategy counts/scores/ids and no strategy text on a safe turn', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
+    classifier.classify.mockResolvedValue('safe');
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
+    strategyRetrieval.search.mockResolvedValue([
+      { id: 's1', content: 'box breathing', evidence: 'rct', effectivenessScore: 0.9 },
+      { id: 's2', content: 'reframing', evidence: 'meta', effectivenessScore: 0.7 },
+    ]);
+
+    await service.handle(mockMessage);
+
+    const retrieval = langfuseTracer.span.mock.calls
+      .map((c) => c[0] as any)
+      .find((p) => p.span === 'retrieval');
+    expect(retrieval).toBeDefined();
+    expect(retrieval.metadata.count).toBe(2);
+    expect(retrieval.metadata.ids).toEqual(['s1', 's2']);
+    expect(retrieval.metadata.scores).toEqual([0.9, 0.7]);
+    // No strategy body text crosses into the span.
+    expect(retrieval.input).toBe('');
+    expect(retrieval.output).toBe('');
+    expect(JSON.stringify(retrieval)).not.toContain('box breathing');
   });
 
   it('routes a confident inline journal turn to the journal handler instead of the coach', async () => {
@@ -516,7 +545,7 @@ describe('CoachingService', () => {
       expect.objectContaining({ userId: '123' }),
       'had a rough ranked night, feel worthless at the game',
     );
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('skips the intent-router LLM call when a journal capture is pending, and captures the turn', async () => {
@@ -541,7 +570,7 @@ describe('CoachingService', () => {
       expect.objectContaining({ userId: '123' }),
       'today i actually felt ok, won a couple games',
     );
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('clears the pending journal marker and escalates when the capture turn is a crisis', async () => {
@@ -569,14 +598,10 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
     // The crisis short-circuit happens before the intent trace — the routing verdict is dropped.
-    expect(langfuseTracer.trace).not.toHaveBeenCalledWith(
-      expect.any(String),
-      'intent',
-      expect.anything(),
-      expect.anything(),
-      expect.anything(),
+    expect(langfuseTracer.span).not.toHaveBeenCalledWith(
+      expect.objectContaining({ span: 'intent' }),
     );
   });
 
@@ -595,7 +620,7 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     expect(classifier.classify).not.toHaveBeenCalled();
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('sends the hourly-ceiling reply and never coaches it (rate_limited)', async () => {
@@ -619,7 +644,7 @@ describe('CoachingService', () => {
     // (the old sentinel bug re-fed it through the pipeline).
     expect(mockMessage.reply).toHaveBeenCalledWith('slow down please');
     expect(classifier.classify).not.toHaveBeenCalled();
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   const activeUser = () => {
@@ -648,7 +673,7 @@ describe('CoachingService', () => {
       expect.stringContaining('accept or decline'),
     );
     // An offer, not an auto-started session, and no coach reply this turn.
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('does not offer a tilt session during crisis aftermath', async () => {
@@ -657,14 +682,14 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue('Gentle reply.');
+    coach.generateDetailed.mockResolvedValue({ text: 'Gentle reply.', model: 'test-coach' });
     (crisisAftermath.isQuarantined as jest.Mock).mockResolvedValue(true);
 
     await service.handle(mockMessage);
 
     // Aftermath suppresses the offer entirely — maybeOffer is never consulted.
     expect(tilt.maybeOffer).not.toHaveBeenCalled();
-    expect(coach.generate).toHaveBeenCalled();
+    expect(coach.generateDetailed).toHaveBeenCalled();
   });
 
   it('accepting a pending offer starts a tilt session', async () => {
@@ -681,7 +706,7 @@ describe('CoachingService', () => {
     expect(acceptMsg.reply).toHaveBeenCalledWith(expect.stringContaining('Reset technique'));
     // The accept short-circuits before classification/coaching.
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('declining a pending offer does nothing but acknowledge', async () => {
@@ -694,7 +719,7 @@ describe('CoachingService', () => {
     expect(declineMsg.reply).toHaveBeenCalledWith('No problem.');
     // Declining short-circuits before classification/coaching.
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
-    expect(coach.generate).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
   it('feeds active-tilt-session context to the classifier so technique-frustration is not misread as crisis', async () => {
@@ -705,7 +730,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue('Want to try a different reset?');
+    coach.generateDetailed.mockResolvedValue({ text: 'Want to try a different reset?', model: 'test-coach' });
 
     await service.handle(mockMessage);
 
@@ -724,7 +749,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue('hey');
+    coach.generateDetailed.mockResolvedValue({ text: 'hey', model: 'test-coach' });
 
     await service.handle(mockMessage);
 
@@ -742,7 +767,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue('hey');
+    coach.generateDetailed.mockResolvedValue({ text: 'hey', model: 'test-coach' });
 
     await service.handle(mockMessage);
 
@@ -767,11 +792,11 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockRejectedValue(new Error('qdrant down'));
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generate.mockResolvedValue("That sounds tough. Hang in there.");
+    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach' });
 
     await service.handle(mockMessage);
 
-    expect(coach.generate).toHaveBeenCalled();
+    expect(coach.generateDetailed).toHaveBeenCalled();
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
 });

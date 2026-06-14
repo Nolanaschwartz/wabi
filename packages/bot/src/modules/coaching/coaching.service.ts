@@ -15,6 +15,14 @@ import { DmRouterService } from './dm-router.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
 
+// Resolve a promise while recording how long it took, so each parallel op can report its own span
+// latency. Failure handling stays with the caller (e.g. strategy search catches before measure).
+async function measure<T>(p: Promise<T>): Promise<{ value: T; latencyMs: number }> {
+  const start = Date.now();
+  const value = await p;
+  return { value, latencyMs: Date.now() - start };
+}
+
 @Injectable()
 export class CoachingService {
   private readonly logger = new JsonLogger(CoachingService.name);
@@ -107,11 +115,16 @@ export class CoachingService {
         // behind it; the dispatch is deferred to the safe path below. The crisis floor stays upstream of
         // the router: a crisis short-circuits here and the plan is discarded. (ADR-0021: safety is the
         // floor; routing is downstream of it.)
-        const [classification, strategies, decision] = await Promise.all([
-          this.classifier.classify(batch, classifierContext),
-          this.strategyRetrieval.search(batch).catch(() => []),
-          this.dmRouter.prepare(userId, batch, { recentTurns: session?.turns }),
+        // Time each parallel op independently so its span records its own latency — an operator can
+        // then see whether classification, retrieval, or routing was the slow part of the turn.
+        const [classifyResult, strategyResult, decisionResult] = await Promise.all([
+          measure(this.classifier.classify(batch, classifierContext)),
+          measure(this.strategyRetrieval.search(batch).catch(() => [])),
+          measure(this.dmRouter.prepare(userId, batch, { recentTurns: session?.turns })),
         ]);
+        const classification = classifyResult.value;
+        const strategies = strategyResult.value;
+        const decision = decisionResult.value;
 
         this.logger.log('pipeline parallel complete', {
           userId,
@@ -127,7 +140,7 @@ export class CoachingService {
           // JournalService.write and a later DM routes fresh. (Quarantine clears buffers too, but the
           // pending marker is the router's to clear.) Best-effort — a lingering marker expires on its TTL.
           if (decision.plan.kind === 'journal-capture') await this.dmRouter.clearPending(userId);
-          this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
+          this.langfuseTracer.span({ traceId, span: 'classify', input: batch, output: 'crisis', isCrisis: true });
           // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
           // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
           // DM channel. No more hand-assembling the sequence here and again on the tripwire path.
@@ -138,12 +151,40 @@ export class CoachingService {
           return;
         }
 
-        this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
+        this.langfuseTracer.span({
+          traceId,
+          span: 'classify',
+          input: batch,
+          output: 'safe',
+          latencyMs: classifyResult.latencyMs,
+        });
 
         // Observe-only: record the router's verdict on every safe turn so the dispatch threshold (θ) can
-        // be tuned against real traffic before any intent actually changes behaviour (Slice A2).
-        this.langfuseTracer.trace(traceId, 'intent', batch, decision.verdict.intent, {
+        // be tuned against real traffic before any intent actually changes behaviour (Slice A2). The
+        // intent span carries the router's latency as well as its confidence.
+        this.langfuseTracer.span({
+          traceId,
+          span: 'intent',
+          input: batch,
+          output: decision.verdict.intent,
           confidence: decision.verdict.confidence,
+          latencyMs: decisionResult.latencyMs,
+        });
+
+        // Which evidence-based strategies fed the coach prompt — counts/scores/ids only, never the
+        // strategy body text or transcript (ADR-0013). Diagnoses "the coach surfaced something
+        // irrelevant" on the strategy side. Tracing never breaks the hot path (ADR-0021).
+        this.langfuseTracer.span({
+          traceId,
+          span: 'retrieval',
+          input: '',
+          output: '',
+          latencyMs: strategyResult.latencyMs,
+          metadata: {
+            count: strategies.length,
+            ids: strategies.map((s) => s.id),
+            scores: strategies.map((s) => s.effectivenessScore ?? null),
+          },
         });
 
         // Safety has run (tripwire + classifier). Coaching is the paid surface: a lapsed user gets a
