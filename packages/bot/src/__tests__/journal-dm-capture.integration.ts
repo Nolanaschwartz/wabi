@@ -56,6 +56,7 @@ describe('Journal DM two-turn capture integration', () => {
     const { DmRouterService } = await import('../modules/coaching/dm-router.service');
     const { JournalService } = await import('../modules/journal/journal.service');
     const { JournalDmHandler } = await import('../modules/journal/journal-dm.handler');
+    const { InnerStateRecorderService } = await import('../modules/inner-state-logger/inner-state-recorder.service');
     const { SpokeSessionService } = await import('../modules/spoke-session/spoke-session.service');
     const shared = await import('@wabi/shared');
     prisma = shared.prisma;
@@ -76,8 +77,16 @@ describe('Journal DM two-turn capture integration', () => {
     } as any;
     const habitEngagement = { record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }) } as any;
     const journalService = new JournalService(coach, habitEngagement);
+    // The DM handler is now the DM adapter over the transport-free recorder (ADR-0031): it mints a
+    // Screened proof from the upstream verdict (no re-screen) and runs the shared persist→derive→consent
+    // tail. Use the real recorder with mocked memory/consent so the entry still persists for real.
     const innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) } as any;
-    const journalHandler = new JournalDmHandler(journalService, innerStateMemory, spokeSession);
+    const consent = { prepareFirstUsePrompt: jest.fn().mockResolvedValue(null) } as any;
+    const recorder = new InnerStateRecorderService(innerStateMemory, consent);
+    const screening = {
+      screenedFromUpstream: (content: string, derivePrefix: string) => ({ freeText: content, derivePrefix }),
+    } as any;
+    const journalHandler = new JournalDmHandler(journalService, screening, recorder, spokeSession);
 
     const memoryStore = {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
@@ -87,8 +96,14 @@ describe('Journal DM two-turn capture integration', () => {
     const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement);
     const classifier = { classify } as any;
     const intentRouter = { route: intentRoute } as any;
-    const tiltDmHandler = { handle: jest.fn().mockResolvedValue(false) } as any;
-    const moodDmHandler = { promptForRating: jest.fn(), capture: jest.fn() } as any;
+    const tiltDmHandler = {
+      invoke: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+    } as any;
+    const moodDmHandler = {
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'handled' }),
+    } as any;
     const dmRouter = new DmRouterService(
       coachHandler,
       journalHandler,
