@@ -79,10 +79,9 @@ describe('Journal DM two-turn capture integration', () => {
     } as any;
     const langfuseTracer = { trace: jest.fn() } as any;
     const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement);
-    const dmRouter = new DmRouterService(coachHandler, journalHandler, journalSession);
-
     const classifier = { classify } as any;
     const intentRouter = { route: intentRoute } as any;
+    const dmRouter = new DmRouterService(coachHandler, journalHandler, journalSession, intentRouter);
     const strategyRetrieval = { search: jest.fn().mockResolvedValue([]) } as any;
     const burstCoalescer = new BurstCoalescer();
     const accessResolver = { resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }) } as any;
@@ -110,8 +109,6 @@ describe('Journal DM two-turn capture integration', () => {
       tilt,
       userService,
       dmRouter,
-      intentRouter,
-      journalSession,
     );
   }, 60000);
 

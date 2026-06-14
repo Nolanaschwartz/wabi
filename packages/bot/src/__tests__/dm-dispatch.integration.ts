@@ -108,7 +108,7 @@ describe('DM dispatch integration', () => {
       consume: jest.fn().mockResolvedValue(false),
       clear: jest.fn().mockResolvedValue(undefined),
     } as any;
-    const dmRouter = new DmRouterService(coachHandler, journalDmHandler, journalSession);
+    const dmRouter = new DmRouterService(coachHandler, journalDmHandler, journalSession, intentRouter);
     const coaching = new CoachingService(
       classifier,
       sessionBuffer,
@@ -122,8 +122,6 @@ describe('DM dispatch integration', () => {
       tilt,
       new UserService(),
       dmRouter,
-      intentRouter,
-      journalSession,
     );
 
     const crisisScreening = { tripwire: jest.fn().mockReturnValue(false) } as any;
