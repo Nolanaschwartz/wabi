@@ -52,6 +52,8 @@ describe('DM dispatch integration', () => {
     const { SessionBufferService } = await import('../modules/session-buffer/session-buffer.service');
     const { BurstCoalescer } = await import('../modules/burst-coalescer/burst-coalescer.service');
     const { CoachingService } = await import('../modules/coaching/coaching.service');
+    const { CoachHandler } = await import('../modules/coaching/coach-handler');
+    const { DmRouterService } = await import('../modules/coaching/dm-router.service');
     const { EchoController } = await import('../modules/echo/echo.controller');
     const { UserService } = await import('../modules/user/user.service');
     const shared = await import('@wabi/shared');
@@ -87,22 +89,41 @@ describe('DM dispatch integration', () => {
       respondToPendingOffer: jest.fn().mockResolvedValue({ kind: 'none' }),
       maybeOffer: jest.fn().mockReturnValue(null),
     } as any;
+    // Observe-only intent router: coach/0 keeps dispatch behaviour unchanged for this slice.
+    const intentRouter = { route: jest.fn().mockResolvedValue({ intent: 'coach', confidence: 0 }) } as any;
 
+    // The coach body now lives in CoachHandler, dispatched via DmRouterService. Wire the real seam
+    // around the same mocks so the integration path still exercises the full coach pipeline.
+    const coachHandler = new CoachHandler(
+      coach,
+      sessionBuffer,
+      langfuseTracer,
+      memoryStore,
+      habitEngagement,
+    );
+    // Journal handler/session unused on this coach-path test (intent coach/0, nothing pending) — mock.
+    const journalDmHandler = { handle: jest.fn().mockResolvedValue(undefined) } as any;
+    const journalSession = {
+      isPending: jest.fn().mockResolvedValue(false),
+      consume: jest.fn().mockResolvedValue(false),
+      clear: jest.fn().mockResolvedValue(undefined),
+    } as any;
+    const dmRouter = new DmRouterService(coachHandler, journalDmHandler, journalSession);
     const coaching = new CoachingService(
       classifier,
-      coach,
       sessionBuffer,
       coachingSession,
       strategyRetrieval,
       burstCoalescer,
       langfuseTracer,
       accessResolver,
-      memoryStore,
       crisisAftermath,
       escalation,
-      habitEngagement,
       tilt,
       new UserService(),
+      dmRouter,
+      intentRouter,
+      journalSession,
     );
 
     const crisisScreening = { tripwire: jest.fn().mockReturnValue(false) } as any;

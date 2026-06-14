@@ -1,8 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ClassifierService, type ClassifierContext } from '../crisis/classifier.service';
-import { CoachService } from './coach.service';
-import { buildCoachPrompt } from './coach-prompt';
-import { splitMessage } from './message-splitter';
 import { Message, DMChannel } from 'discord.js';
 import { SessionBufferService, type SessionContext } from '../session-buffer/session-buffer.service';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
@@ -10,13 +7,13 @@ import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retriev
 import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../billing/access-resolver';
-import { MemoryStoreService } from '../memory/memory-store.service';
-import { rankByRecency } from '../memory/memory-ranker';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { EscalationService } from '../crisis/escalation.service';
-import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import { TiltService } from '../tilt/tilt.service';
 import { UserService } from '../user/user.service';
+import { DmRouterService } from './dm-router.service';
+import { IntentRouterService } from '../intent-router/intent-router.service';
+import { JournalSessionService } from '../journal/journal-session.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 
 @Injectable()
@@ -25,19 +22,19 @@ export class CoachingService {
 
   constructor(
     private readonly classifier: ClassifierService,
-    private readonly coach: CoachService,
     private readonly sessionBuffer: SessionBufferService,
     private readonly coachingSession: CoachingSessionService,
     private readonly strategyRetrieval: StrategyRetrievalService,
     private readonly burstCoalescer: BurstCoalescer,
     private readonly langfuseTracer: LangfuseTracer,
     private readonly accessResolver: AccessResolver,
-    private readonly memoryStore: MemoryStoreService,
     private readonly crisisAftermath: CrisisAftermathService,
     private readonly escalation: EscalationService,
-    private readonly habitEngagement: HabitEngagementService,
     private readonly tilt: TiltService,
     private readonly userService: UserService,
+    private readonly dmRouter: DmRouterService,
+    private readonly intentRouter: IntentRouterService,
+    private readonly journalSession: JournalSessionService,
   ) {}
 
   async handle(message: Message): Promise<void> {
@@ -101,13 +98,29 @@ export class CoachingService {
       const session = await this.sessionBuffer.getContext(userId).catch(() => null);
       const classifierContext = await this.buildClassifierContext(userId, session);
 
-      const [classification, strategies] = await Promise.all([
+      // Is a two-turn journal capture armed? Cheap, fail-soft Redis read. When set, THIS turn is the
+      // entry, so the intent-router LLM call is pointless — skip it (the dispatch is predetermined).
+      const pendingJournal = await this.journalSession.isPending(userId);
+
+      // The intent router runs IN this block — parallel with the crisis classifier and strategy
+      // search, so dispatch intent costs no added serial latency. It is fail-soft (coach/0 on any
+      // error) and is NEVER consulted on a crisis turn: a crisis short-circuits below and the intent
+      // is discarded. (ADR-0021: safety is the floor; routing is downstream of it.) When a journal
+      // capture is pending we substitute a synthetic verdict and skip the LLM entirely.
+      const [classification, strategies, intent] = await Promise.all([
         this.classifier.classify(batch, classifierContext),
         this.strategyRetrieval.search(batch).catch(() => []),
+        pendingJournal
+          ? Promise.resolve({ intent: 'journal' as const, confidence: 1 })
+          : this.intentRouter.route(batch, { recentTurns: session?.turns }),
       ]);
 
       if (classification === 'crisis') {
         this.burstCoalescer.cancel(userId);
+        // Crisis on the capture turn: drop the pending marker so the crisis text never reaches
+        // JournalService.write and a later DM routes fresh. (Quarantine clears buffers too, but the
+        // pending marker is ours to clear.) Best-effort — a lingering marker would expire on its TTL.
+        if (pendingJournal) await this.journalSession.clear(userId);
         this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
         // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
         // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
@@ -119,6 +132,12 @@ export class CoachingService {
       }
 
       this.langfuseTracer.trace(traceId, 'classify', batch, 'safe');
+
+      // Observe-only: record the router's verdict on every safe turn so the dispatch threshold (θ) can
+      // be tuned against real traffic before any intent actually changes behaviour (Slice A2).
+      this.langfuseTracer.trace(traceId, 'intent', batch, intent.intent, {
+        confidence: intent.confidence,
+      });
 
       // Safety has run (tripwire + classifier). Coaching is the paid surface: a lapsed user gets a
       // resubscribe prompt HERE — after crisis screening, never instead of it. (ADR-0011: classifier
@@ -144,55 +163,23 @@ export class CoachingService {
         }
       }
 
-      // Hand the already-fetched session (gathered above for the classifier) to the pure prompt
-      // assembler. CoachingService never shapes the prompt string itself — buildCoachPrompt owns
-      // persona + layout + read-back labels.
-      // Recency-aware recall: search pulls a wide candidate pool; re-rank so recently-salient facts
-      // lead before buildCoachPrompt truncates to its display budget (PRD recency-aware-memory-
-      // retrieval). similarity defaults to 0 for any hit mem0 returns without a score.
-      const memories = await this.memoryStore.search(userId, batch);
-      const rankedMemories = rankByRecency(
-        memories.map((m) => ({ ...m, similarity: m.similarity ?? 0 })),
-        Date.now(),
+      // The turn has cleared every gate: consented user, screened safe, active access, no tilt offer
+      // outstanding. Hand it to the router, which dispatches to the right handler (today: coach only).
+      // The crisis-safety floor does NOT live in the router — it is always upstream of this call.
+      await this.dmRouter.route(
+        {
+          message,
+          userId,
+          batch,
+          session,
+          strategies,
+          inAftermath,
+          timezone: user.timezone ?? 'UTC',
+          traceId,
+        },
+        intent,
+        pendingJournal,
       );
-      const { system, prompt } = buildCoachPrompt({
-        currentMessage: batch,
-        turns: session?.turns ?? [],
-        memories: rankedMemories,
-        strategies,
-        inAftermath,
-      });
-
-      const coachStart = Date.now();
-      const reply = await this.coach.generate(system, prompt);
-      const coachLatency = Date.now() - coachStart;
-
-    if (!reply) {
-        this.logger.warn('coach returned empty, sending fallback', { userId });
-        await message.reply("I'm not sure how to respond to that right now. Want to try again?");
-        return;
-      }
-
-      await this.sessionBuffer.append(userId, 'user', message.content);
-      await this.sessionBuffer.append(userId, 'assistant', reply);
-
-      const streakResult = await this.habitEngagement.record(userId, 'coaching', user.timezone ?? 'UTC').catch(() => null);
-
-      this.langfuseTracer.trace(traceId, 'coach', prompt, reply, { latencyMs: coachLatency });
-
-      // Send the reply BEFORE persisting long-term memory. deriveAndStore runs mem0's hybrid
-      // vector+graph extraction (~20s+ since ADR-0025), which must never delay the user-visible reply.
-      const parts = splitMessage(reply);
-      for (const part of parts) {
-        await message.reply(part);
-      }
-      if (streakResult && streakResult.message) {
-        await message.reply(streakResult.message);
-      }
-
-      // Fire-and-forget: persistence failures are already logged inside deriveAndStore, and memory is
-      // not needed to answer this turn. Awaiting it here previously starved the reply.
-      void this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
     } finally {
       if (typingInterval) clearInterval(typingInterval);
     }
