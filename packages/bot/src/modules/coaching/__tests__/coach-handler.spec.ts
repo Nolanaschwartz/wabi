@@ -107,6 +107,21 @@ describe('CoachHandler', () => {
     expect(JSON.stringify(memory)).not.toContain('SECRET FACT');
   });
 
+  it('includes the query and recalled memory text on the memory span in local full fidelity', async () => {
+    (langfuseTracer as any).localFullFidelity = true;
+    memoryStore.search.mockResolvedValue([
+      { id: 'm1', content: 'plays Valorant nightly', similarity: 0.9, updatedAt: 1 },
+    ]);
+
+    await handler.handle(baseCtx());
+
+    const memory = langfuseTracer.span.mock.calls.map((c) => c[0] as any).find((p) => p.span === 'memory');
+    expect(memory.input).not.toBe('');
+    expect(memory.output).toContain('plays Valorant nightly');
+    // Metadata still present alongside the verbatim text.
+    expect(memory.metadata.ids).toEqual(['m1']);
+  });
+
   it('still recalls memory and replies with a disabled (real) tracer — hot-path isolation', async () => {
     // A real tracer with no Langfuse env is disabled and emits nothing; recall + reply must proceed.
     const disabledHandler = new CoachHandler(

@@ -587,6 +587,28 @@ describe('CoachingService', () => {
     expect(JSON.stringify(retrieval)).not.toContain('box breathing');
   });
 
+  it('includes the query and strategy text on the retrieval span in local full fidelity', async () => {
+    activeUser();
+    (langfuseTracer as any).localFullFidelity = true;
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'help me focus' });
+    classifier.classify.mockResolvedValue('safe');
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
+    strategyRetrieval.search.mockResolvedValue([
+      { id: 's1', content: 'box breathing', evidence: 'rct', effectivenessScore: 0.9 },
+    ]);
+
+    await service.handle(mockMessage);
+
+    const retrieval = langfuseTracer.span.mock.calls
+      .map((c) => c[0] as any)
+      .find((p) => p.span === 'retrieval');
+    expect(retrieval.input).toBe('help me focus');
+    expect(retrieval.output).toContain('box breathing');
+    // Metadata still present alongside the verbatim text.
+    expect(retrieval.metadata.ids).toEqual(['s1']);
+  });
+
   it('routes a confident inline journal turn (save_entry) to the journal handler verbatim, not the coach', async () => {
     activeUser();
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({

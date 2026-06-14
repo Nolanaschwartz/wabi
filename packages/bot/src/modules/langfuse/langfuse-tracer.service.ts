@@ -65,18 +65,32 @@ export class LangfuseTracer implements OnApplicationShutdown {
     );
   }
 
+  // Local-dev full fidelity: outside production, redaction is relaxed so traces carry crisis content
+  // (ADR-0024) and verbatim retrieval/memory text (ADR-0013) for debugging. Read per-call from env —
+  // same lazy-getter rule as `enabled` — and exposed publicly so the retrieval/memory call sites gate
+  // their own (call-site-redacted) text against the SAME decision. Production keeps the full redaction.
+  get localFullFidelity(): boolean {
+    return process.env.NODE_ENV !== 'production';
+  }
+
   // A coaching turn is one trace tree: each call adds one child span under the turn's parent trace.
   // Sampling is decided once per turn (binary, keyed on traceId) so every span of a turn is kept or
   // dropped together — no partial trees. The builder returns null when the turn must not be sent
   // (disabled / unsampled / crisis); no content-bearing payload is constructed or posted in that case.
   span(params: SpanInput): void {
+    const local = this.localFullFidelity;
     // Latch the turn as crisis on the first crisis span, then suppress every span of a crisis turn.
-    if (params.isCrisis) this.latchCrisis(params.traceId);
-    if (this.crisisTurns.has(params.traceId)) return;
+    // Skipped in local full fidelity: there we WANT the whole crisis turn traced (latch + suppress
+    // are the prod safety belt-and-suspenders, not a dev behaviour).
+    if (!local) {
+      if (params.isCrisis) this.latchCrisis(params.traceId);
+      if (this.crisisTurns.has(params.traceId)) return;
+    }
     // Cheap gate first: skip all per-call work (UUIDs, timestamp, sample hash) when tracing is off.
     if (!this.enabled) return;
 
     const envelope = this.builder.build({
+      allowCrisis: local,
       traceId: params.traceId,
       span: params.span,
       input: params.input,
@@ -104,8 +118,10 @@ export class LangfuseTracer implements OnApplicationShutdown {
     value: number,
     isCrisis?: boolean,
   ): void {
-    if (isCrisis) this.latchCrisis(traceId);
-    if (this.crisisTurns.has(traceId)) return;
+    if (!this.localFullFidelity) {
+      if (isCrisis) this.latchCrisis(traceId);
+      if (this.crisisTurns.has(traceId)) return;
+    }
     if (!this.enabled) return;
 
     // Full-fidelity, NOT span-sampled: aggregate quality/SLA rates need every turn, and a score is

@@ -19,6 +19,10 @@ export interface SpanSpec {
   // Per-turn binary sampling decision (see shouldSample) — also resolved by the caller.
   sampled: boolean;
   isCrisis?: boolean;
+  // Local-dev escape hatch (ADR-0024 relaxed when NODE_ENV !== 'production'): when true, crisis content
+  // is retained for local debugging instead of dropped. Resolved by the caller from env — kept out of
+  // this pure module. Defaults to undefined (= drop), so prod and all existing call sites stay safe.
+  allowCrisis?: boolean;
   latencyMs?: number;
   confidence?: number;
   // Cost/identity signal for generation spans (coach). model id is always recorded when known;
@@ -62,7 +66,8 @@ export interface IngestionEnvelope {
 export class TracePayloadBuilder {
   build(spec: SpanSpec): IngestionEnvelope | null {
     if (!spec.enabled) return null;
-    if (spec.isCrisis) return null;
+    // Crisis content is dropped (ADR-0024) UNLESS the caller opted into local-dev full fidelity.
+    if (spec.isCrisis && !spec.allowCrisis) return null;
     if (!spec.sampled) return null;
 
     // Langfuse usage shape. Include only the token fields the provider actually returned — an omitted

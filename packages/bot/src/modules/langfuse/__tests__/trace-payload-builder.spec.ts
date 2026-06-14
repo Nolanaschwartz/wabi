@@ -82,6 +82,16 @@ describe('TracePayloadBuilder', () => {
       expect(builder.build(spec({ isCrisis: true }))).toBeNull();
     });
 
+    it('retains crisis content when allowCrisis is set (local-dev full fidelity)', () => {
+      const env = builder.build(spec({ span: 'classify', input: 'verbatim crisis text', isCrisis: true, allowCrisis: true }));
+      expect(env).not.toBeNull();
+      expect(childOf(env).body.input).toBe('verbatim crisis text');
+    });
+
+    it('still drops crisis content when allowCrisis is false even if enabled+sampled', () => {
+      expect(builder.build(spec({ isCrisis: true, allowCrisis: false }))).toBeNull();
+    });
+
     it('does not relabel level to debug (legacy sampling behaviour removed)', () => {
       expect(childOf(builder.build(spec())).body).not.toHaveProperty('level');
     });
