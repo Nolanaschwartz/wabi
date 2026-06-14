@@ -12,7 +12,6 @@ import { EscalationService } from '../crisis/escalation.service';
 import { TiltService } from '../tilt/tilt.service';
 import { UserService } from '../user/user.service';
 import { DmRouterService } from './dm-router.service';
-import { planTool, toolAllowed } from './tool-access';
 import { setupLinkMessage } from '../../lib/setup-link';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
 
@@ -137,10 +136,11 @@ export class CoachingService {
 
         if (classification === 'crisis') {
           this.burstCoalescer.cancel(userId);
-          // Crisis on a capture turn (journal or mood): drop the spoke floor so the crisis text never
-          // reaches a spoke writer and a later DM routes fresh. (Quarantine clears buffers too, but the
-          // floor is the router's to clear.) Best-effort — a lingering marker expires on its TTL.
-          if (decision.plan.kind === 'journal-capture' || decision.plan.kind === 'mood-capture') {
+          // Crisis on a capture turn (journal or mood holds the floor): drop the spoke floor so the
+          // crisis text never reaches a spoke writer and a later DM routes fresh. (Quarantine clears
+          // buffers too, but the floor is the router's to clear.) Best-effort — a marker expires on TTL.
+          // Read the router's own `isCapture` fact, not its internal plan shape (ADR-0030).
+          if (decision.isCapture) {
             await this.dmRouter.clearPending(userId);
           }
           this.langfuseTracer.span({ traceId, span: 'classify', input: batch, output: 'crisis', isCrisis: true });
@@ -190,12 +190,12 @@ export class CoachingService {
           },
         });
 
-        // Safety has run (tripwire + classifier). Gate at the TOOL boundary (ADR-0011): coaching and any
-        // new write (coach/give_prompt/save_entry) need active access — a lapsed user gets a resubscribe
-        // prompt HERE, after crisis screening, never instead of it. Reads of own data (get_entry) are
-        // allowed at any tier and pass this gate. (Dashboard carries the Subscribe control, #28.)
-        if (!toolAllowed(planTool(decision.plan), access.hasActiveAccess)) {
-          this.logger.log('tool gated: no active access', { userId, tool: planTool(decision.plan) });
+        // Safety has run (tripwire + classifier). Gate at the TOOL boundary (ADR-0011): the plan's tool
+        // carries its required access tier (resolved from the registry in prepare). Writes/new logging
+        // ('active') get a lapsed user a resubscribe prompt HERE, after crisis screening, never instead
+        // of it; reads of own data ('any', e.g. get_entry) pass. (Dashboard carries the Subscribe control.)
+        if (decision.access === 'active' && !access.hasActiveAccess) {
+          this.logger.log('tool gated: no active access', { userId, plan: decision.plan });
           const subscribeUrl = `${baseUrl}/dashboard`;
           await message.reply({
             content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,

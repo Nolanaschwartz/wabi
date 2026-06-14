@@ -150,7 +150,14 @@ describe('CoachingService', () => {
   let tilt: jest.Mocked<TiltService>;
   let userService: jest.Mocked<UserService>;
   let intentRouter: { route: jest.Mock };
-  let journalDmHandler: { handle: jest.Mock; beginConversation: jest.Mock; getEntry: jest.Mock };
+  let journalDmHandler: {
+    intent: string;
+    description: string;
+    defaultTool: string;
+    tools: Array<{ name: string; description: string; access: 'any' | 'active' }>;
+    invoke: jest.Mock;
+    resume: jest.Mock;
+  };
   let spokeSession: { active: jest.Mock; consume: jest.Mock; clear: jest.Mock };
 
   const mockMessage = {
@@ -198,9 +205,16 @@ describe('CoachingService', () => {
     // Journal handler is mocked, but the router is REAL — so a confident inline journal verdict really
     // routes here (proved below). Most tests drive the coach path (intent defaults to coach/0).
     journalDmHandler = {
-      handle: jest.fn().mockResolvedValue(undefined),
-      beginConversation: jest.fn().mockResolvedValue(undefined),
-      getEntry: jest.fn().mockResolvedValue(undefined),
+      intent: 'journal',
+      description: 'write or reflect',
+      defaultTool: 'give_prompt',
+      tools: [
+        { name: 'save_entry', description: '', access: 'active' },
+        { name: 'give_prompt', description: '', access: 'active' },
+        { name: 'get_entry', description: '', access: 'any' },
+      ],
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'handled' }),
     };
     // No spoke floor armed by default; consume returns null unless a test arms it.
     spokeSession = {
@@ -208,10 +222,21 @@ describe('CoachingService', () => {
       consume: jest.fn().mockResolvedValue('journal'),
       clear: jest.fn().mockResolvedValue(undefined),
     };
-    const tiltDmHandler = { handle: jest.fn().mockResolvedValue(true) };
+    const tiltDmHandler = {
+      intent: 'tilt',
+      description: 'calm frustration',
+      defaultTool: 'offer_session',
+      tools: [{ name: 'offer_session', description: '', access: 'active' }],
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+    };
     const moodDmHandler = {
-      promptForRating: jest.fn().mockResolvedValue(undefined),
-      capture: jest.fn().mockResolvedValue(undefined),
+      intent: 'mood',
+      description: 'log how they feel',
+      defaultTool: 'log_mood',
+      tools: [{ name: 'log_mood', description: '', access: 'active' }],
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'handled' }),
     };
     const dmRouter = new DmRouterService(
       coachHandler,
@@ -312,7 +337,7 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     // A read survives the lapsed tier: the read-back tool runs, and the user is NOT handed a subscribe prompt.
-    expect(journalDmHandler.getEntry).toHaveBeenCalled();
+    expect(journalDmHandler.invoke).toHaveBeenCalledWith('get_entry', expect.anything());
     expect(mockMessage.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
@@ -520,6 +545,7 @@ describe('CoachingService', () => {
 
     expect(intentRouter.route).toHaveBeenCalledWith(
       'want to journal about tonight',
+      expect.any(Array), // the generated spoke catalogue
       expect.objectContaining({ recentTurns: undefined }),
     );
     // The verdict is traced for threshold tuning (intent span carries confidence + router latency)...
@@ -574,15 +600,16 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    // Real router → journal dispatch with the verbatim message as the entry; coach is not consulted.
-    expect(journalDmHandler.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: '123' }),
-      'had a rough ranked night, feel worthless at the game',
+    // Real router → journal dispatch through the save_entry tool (whole batch is the entry); coach is
+    // not consulted. The verbatim-content write is the spoke's own contract (journal-dm.handler.spec).
+    expect(journalDmHandler.invoke).toHaveBeenCalledWith(
+      'save_entry',
+      expect.objectContaining({ userId: '123', batch: 'had a rough ranked night, feel worthless at the game' }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
-  it('skips the intent-router LLM call when a journal capture is pending, and captures the turn', async () => {
+  it('skips the intent-router LLM call when a journal capture is pending, and resumes the spoke', async () => {
     activeUser();
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
       kind: 'ready',
@@ -592,17 +619,15 @@ describe('CoachingService', () => {
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
     spokeSession.active.mockResolvedValue('journal');
-    spokeSession.consume.mockResolvedValue('journal');
 
     await service.handle(mockMessage);
 
     // The router LLM is predetermined-away — no call.
     expect(intentRouter.route).not.toHaveBeenCalled();
-    // The pending turn is consumed and written verbatim as the entry; coaching does not run.
-    expect(spokeSession.consume).toHaveBeenCalledWith('123');
-    expect(journalDmHandler.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: '123' }),
-      'today i actually felt ok, won a couple games',
+    // The pending turn returns to the journal spoke, which owns the consume + verbatim write; coaching
+    // does not run. (The consume-then-write contract is covered in journal-dm.handler.spec.)
+    expect(journalDmHandler.resume).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '123', batch: 'today i actually felt ok, won a couple games' }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
@@ -618,7 +643,8 @@ describe('CoachingService', () => {
 
     // The crisis text never reaches the journal writer; the floor is cleared so a later DM routes fresh.
     expect(spokeSession.clear).toHaveBeenCalledWith('123');
-    expect(journalDmHandler.handle).not.toHaveBeenCalled();
+    expect(journalDmHandler.resume).not.toHaveBeenCalled();
+    expect(journalDmHandler.invoke).not.toHaveBeenCalled();
     expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
   });
 
