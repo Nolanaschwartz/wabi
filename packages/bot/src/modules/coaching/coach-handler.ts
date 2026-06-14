@@ -9,6 +9,7 @@ import { MemoryStoreService } from '../memory/memory-store.service';
 import { rankByRecency } from '../memory/memory-ranker';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import type { StrategyPoint } from '../strategy-retrieval/strategy-retrieval.service';
+import type { Spoke, SpokeResult, ToolSpec } from './spoke';
 import { JsonLogger } from '../../lib/json-logger';
 
 /**
@@ -36,7 +37,7 @@ export interface DmTurnContext {
  * those stay upstream in CoachingService.
  */
 @Injectable()
-export class CoachHandler {
+export class CoachHandler implements Spoke {
   private readonly logger = new JsonLogger(CoachHandler.name);
 
   constructor(
@@ -46,6 +47,26 @@ export class CoachHandler {
     private readonly memoryStore: MemoryStoreService,
     private readonly habitEngagement: HabitEngagementService,
   ) {}
+
+  readonly intent = 'coach';
+  readonly description = 'anything else — general venting, chat, advice';
+  readonly defaultTool = 'coach';
+
+  readonly tools: ToolSpec[] = [
+    { name: 'coach', description: 'Talk it through with the AI wellness coach', access: 'active' },
+  ];
+
+  /** Coach is both a registered spoke (the router can pick it) and the universal fallthrough target. */
+  async invoke(_tool: string, ctx: DmTurnContext): Promise<SpokeResult> {
+    await this.handle(ctx);
+    return { kind: 'handled' };
+  }
+
+  /** Coach holds no capture floor; a resume just coaches the turn. */
+  async resume(ctx: DmTurnContext): Promise<SpokeResult> {
+    await this.handle(ctx);
+    return { kind: 'handled' };
+  }
 
   async handle(ctx: DmTurnContext): Promise<void> {
     const { message, userId, batch, session, strategies, inAftermath, timezone, traceId } = ctx;

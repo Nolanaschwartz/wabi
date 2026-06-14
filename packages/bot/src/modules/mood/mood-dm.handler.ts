@@ -3,6 +3,7 @@ import { MoodService } from './mood.service';
 import { parseMoodRating } from './mood-rating';
 import { SpokeSessionService } from '../spoke-session/spoke-session.service';
 import type { DmTurnContext } from '../coaching/coach-handler';
+import type { Spoke, SpokeResult, ToolSpec } from '../coaching/spoke';
 
 /**
  * The mood spoke, a two-turn capture (mirrors journal give_prompt → capture). The hub routes a mood
@@ -10,11 +11,37 @@ import type { DmTurnContext } from '../coaching/coach-handler';
  * the rating. Safety and access are upstream; mood logging is gated active-only at the tool boundary.
  */
 @Injectable()
-export class MoodDmHandler {
+export class MoodDmHandler implements Spoke {
   constructor(
     private readonly mood: MoodService,
     private readonly spokeSession: SpokeSessionService,
   ) {}
+
+  readonly intent = 'mood';
+  readonly description = 'they want to log how they feel';
+  readonly defaultTool = 'log_mood';
+
+  readonly tools: ToolSpec[] = [
+    { name: 'log_mood', description: 'Ask for a 1–5 mood rating and log it', access: 'active' },
+  ];
+
+  /** A fresh mood turn: prompt for the rating and arm the floor. Unknown tools take the same safe path. */
+  async invoke(_tool: string, ctx: DmTurnContext): Promise<SpokeResult> {
+    await this.promptForRating(ctx);
+    return { kind: 'handled' };
+  }
+
+  /**
+   * Continue the mood capture: atomically consume the floor and log the rating turn. A floor that
+   * expired between prepare() and now falls through to coaching (the intent LLM was skipped).
+   */
+  async resume(ctx: DmTurnContext): Promise<SpokeResult> {
+    if ((await this.spokeSession.consume(ctx.userId)) === 'mood') {
+      await this.capture(ctx);
+      return { kind: 'handled' };
+    }
+    return { kind: 'fallthrough' };
+  }
 
   /** Turn 1: ask for a rating and arm the mood floor. Writes nothing — the rating is the NEXT turn. */
   async promptForRating(ctx: DmTurnContext): Promise<void> {

@@ -6,7 +6,7 @@ import type { DmTurnContext } from '../../coaching/coach-handler';
 describe('MoodDmHandler', () => {
   let handler: MoodDmHandler;
   let mood: { create: jest.Mock; trend: jest.Mock };
-  let spokeSession: { setActive: jest.Mock };
+  let spokeSession: { setActive: jest.Mock; consume: jest.Mock };
 
   const ctx = (over: Partial<DmTurnContext> = {}): DmTurnContext => ({
     message: { content: 'i want to log my mood', reply: jest.fn().mockResolvedValue({}) } as any,
@@ -22,8 +22,46 @@ describe('MoodDmHandler', () => {
 
   beforeEach(() => {
     mood = { create: jest.fn().mockResolvedValue(undefined), trend: jest.fn().mockResolvedValue(0) };
-    spokeSession = { setActive: jest.fn().mockResolvedValue(undefined) };
+    spokeSession = {
+      setActive: jest.fn().mockResolvedValue(undefined),
+      consume: jest.fn().mockResolvedValue('mood'),
+    };
     handler = new MoodDmHandler(mood as unknown as MoodService, spokeSession as unknown as SpokeSessionService);
+  });
+
+  describe('Spoke interface (invoke / resume)', () => {
+    it('exposes log_mood (active) as its tool', () => {
+      expect(handler.intent).toBe('mood');
+      expect(handler.tools).toEqual([expect.objectContaining({ name: 'log_mood', access: 'active' })]);
+    });
+
+    it('invoke prompts for a rating, arms the floor, and reports handled', async () => {
+      const result = await handler.invoke('log_mood', ctx());
+
+      expect(spokeSession.setActive).toHaveBeenCalledWith('123', 'mood');
+      expect(mood.create).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'handled' });
+    });
+
+    it('resume consumes the floor and logs the rating when claimed', async () => {
+      spokeSession.consume.mockResolvedValue('mood');
+      const c = ctx({ batch: 'feeling like a 4' });
+
+      const result = await handler.resume(c);
+
+      expect(spokeSession.consume).toHaveBeenCalledWith('123');
+      expect(mood.create).toHaveBeenCalledWith('123', { rating: 4, emoji: expect.any(String) });
+      expect(result).toEqual({ kind: 'handled' });
+    });
+
+    it('resume falls through (no log) when the floor expired', async () => {
+      spokeSession.consume.mockResolvedValue(null);
+
+      const result = await handler.resume(ctx({ batch: '4' }));
+
+      expect(mood.create).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'fallthrough' });
+    });
   });
 
   describe('promptForRating (turn 1)', () => {

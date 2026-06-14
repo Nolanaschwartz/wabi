@@ -55,4 +55,39 @@ describe('TiltDmHandler', () => {
     expect(offered).toBe(false);
     expect(c.message.reply).not.toHaveBeenCalled();
   });
+
+  describe('Spoke interface (invoke / resume)', () => {
+    it('exposes offer_session (active) as its tool', () => {
+      expect(handler.intent).toBe('tilt');
+      expect(handler.tools).toEqual([expect.objectContaining({ name: 'offer_session', access: 'active' })]);
+    });
+
+    it('invoke offers the session and reports handled', async () => {
+      const result = await handler.invoke('offer_session', ctx());
+
+      expect(tilt.offerFromIntent).toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'handled' });
+    });
+
+    it('invoke falls through (no offer) when one is already pending', async () => {
+      tilt.offerFromIntent.mockReturnValue(null);
+
+      const result = await handler.invoke('offer_session', ctx());
+
+      expect(result).toEqual({ kind: 'fallthrough' });
+    });
+
+    it('invoke suppresses the offer during crisis aftermath and falls through', async () => {
+      const result = await handler.invoke('offer_session', ctx({ inAftermath: true }));
+
+      expect(tilt.offerFromIntent).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'fallthrough' });
+    });
+
+    it('resume always falls through — tilt arms no capture floor', async () => {
+      const result = await handler.resume(ctx());
+
+      expect(result).toEqual({ kind: 'fallthrough' });
+    });
+  });
 });
