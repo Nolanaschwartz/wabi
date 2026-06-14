@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { getProvider } from '@wabi/shared';
+import { JsonLogger } from '../../lib/json-logger';
 
 /** Wellness-verb intents the router can dispatch to. `coach` is the catch-all / fallback. */
 export type Intent = 'journal' | 'tilt' | 'mood' | 'coach';
@@ -44,7 +45,7 @@ const ROUTER_SYSTEM_PROMPT =
  */
 @Injectable()
 export class IntentRouterService {
-  private readonly logger = new Logger(IntentRouterService.name);
+  private readonly logger = new JsonLogger(IntentRouterService.name);
 
   async route(batch: string, context?: IntentContext): Promise<IntentResult> {
     try {

@@ -1,11 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { getProvider, type ProviderConfig } from '@wabi/shared';
+import { JsonLogger } from '../../lib/json-logger';
 
 @Injectable()
 export class CoachService {
-  private readonly logger = new Logger(CoachService.name);
+  private readonly logger = new JsonLogger(CoachService.name);
   private config: ProviderConfig;
 
   constructor() {

@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { safeFetch } from '../../lib/safe-fetch';
+import { JsonLogger } from '../../lib/json-logger';
 
 export type TraceStep = 'classify' | 'coach' | 'retrieval' | 'intent';
 
@@ -16,7 +17,7 @@ function sampleRate(): number {
 
 @Injectable()
 export class LangfuseTracer {
-  private readonly logger = new Logger(LangfuseTracer.name);
+  private readonly logger = new JsonLogger(LangfuseTracer.name);
 
   // Evaluated per-call, NOT cached in the constructor: the tracer can be constructed before
   // ConfigModule populates process.env, which froze `enabled` to false and silently disabled

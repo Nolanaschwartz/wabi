@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { safeFetch } from '../../lib/safe-fetch';
+import { JsonLogger } from '../../lib/json-logger';
 /** A derived-memory fact with no query context (e.g. a full export / delete enumeration). */
 export type MemoryEntry = {
   id: string;
@@ -54,7 +55,7 @@ function parseRecency(updatedAt?: string, createdAt?: string): number | undefine
 
 @Injectable()
 export class MemoryStoreService {
-  private readonly logger = new Logger(MemoryStoreService.name);
+  private readonly logger = new JsonLogger(MemoryStoreService.name);
   private enabled: boolean;
   private baseUrl: string | undefined;
 

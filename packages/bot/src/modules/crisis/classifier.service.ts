@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { getProvider, type ProviderConfig } from '@wabi/shared';
+import { JsonLogger } from '../../lib/json-logger';
 
 export type ClassifierResult = 'safe' | 'crisis';
 
@@ -46,7 +47,7 @@ const MAX_CONTEXT_USER_MESSAGES = 5;
 
 @Injectable()
 export class ClassifierService {
-  private readonly logger = new Logger(ClassifierService.name);
+  private readonly logger = new JsonLogger(ClassifierService.name);
   private config: ProviderConfig;
 
   constructor() {
