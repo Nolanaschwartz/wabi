@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { startOfDayInTZ } from '../../lib/timezone-util';
-import { XpService } from '../xp/xp.service';
 
 const STREAK_GRACE_DAYS = 1;
 
@@ -15,11 +14,11 @@ export interface StreakTransition {
 
 @Injectable()
 export class StreaksService {
-  constructor(private readonly xpService: XpService) {}
-
-  // Streaks is a read model over the Engagement log (the xpEntry table). It never writes XP — that is
-  // the one writer's job (HabitEngagementService, ADR-0027). `advance` computes the streak transition
-  // from the log as it stands BEFORE the new Engagement is recorded.
+  // Streaks is a pure read model over the Engagement log (the xpEntry table). It never writes XP — that
+  // is the one writer's job (HabitEngagementService, ADR-0027) — and never reads XP totals: the
+  // cross-cutting wellness profile is assembled one layer up, in HabitEngagementService, so this model
+  // stays free of any XP collaborator. `advance` computes the streak transition from the log as it
+  // stands BEFORE the new Engagement is recorded.
   async advance(
     discordId: string,
     timezone: string = 'UTC',
@@ -129,25 +128,4 @@ export class StreaksService {
 
     return { score, level };
   }
-
-  async profile(discordId: string): Promise<{
-    xp: number;
-    streak: number;
-    wellnessScore: number;
-    wellnessLevel: string;
-  }> {
-    const [totalXp, streakData, wellness] = await Promise.all([
-      this.xpService.total(discordId),
-      this.getCurrentStreak(discordId),
-      this.wellnessScore(discordId),
-    ]);
-
-    return {
-      xp: totalXp,
-      streak: streakData,
-      wellnessScore: wellness.score,
-      wellnessLevel: wellness.level,
-    };
-  }
-
 }
