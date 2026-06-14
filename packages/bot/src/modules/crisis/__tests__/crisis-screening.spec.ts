@@ -165,3 +165,80 @@ describe('CrisisScreeningService.guard — the shared screened-record path', () 
     expect(result).toEqual({ crisis: false, value: undefined });
   });
 });
+
+describe('CrisisScreeningService.screenForRecord — the slash mint site (ADR-0031)', () => {
+  let service: CrisisScreeningService;
+  let classifier: { classify: jest.Mock };
+  let escalation: { escalate: jest.Mock };
+  const payload = { embeds: [{ title: '🚨 You matter' }] };
+
+  beforeEach(() => {
+    classifier = { classify: jest.fn().mockResolvedValue('safe') };
+    escalation = { escalate: jest.fn().mockResolvedValue(payload) };
+    service = new CrisisScreeningService(classifier as any, escalation as any);
+  });
+
+  it('mints a proof carrying the exact screened text and prefix when the field clears', async () => {
+    const result = await service.screenForRecord('123', {
+      value: 'I had a good day',
+      derivePrefix: 'Mood note',
+    });
+
+    expect(result).toEqual({
+      crisis: false,
+      screened: { freeText: 'I had a good day', derivePrefix: 'Mood note' },
+    });
+  });
+
+  it('returns a crisis without a proof and never mints on a crisis hit', async () => {
+    const result = await service.screenForRecord('123', {
+      value: 'I want to die',
+      derivePrefix: 'Journal',
+    });
+
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', 'field');
+    expect(result).toEqual({ crisis: true, response: payload });
+    expect((result as any).screened).toBeUndefined();
+  });
+
+  it('mints a null-free-text proof for a structured-only record (no field)', async () => {
+    const result = await service.screenForRecord('123');
+
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(escalation.escalate).not.toHaveBeenCalled();
+    expect(result).toEqual({ crisis: false, screened: { freeText: null, derivePrefix: null } });
+  });
+
+  it('mints a null-free-text proof for whitespace-only free text (mines nothing)', async () => {
+    const result = await service.screenForRecord('123', { value: '   ', derivePrefix: 'Mood note' });
+
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(result).toEqual({ crisis: false, screened: { freeText: null, derivePrefix: null } });
+  });
+});
+
+describe('CrisisScreeningService.screenedFromUpstream — the DM mint site (ADR-0031)', () => {
+  let service: CrisisScreeningService;
+
+  beforeEach(() => {
+    const classifier = { classify: jest.fn().mockResolvedValue('safe') };
+    const escalation = { escalate: jest.fn() };
+    service = new CrisisScreeningService(classifier as any, escalation as any);
+  });
+
+  it('converts the upstream verdict into a proof carrying the exact text and prefix (no re-screen)', () => {
+    expect(service.screenedFromUpstream('had a rough night', 'Journal')).toEqual({
+      freeText: 'had a rough night',
+      derivePrefix: 'Journal',
+    });
+  });
+
+  it.each([
+    ['empty string', ''],
+    ['whitespace only', '   \n\t '],
+  ])('normalises blank content (%s) to the structured-only shape — never freeText with a dangling prefix', (_label, blank) => {
+    // The single mint forge collapses blank text to { null, null }, so neither mint site can produce
+    // the unrepresentable "prefix without minable text" state, regardless of caller.
+    expect(service.screenedFromUpstream(blank, 'Journal')).toEqual({ freeText: null, derivePrefix: null });
+  });
+});

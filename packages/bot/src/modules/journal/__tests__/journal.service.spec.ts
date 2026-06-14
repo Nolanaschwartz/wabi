@@ -7,6 +7,7 @@ jest.mock('@wabi/shared', () => ({
   prisma: {
     journalEntry: {
       create: jest.fn(),
+      findFirst: jest.fn(),
     },
   },
 }));
@@ -62,6 +63,27 @@ describe('JournalService', () => {
 
     expect(habitEngagement.record).toHaveBeenCalledWith('123', 'journal');
     expect(result.xpAwarded).toBe(10);
+  });
+
+  it('latestEntry returns the most recent entry for the user (read-only, newest first)', async () => {
+    const entry = { content: 'rough ranked night', reflection: 'glad you wrote it', createdAt: new Date('2026-06-13T20:00:00Z') };
+    (prisma.journalEntry.findFirst as jest.Mock).mockResolvedValue(entry);
+
+    const result = await service.latestEntry('123');
+
+    expect(result).toEqual(entry);
+    expect(prisma.journalEntry.findFirst).toHaveBeenCalledWith({
+      where: { userId: '123' },
+      orderBy: { createdAt: 'desc' },
+    });
+    // A pure read — never writes or records engagement.
+    expect(prisma.journalEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('latestEntry returns null when the user has no entries', async () => {
+    (prisma.journalEntry.findFirst as jest.Mock).mockResolvedValue(null);
+
+    expect(await service.latestEntry('123')).toBeNull();
   });
 
   it('falls back to a default reflection on coach error', async () => {

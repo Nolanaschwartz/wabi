@@ -34,6 +34,8 @@ data read / export / delete  -> ALWAYS
 
 A lapsed user's free-form DM therefore runs tripwire + classifier (cost is bounded — the cheap `CLASSIFIER_MODEL`, never the coach), and on no crisis returns a **rate-limited** (once per session/day, never per message) caring resubscribe prompt. "Read-only data access" is served via the web dashboard and read-only slash commands (`/profile`, `/mood stats`), not free-form DM.
 
+> **Amendment (hub-and-spoke router):** the DM hub's `get_entry` tool reads the person's own most-recent Journal entry back to them conversationally in DM. This is a pure read — no write, no new AI work — so, like data export, it is allowed at **any tier**; a lapsed user never loses read access to what they wrote. It widens "read-only slash commands" above to include the hub's read tool: the property that mattered for the paywall was *read-only and ungated*, not the specific surface. New writes and prompts in the same hub (`save_entry`, `give_prompt`, coaching) stay Active-only — consistent with "Only the coaching DM path gates on Active Access."
+
 ## Why
 
 Charging for inference is necessary (ADR-0005), but a wellness companion must not weaponise a person's own mental-health history as conversion pressure. Separating "new AI work" (gated) from "your existing data and your rights" (never gated) keeps the paywall ethical.

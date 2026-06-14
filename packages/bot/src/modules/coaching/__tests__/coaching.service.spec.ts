@@ -150,8 +150,15 @@ describe('CoachingService', () => {
   let tilt: jest.Mocked<TiltService>;
   let userService: jest.Mocked<UserService>;
   let intentRouter: { route: jest.Mock };
-  let journalDmHandler: { handle: jest.Mock; beginConversation: jest.Mock };
-  let journalSession: { isPending: jest.Mock; consume: jest.Mock; clear: jest.Mock };
+  let journalDmHandler: {
+    intent: string;
+    description: string;
+    defaultTool: string;
+    tools: Array<{ name: string; description: string; access: 'any' | 'active' }>;
+    invoke: jest.Mock;
+    resume: jest.Mock;
+  };
+  let spokeSession: { active: jest.Mock; consume: jest.Mock; clear: jest.Mock };
 
   const mockMessage = {
     author: { id: '123', bot: false },
@@ -198,20 +205,46 @@ describe('CoachingService', () => {
     // Journal handler is mocked, but the router is REAL — so a confident inline journal verdict really
     // routes here (proved below). Most tests drive the coach path (intent defaults to coach/0).
     journalDmHandler = {
-      handle: jest.fn().mockResolvedValue(undefined),
-      beginConversation: jest.fn().mockResolvedValue(undefined),
+      intent: 'journal',
+      description: 'write or reflect',
+      defaultTool: 'give_prompt',
+      tools: [
+        { name: 'save_entry', description: '', access: 'active' },
+        { name: 'give_prompt', description: '', access: 'active' },
+        { name: 'get_entry', description: '', access: 'any' },
+      ],
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'handled' }),
     };
-    // No journal capture armed by default; consume returns false unless a test arms it.
-    journalSession = {
-      isPending: jest.fn().mockResolvedValue(false),
-      consume: jest.fn().mockResolvedValue(true),
+    // No spoke floor armed by default; consume returns null unless a test arms it.
+    spokeSession = {
+      active: jest.fn().mockResolvedValue(null),
+      consume: jest.fn().mockResolvedValue('journal'),
       clear: jest.fn().mockResolvedValue(undefined),
+    };
+    const tiltDmHandler = {
+      intent: 'tilt',
+      description: 'calm frustration',
+      defaultTool: 'offer_session',
+      tools: [{ name: 'offer_session', description: '', access: 'active' }],
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+    };
+    const moodDmHandler = {
+      intent: 'mood',
+      description: 'log how they feel',
+      defaultTool: 'log_mood',
+      tools: [{ name: 'log_mood', description: '', access: 'active' }],
+      invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'handled' }),
     };
     const dmRouter = new DmRouterService(
       coachHandler,
       journalDmHandler as any,
-      journalSession as any,
+      spokeSession as any,
       intentRouter as any,
+      tiltDmHandler as any,
+      moodDmHandler as any,
     );
     service = new CoachingService(
       classifier,
@@ -282,6 +315,32 @@ describe('CoachingService', () => {
       }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
+  });
+
+  it('lets a lapsed user READ back an entry (get_entry is allowed at any tier — ADR-0011)', async () => {
+    process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
+    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
+      discordId: '123',
+      consentAcceptedAt: new Date(),
+      timezone: 'UTC',
+    });
+    (accessResolver.resolve as jest.Mock).mockResolvedValue({
+      hasActiveAccess: false,
+      subscriptionStatus: 'canceled',
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'what did i journal yesterday' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.9, tool: 'get_entry' });
+
+    await service.handle(mockMessage);
+
+    // A read survives the lapsed tier: the read-back tool runs, and the user is NOT handed a subscribe prompt.
+    expect(journalDmHandler.invoke).toHaveBeenCalledWith('get_entry', expect.anything());
+    expect(mockMessage.reply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
+    );
   });
 
   it('escalates a lapsed user in crisis instead of paywalling them (ADR-0011/0021)', async () => {
@@ -486,6 +545,7 @@ describe('CoachingService', () => {
 
     expect(intentRouter.route).toHaveBeenCalledWith(
       'want to journal about tonight',
+      expect.any(Array), // the generated spoke catalogue
       expect.objectContaining({ recentTurns: undefined }),
     );
     // The verdict is traced for threshold tuning (intent span carries confidence + router latency)...
@@ -527,28 +587,29 @@ describe('CoachingService', () => {
     expect(JSON.stringify(retrieval)).not.toContain('box breathing');
   });
 
-  it('routes a confident inline journal turn to the journal handler instead of the coach', async () => {
+  it('routes a confident inline journal turn (save_entry) to the journal handler verbatim, not the coach', async () => {
     activeUser();
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
       kind: 'ready',
-      text: 'journal: had a rough ranked night, feel worthless at the game',
+      text: 'had a rough ranked night, feel worthless at the game',
     });
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.9 });
+    intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.9, tool: 'save_entry' });
 
     await service.handle(mockMessage);
 
-    // Real router → journal dispatch with the extracted entry content; coach is not consulted.
-    expect(journalDmHandler.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: '123' }),
-      'had a rough ranked night, feel worthless at the game',
+    // Real router → journal dispatch through the save_entry tool (whole batch is the entry); coach is
+    // not consulted. The verbatim-content write is the spoke's own contract (journal-dm.handler.spec).
+    expect(journalDmHandler.invoke).toHaveBeenCalledWith(
+      'save_entry',
+      expect.objectContaining({ userId: '123', batch: 'had a rough ranked night, feel worthless at the game' }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
 
-  it('skips the intent-router LLM call when a journal capture is pending, and captures the turn', async () => {
+  it('skips the intent-router LLM call when a journal capture is pending, and resumes the spoke', async () => {
     activeUser();
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({
       kind: 'ready',
@@ -557,18 +618,16 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    journalSession.isPending.mockResolvedValue(true);
-    journalSession.consume.mockResolvedValue(true);
+    spokeSession.active.mockResolvedValue('journal');
 
     await service.handle(mockMessage);
 
     // The router LLM is predetermined-away — no call.
     expect(intentRouter.route).not.toHaveBeenCalled();
-    // The pending turn is consumed and written verbatim as the entry; coaching does not run.
-    expect(journalSession.consume).toHaveBeenCalledWith('123');
-    expect(journalDmHandler.handle).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: '123' }),
-      'today i actually felt ok, won a couple games',
+    // The pending turn returns to the journal spoke, which owns the consume + verbatim write; coaching
+    // does not run. (The consume-then-write contract is covered in journal-dm.handler.spec.)
+    expect(journalDmHandler.resume).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: '123', batch: 'today i actually felt ok, won a couple games' }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
   });
@@ -578,13 +637,14 @@ describe('CoachingService', () => {
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: "i don't want to be here anymore" });
     classifier.classify.mockResolvedValue('crisis');
     strategyRetrieval.search.mockResolvedValue([]);
-    journalSession.isPending.mockResolvedValue(true);
+    spokeSession.active.mockResolvedValue('journal');
 
     await service.handle(mockMessage);
 
-    // The crisis text never reaches the journal writer; the marker is cleared so a later DM routes fresh.
-    expect(journalSession.clear).toHaveBeenCalledWith('123');
-    expect(journalDmHandler.handle).not.toHaveBeenCalled();
+    // The crisis text never reaches the journal writer; the floor is cleared so a later DM routes fresh.
+    expect(spokeSession.clear).toHaveBeenCalledWith('123');
+    expect(journalDmHandler.resume).not.toHaveBeenCalled();
+    expect(journalDmHandler.invoke).not.toHaveBeenCalled();
     expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
   });
 

@@ -18,9 +18,12 @@ export interface MoodLog {
 
 @Injectable()
 export class MoodService {
-  // Plain persist: writes the mood record. Crisis screening of the free-text `note` and the
-  // consent-gated derivation of it are owned by InnerStateLogger now (ADR-0028/0029); a mood is only
-  // ever written from inside that logger's safe-path closure, so this method just touches Postgres.
+  // Plain persist: writes the mood record. The screened-record invariant (ADR-0028/0029) is that any
+  // minable free-text `note` reaches this method ONLY through InnerStateLogger's safe-path closure, which
+  // crisis-screens and consent-derives it. Two callers satisfy that: the slash log commands (via the
+  // logger, may carry a note), and the DM mood spoke's capture turn — which is structured-only (rating,
+  // never a note) and is itself crisis-screened upstream by the coaching classifier before dispatch.
+  // So this method just touches Postgres; it must never be handed a note from an unscreened surface.
   async create(discordId: string, mood: MoodLog): Promise<void> {
     await prisma.mood.create({
       data: {
