@@ -1,4 +1,4 @@
-export type ProviderRole = 'coach' | 'classifier' | 'embedding';
+export type ProviderRole = 'coach' | 'classifier' | 'embedding' | 'router';
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -28,6 +28,15 @@ export function getProvider(role: ProviderRole): ProviderConfig {
       baseUrl: process.env.EMBEDDING_BASE_URL || 'http://localhost:8080',
       model: process.env.EMBEDDING_MODEL || 'nomic-embed-text-v2-moe.Q4_K_M.gguf',
       apiKey: process.env.EMBEDDING_API_KEY || '',
+    },
+    // Intent router for DM dispatch (which specialised handler answers a free-form DM). A small, fast
+    // classify model — separate from the crisis classifier so the two can be tuned/swapped apart. It is
+    // never a safety surface: a misconfigured router fails soft to coach (IntentRouterService), so the
+    // OpenAI defaults here are harmless if ROUTER_* is unset.
+    router: {
+      baseUrl: process.env.ROUTER_BASE_URL || 'https://api.openai.com/v1',
+      model: process.env.ROUTER_MODEL || 'gpt-4o-mini',
+      apiKey: process.env.ROUTER_API_KEY || '',
     },
   };
   return providerConfig[role];

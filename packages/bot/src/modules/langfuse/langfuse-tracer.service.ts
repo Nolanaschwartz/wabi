@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { safeFetch } from '../../lib/safe-fetch';
 
-export type TraceStep = 'classify' | 'coach' | 'retrieval';
+export type TraceStep = 'classify' | 'coach' | 'retrieval' | 'intent';
 
 // Dev keeps full visibility (sample everything); prod samples 10%. Read per-call from env so it
 // tracks the running environment rather than import-time state. LANGFUSE_SAMPLE_RATE overrides both.
@@ -34,7 +34,7 @@ export class LangfuseTracer {
     step: TraceStep,
     input: string,
     output: string,
-    options?: { isCrisis?: boolean; latencyMs?: number },
+    options?: { isCrisis?: boolean; latencyMs?: number; confidence?: number },
   ): void {
     if (!this.enabled) return;
     if (options?.isCrisis) return;
@@ -55,6 +55,8 @@ export class LangfuseTracer {
       metadata: {
         latencyMs: options?.latencyMs ?? 0,
         sampled: isSampled,
+        // Present only for the intent step; lets the dispatch threshold (θ) be tuned from traces.
+        ...(options?.confidence !== undefined ? { confidence: options.confidence } : {}),
       },
     });
   }
