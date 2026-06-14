@@ -19,6 +19,7 @@ describe('LangfuseTracer', () => {
     delete process.env.LANGFUSE_HOST;
     delete process.env.LANGFUSE_PUBLIC_KEY;
     delete process.env.LANGFUSE_SECRET_KEY;
+    delete process.env.NODE_ENV;
   });
 
   it('does not trace when disabled', () => {
@@ -41,14 +42,34 @@ describe('LangfuseTracer', () => {
     expect(global.fetch).toHaveBeenCalled();
   });
 
-  it('skips crisis spans (no content-bearing ingestion)', () => {
+  it('skips crisis spans in production (no content-bearing ingestion)', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.LANGFUSE_SAMPLE_RATE = '1'; // isolate the crisis drop from prod sampling
     enabledTracer().span({ traceId: 'test-1', span: 'classify', input: 'input', output: 'crisis', isCrisis: true });
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('skips crisis scores', () => {
+  it('skips crisis scores in production', () => {
+    process.env.NODE_ENV = 'production';
     enabledTracer().score('test-1', 'safety', 0.5, true);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  // Local-dev full fidelity (NODE_ENV !== 'production'): crisis content IS traced for debugging. The
+  // user explicitly opted out of redaction outside prod; the prod drop above is the safety default.
+  it('traces crisis spans outside production (local full fidelity)', () => {
+    delete process.env.NODE_ENV;
+    enabledTracer().span({ traceId: 'test-1', span: 'classify', input: 'verbatim crisis', output: 'crisis', isCrisis: true });
+    const child = batch().find((e: any) => e.type !== 'trace-create');
+    expect(child.body.input).toBe('verbatim crisis');
+  });
+
+  it('does not latch/suppress later spans of a crisis turn outside production', () => {
+    delete process.env.NODE_ENV;
+    const t = enabledTracer();
+    t.span({ traceId: 'c1', span: 'classify', input: 'crisis text', output: 'crisis', isCrisis: true });
+    t.span({ traceId: 'c1', span: 'coach', input: 'reply', output: 'reply' });
+    expect((global.fetch as jest.Mock).mock.calls.length).toBe(2);
   });
 
   it('posts a score-create event attached to the trace id', () => {
@@ -82,6 +103,8 @@ describe('LangfuseTracer', () => {
   // Central crisis latch: once ANY span of a turn is flagged crisis, every later span/score for that
   // traceId is suppressed — a new call site that forgets isCrisis cannot leak crisis content. (Finding #3.)
   it('suppresses all later spans and scores of a turn once it is flagged crisis', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.LANGFUSE_SAMPLE_RATE = '1'; // isolate the latch from prod sampling
     const t = enabledTracer();
     t.span({ traceId: 'c1', span: 'classify', input: 'crisis text', output: 'crisis', isCrisis: true });
     // These later calls do NOT set isCrisis, yet must still be dropped because the turn is latched.
@@ -91,6 +114,8 @@ describe('LangfuseTracer', () => {
   });
 
   it('still traces a different, non-crisis turn after a crisis turn was latched', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.LANGFUSE_SAMPLE_RATE = '1'; // isolate the latch from prod sampling
     const t = enabledTracer();
     t.span({ traceId: 'c1', span: 'classify', input: 'x', output: 'crisis', isCrisis: true });
     t.span({ traceId: 'ok-2', span: 'classify', input: 'x', output: 'safe' });

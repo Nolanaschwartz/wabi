@@ -177,11 +177,15 @@ export class CoachingService {
         // Which evidence-based strategies fed the coach prompt — counts/scores/ids only, never the
         // strategy body text or transcript (ADR-0013). Diagnoses "the coach surfaced something
         // irrelevant" on the strategy side. Tracing never breaks the hot path (ADR-0021).
+        // Verbatim strategy text is held back at the boundary (ADR-0013) in prod — only counts/ids/
+        // scores cross. Outside production the call site includes the query + strategy bodies so a
+        // local trace shows exactly what fed the coach.
+        const fullFidelity = this.langfuseTracer.localFullFidelity;
         this.langfuseTracer.span({
           traceId,
           span: 'retrieval',
-          input: '',
-          output: '',
+          input: fullFidelity ? batch : '',
+          output: fullFidelity ? JSON.stringify(strategies.map((s) => s.content)) : '',
           latencyMs: strategyResult.latencyMs,
           metadata: {
             count: strategies.length,
