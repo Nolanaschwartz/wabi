@@ -34,9 +34,14 @@ export interface SpanSpec {
   timestamp: string;
 }
 
+// First-class Langfuse ingestion event types. We deliberately do NOT use the generic `observation-create`
+// (LegacyObservationBody): its legacy converter carries model/usage but silently DROPS input/output/
+// metadata. span-create / generation-create are the SDK's own events and map every field correctly.
+export type IngestionEventType = 'trace-create' | 'span-create' | 'generation-create';
+
 export interface IngestionEvent {
   id: string;
-  type: 'trace-create' | 'observation-create';
+  type: IngestionEventType;
   timestamp: string;
   body: Record<string, unknown> & { id: string };
 }
@@ -51,8 +56,8 @@ export interface IngestionEnvelope {
  * the turn must not be sent: disabled tracer, unsampled turn, or crisis content (ADR-0024).
  *
  * A turn is one tree: a parent `trace-create` (upserted identically by every span of the turn) plus a
- * child `observation-create` span nested under it via traceId. The parent carries no content, so the
- * upsert is stable and verbatim text lives only on the spans.
+ * child observation (`span-create`, or `generation-create` for the coach) nested under it via traceId.
+ * The parent carries no content, so the upsert is stable and verbatim text lives only on the spans.
  */
 export class TracePayloadBuilder {
   build(spec: SpanSpec): IngestionEnvelope | null {
@@ -63,6 +68,39 @@ export class TracePayloadBuilder {
     // Langfuse usage shape. Include only the token fields the provider actually returned — an omitted
     // count must read as absent, never as 0. No fields → no usage block at all.
     const usage = compactUsage(spec.usage, { input: 'input', output: 'output' });
+
+    // Native start/end so Langfuse computes the observation's own latency (its `latency` field). Derived
+    // from the injected timestamp (= when the op finished) minus its measured duration — no ambient clock.
+    const endTime = spec.timestamp;
+    const startTime = new Date(Date.parse(spec.timestamp) - (spec.latencyMs ?? 0)).toISOString();
+
+    const isGeneration = GENERATION_SPANS.has(spec.span);
+
+    // span-create vs generation-create — chosen by the span's identity (see GENERATION_SPANS), never
+    // inferred from whether a model id / usage happened to be present, so the coach span is always costed.
+    const body: Record<string, unknown> & { id: string } = {
+      id: `${spec.traceId}-${spec.span}`,
+      traceId: spec.traceId,
+      name: spec.span,
+      startTime,
+      endTime,
+      // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024). Scoped
+      // exception to ADR-0013, permitted only because Langfuse is self-hosted/on-infra (ADR-0017).
+      input: spec.input,
+      output: spec.output,
+      metadata: {
+        latencyMs: spec.latencyMs ?? 0,
+        // Present only for the intent step; lets the dispatch threshold (θ) be tuned from traces.
+        ...(spec.confidence !== undefined ? { confidence: spec.confidence } : {}),
+        // Counts/scores/ids for retrieval & memory spans — never verbatim text (ADR-0013).
+        ...(spec.metadata ?? {}),
+      },
+    };
+    // model/usage belong only on a generation body (CreateSpanBody has no such fields).
+    if (isGeneration) {
+      if (spec.model) body.model = spec.model;
+      if (usage) body.usage = usage;
+    }
 
     return {
       batch: [
@@ -75,29 +113,9 @@ export class TracePayloadBuilder {
         },
         {
           id: spec.spanEventId,
-          type: 'observation-create',
+          type: isGeneration ? 'generation-create' : 'span-create',
           timestamp: spec.timestamp,
-          // Non-crisis coaching content is retained in full for eval/quality data (ADR-0024). Scoped
-          // exception to ADR-0013, permitted only because Langfuse is self-hosted/on-infra (ADR-0017).
-          body: {
-            id: `${spec.traceId}-${spec.span}`,
-            traceId: spec.traceId,
-            // GENERATION vs SPAN is decided by the span's identity (see GENERATION_SPANS), not by whether
-            // a model id / usage happened to be present — so a coach span on an error turn is still costed.
-            type: GENERATION_SPANS.has(spec.span) ? 'GENERATION' : 'SPAN',
-            name: spec.span,
-            input: spec.input,
-            output: spec.output,
-            ...(spec.model ? { model: spec.model } : {}),
-            ...(usage ? { usage } : {}),
-            metadata: {
-              latencyMs: spec.latencyMs ?? 0,
-              // Present only for the intent step; lets the dispatch threshold (θ) be tuned from traces.
-              ...(spec.confidence !== undefined ? { confidence: spec.confidence } : {}),
-              // Counts/scores/ids for retrieval & memory spans — never verbatim text (ADR-0013).
-              ...(spec.metadata ?? {}),
-            },
-          },
+          body,
         },
       ],
     };

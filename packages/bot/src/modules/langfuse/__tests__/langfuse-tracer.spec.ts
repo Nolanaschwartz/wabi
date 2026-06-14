@@ -169,7 +169,7 @@ describe('LangfuseTracer', () => {
     enabledTracer().span({ traceId: 'test-1', span: 'classify', input: 'input', output: 'safe' });
     const events = batch();
     const parent = events.find((e: any) => e.type === 'trace-create');
-    const child = events.find((e: any) => e.type === 'observation-create');
+    const child = events.find((e: any) => e.type !== 'trace-create');
     expect(parent.body.id).toBe('test-1');
     expect(child.body.traceId).toBe('test-1');
     expect(child.body.name).toBe('classify');
@@ -177,13 +177,13 @@ describe('LangfuseTracer', () => {
 
   it('records per-span latency on the child observation', () => {
     enabledTracer().span({ traceId: 'test-1', span: 'coach', input: 'p', output: 'r', latencyMs: 123 });
-    const child = batch().find((e: any) => e.type === 'observation-create');
+    const child = batch().find((e: any) => e.type !== 'trace-create');
     expect(child.body.metadata.latencyMs).toBe(123);
   });
 
   it('records confidence on the intent span', () => {
     enabledTracer().span({ traceId: 'test-1', span: 'intent', input: 'i', output: 'journal', confidence: 0.7 });
-    const child = batch().find((e: any) => e.type === 'observation-create');
+    const child = batch().find((e: any) => e.type !== 'trace-create');
     expect(child.body.metadata.confidence).toBe(0.7);
   });
 
@@ -210,7 +210,7 @@ describe('LangfuseTracer', () => {
   it('retains full input content on the child span for non-crisis turns', () => {
     const longInput = 'a'.repeat(300);
     enabledTracer().span({ traceId: 'test-1', span: 'classify', input: longInput, output: 'safe' });
-    const child = batch().find((e: any) => e.type === 'observation-create');
+    const child = batch().find((e: any) => e.type !== 'trace-create');
     expect(child.body.input).toBe(longInput);
     expect(child.body.input).not.toContain('[truncated]');
   });
@@ -218,7 +218,7 @@ describe('LangfuseTracer', () => {
   it('retains full output content on the child span for non-crisis turns', () => {
     const longOutput = 'b'.repeat(300);
     enabledTracer().span({ traceId: 'test-1', span: 'coach', input: 'short', output: longOutput });
-    const child = batch().find((e: any) => e.type === 'observation-create');
+    const child = batch().find((e: any) => e.type !== 'trace-create');
     expect(child.body.output).toBe(longOutput);
     expect(child.body.output).not.toContain('[truncated]');
   });

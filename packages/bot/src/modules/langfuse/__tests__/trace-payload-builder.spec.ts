@@ -30,7 +30,7 @@ describe('TracePayloadBuilder', () => {
       expect(parent.id).toBe('parent-1');
       expect(parent.body.id).toBe('turn-1');
 
-      expect(child.type).toBe('observation-create');
+      expect(child.type).toBe('span-create');
       expect(child.id).toBe('span-1');
       expect(child.body.id).toBe('turn-1-classify');
       // Nesting: the span references the parent trace id.
@@ -86,13 +86,13 @@ describe('TracePayloadBuilder', () => {
       expect(childOf(builder.build(spec())).body).not.toHaveProperty('level');
     });
 
-    it('marks a span carrying model/usage as a GENERATION with model id and token usage', () => {
+    it('emits the coach span as a generation-create with model id and token usage', () => {
       const child = childOf(
         builder.build(
           spec({ span: 'coach', model: 'test-coach', usage: { inputTokens: 12, outputTokens: 34 } }),
         ),
       );
-      expect(child.body.type).toBe('GENERATION');
+      expect(child.type).toBe('generation-create');
       expect(child.body.model).toBe('test-coach');
       expect(child.body.usage).toEqual({ input: 12, output: 34 });
     });
@@ -123,24 +123,32 @@ describe('TracePayloadBuilder', () => {
       expect(child.body.metadata.latencyMs).toBe(0);
     });
 
-    it('keeps a plain span (no model/usage) typed SPAN', () => {
+    it('emits a plain span as span-create with no model/usage', () => {
       const child = childOf(builder.build(spec()));
-      expect(child.body.type).toBe('SPAN');
+      expect(child.type).toBe('span-create');
       expect(child.body).not.toHaveProperty('model');
       expect(child.body).not.toHaveProperty('usage');
     });
 
-    // Type is the span's identity, not inferred from incidental payload: the coach span is a GENERATION
+    // Type is the span's identity, not inferred from incidental payload: the coach span is a generation
     // even on an error turn that carried no model id or usage, so Langfuse never silently demotes it to
-    // a plain SPAN and stops costing it.
-    it('types the coach span as a GENERATION even with no model or usage', () => {
+    // a plain span and stops costing it.
+    it('emits the coach span as a generation-create even with no model or usage', () => {
       const child = childOf(builder.build(spec({ span: 'coach' })));
-      expect(child.body.type).toBe('GENERATION');
+      expect(child.type).toBe('generation-create');
     });
 
-    it('types a non-coach span as SPAN even if a model id leaks in', () => {
+    it('emits a non-coach span as span-create and never puts model on it (CreateSpanBody has no model)', () => {
       const child = childOf(builder.build(spec({ span: 'memory', model: 'oops' })));
-      expect(child.body.type).toBe('SPAN');
+      expect(child.type).toBe('span-create');
+      expect(child.body).not.toHaveProperty('model');
+    });
+
+    // Native start/end so Langfuse computes the observation's own latency in the UI.
+    it('records startTime and endTime so latency is derivable (endTime - startTime = latencyMs)', () => {
+      const child = childOf(builder.build(spec({ latencyMs: 250 })));
+      expect(child.body.endTime).toBe('2026-06-14T00:00:00.000Z');
+      expect(child.body.startTime).toBe('2026-06-13T23:59:59.750Z');
     });
   });
 
