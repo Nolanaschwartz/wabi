@@ -65,10 +65,16 @@ describe('DM dispatch integration', () => {
 
     // Mocked collaborators — no live LLM, no billing I/O.
     const classifier = { classify: jest.fn().mockResolvedValue('safe') } as any;
-    const coach = { generate: jest.fn().mockResolvedValue('Take a breath — one round at a time.') } as any;
+    const coach = {
+      generate: jest.fn().mockResolvedValue('Take a breath — one round at a time.'),
+      generateDetailed: jest.fn().mockResolvedValue({
+        text: 'Take a breath — one round at a time.',
+        model: 'test-coach',
+      }),
+    } as any;
     const strategyRetrieval = { search: jest.fn().mockResolvedValue([]) } as any;
     const burstCoalescer = new BurstCoalescer();
-    const langfuseTracer = { trace: jest.fn() } as any;
+    const langfuseTracer = { span: jest.fn(), score: jest.fn() } as any;
     const accessResolver = { resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }) } as any;
     const memoryStore = {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),

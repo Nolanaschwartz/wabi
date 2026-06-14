@@ -67,7 +67,13 @@ describe('Journal DM two-turn capture integration', () => {
     await journalSession.init();
 
     // Real writers where the test asserts persistence; mocked collaborators for everything else.
-    const coach = { generate: jest.fn().mockResolvedValue('Glad you wrote this down.') } as any;
+    const coach = {
+      generate: jest.fn().mockResolvedValue('Glad you wrote this down.'),
+      generateDetailed: jest.fn().mockResolvedValue({
+        text: 'Glad you wrote this down.',
+        model: 'test-coach',
+      }),
+    } as any;
     const habitEngagement = { record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }) } as any;
     const journalService = new JournalService(coach, habitEngagement);
     const innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) } as any;
@@ -77,7 +83,7 @@ describe('Journal DM two-turn capture integration', () => {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
       search: jest.fn().mockResolvedValue([]),
     } as any;
-    const langfuseTracer = { trace: jest.fn() } as any;
+    const langfuseTracer = { span: jest.fn(), score: jest.fn() } as any;
     const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement);
     const classifier = { classify } as any;
     const intentRouter = { route: intentRoute } as any;
