@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wabi — Agent Architecture (Hub &amp; Spoke)</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #161922;
+      --ink: #e7e9ee;
+      --muted: #9aa3b2;
+      --accent: #7c9cff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    header {
+      padding: 28px 32px 12px;
+      border-bottom: 1px solid #232733;
+    }
+    h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+    header p { margin: 0; color: var(--muted); font-size: 13px; }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 14px;
+      padding: 14px 32px; border-bottom: 1px solid #232733;
+      font-size: 12px; color: var(--muted);
+    }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .swatch { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+    .wrap { padding: 24px 16px 64px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid #232733;
+      border-radius: 12px;
+      padding: 20px;
+      margin: 0 auto 28px;
+      max-width: 1400px;
+      overflow-x: auto;
+    }
+    .panel h2 {
+      margin: 0 0 14px; font-size: 14px; color: var(--accent);
+      text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;
+    }
+    .mermaid { display: flex; justify-content: center; }
+    footer { text-align: center; color: var(--muted); font-size: 12px; padding: 8px 0 40px; }
+    code { background: #20242f; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Wabi — Agent Architecture</h1>
+    <p>DM-first wellness companion · hub-and-spoke DM router behind a crisis-safety floor · branch <code>feat/hub-and-spoke-coaching</code> · generated 2026-06-14</p>
+  </header>
+
+  <div class="legend">
+    <span><i class="swatch" style="background:#b3261e"></i> Safety floor (always runs)</span>
+    <span><i class="swatch" style="background:#7c9cff"></i> Hub / router</span>
+    <span><i class="swatch" style="background:#2e7d5b"></i> Spokes (uniform interface)</span>
+    <span><i class="swatch" style="background:#8a6d3b"></i> Screened-record tail</span>
+    <span><i class="swatch" style="background:#5a4b8a"></i> Stores (ephemeral / derived)</span>
+  </div>
+
+  <div class="wrap">
+
+    <div class="panel">
+      <h2>End-to-end DM control flow</h2>
+      <pre class="mermaid">
+flowchart TD
+    DM([DM arrives]) --> CH["CoachingService.handle()<br/><i>owns the safety floor</i>"]
+
+    CH --> CONSENT{consented?}
+    CONSENT -- no --> SETUP[/send setup link · never coaches/]
+
+    CONSENT -- yes --> PAR
+
+    subgraph PAR["Parallel block · no serial latency"]
+      direction LR
+      CLS["classifier.classify()<br/>tripwire + LLM"]
+      RET["strategyRetrieval.search()"]
+      PREP["dmRouter.prepare()<br/><i>side-effect-free plan</i>"]
+    end
+
+    PAR --> CRISIS{crisis?}
+    CRISIS -- yes --> ESC["escalate · clear floor if isCapture<br/>local resources · content-free EscalationEvent"]
+    CRISIS -- no --> GATE{access tier<br/>tool needs 'active'?}
+
+    GATE -- "lacks access" --> RESUB[/resubscribe prompt · reads still allowed/]
+    GATE -- ok --> TILTOFFER{pending tilt<br/>offer reply?}
+
+    TILTOFFER -- yes --> TANS[handle accept / decline]
+    TILTOFFER -- no --> DISPATCH["dmRouter.dispatch(ctx, plan)"]
+
+    DISPATCH --> SPOKES
+
+    classDef safety fill:#b3261e,stroke:#e06,color:#fff;
+    classDef hub fill:#1f2740,stroke:#7c9cff,color:#dce4ff;
+    class CH,CLS,CRISIS,ESC safety;
+    class PREP,DISPATCH,PAR hub;
+      </pre>
+    </div>
+
+    <div class="panel">
+      <h2>Hub routing · prepare() → RoutingDecision</h2>
+      <pre class="mermaid">
+flowchart TD
+    PREP["dmRouter.prepare(userId, batch, context)"] --> FLOOR{SpokeSession.active()<br/>capture floor held?}
+
+    FLOOR -- yes --> RESUMEPLAN["synthetic resume plan<br/>skip intent LLM · isCapture = true"]
+    FLOOR -- no --> ROUTE["IntentRouterService.route(batch, catalogue)"]
+
+    ROUTE --> LLM["getProvider('router') · LLM<br/>→ { intent, confidence, tool? }"]
+    LLM --> CONF{confidence ≥ 0.75?}
+    CONF -- no --> COACHFALL["fall back to coach"]
+    CONF -- yes --> RESOLVE["resolve tool + access tier<br/>from immutable registry"]
+
+    RESUMEPLAN --> DEC
+    COACHFALL --> DEC
+    RESOLVE --> DEC["RoutingDecision<br/>{ plan, verdict, access, isCapture }"]
+
+    CAT["Catalogue (computed once)<br/>each spoke ⇒ { intent, description, tools[] }"] -.feeds prompt.-> ROUTE
+
+    classDef hub fill:#1f2740,stroke:#7c9cff,color:#dce4ff;
+    class PREP,ROUTE,RESOLVE,DEC,CAT hub;
+      </pre>
+    </div>
+
+    <div class="panel">
+      <h2>Spokes · uniform <code>Spoke</code> interface (ADR-0032)</h2>
+      <pre class="mermaid">
+flowchart TD
+    DISPATCH["dispatch → spoke.invoke(tool, ctx) | spoke.resume(ctx)"] --> COACH & JOURNAL & MOOD & TILT
+
+    subgraph COACH["Coach spoke · default fallthrough target"]
+      C1["intent: coach · tool: coach (active)"]
+      C2["recall memory → build prompt → generate<br/>→ buffer append → streak → reply<br/>→ fire-forget derive (Mem0)"]
+      C1 --> C2
+    end
+
+    subgraph JOURNAL["Journal spoke"]
+      J1["save_entry (active) · give_prompt (active) · get_entry (any)<br/>default: give_prompt — never save on a guess"]
+      J2["invoke save_entry → handle(batch)<br/>give_prompt → arm floor + prompt<br/>resume → consume floor → two-turn save"]
+      J1 --> J2
+    end
+
+    subgraph MOOD["Mood spoke"]
+      M1["log_mood (active) · structured-only"]
+      M2["invoke → arm floor + prompt for 1–5<br/>resume → parse rating → mood.create()<br/>(no free text)"]
+      M1 --> M2
+    end
+
+    subgraph TILT["Tilt spoke"]
+      T1["offer_session (active) · arms no floor"]
+      T2["invoke → suppress if inAftermath<br/>else offer or fallthrough<br/>resume → always fallthrough"]
+      T1 --> T2
+    end
+
+    JOURNAL -. record .-> REC
+    MOOD -. create .-> REC
+    COACH -. fallthrough target .-> COACH
+
+    REC["InnerStateRecorderService.record()"]
+
+    classDef spoke fill:#13301f,stroke:#2e7d5b,color:#bdeccd;
+    classDef tail fill:#2e2616,stroke:#8a6d3b,color:#f0dcb0;
+    class COACH,JOURNAL,MOOD,TILT,C1,C2,J1,J2,M1,M2,T1,T2 spoke;
+    class REC tail;
+      </pre>
+    </div>
+
+    <div class="panel">
+      <h2>Crisis screening &amp; the <code>Screened</code> proof (ADR-0028 / 0030 / 0031)</h2>
+      <pre class="mermaid">
+flowchart LR
+    subgraph MINT["Two mint sites — the only forges of Screened"]
+      SLASH["Slash command<br/>InnerStateLogger.log()"] --> SFR["screenForRecord()<br/>tripwire → classifier"]
+      DMUP["DM turn<br/>CoachingService"] --> SFU["screenedFromUpstream()<br/>reuse standing verdict · no re-screen"]
+    end
+
+    SFR -- crisis --> NOREC["no proof · caller cannot record"]
+    SFR -- safe --> PROOF
+    SFU --> PROOF
+
+    PROOF["Screened (branded union)<br/>{ freeText, derivePrefix } | { null, null }"]
+
+    PROOF --> REC["Recorder.record(userId, Screened, write)<br/><i>uncallable without proof</i>"]
+    REC --> PERSIST["write.persist() → Postgres"]
+    PERSIST --> MINABLE{freeText ≠ null?}
+    MINABLE -- yes --> DERIVE["fire-forget derive (Mem0)<br/>+ first-use consent prompt"]
+    MINABLE -- no --> DONE["structured-only · no derive"]
+
+    classDef safety fill:#b3261e,stroke:#e06,color:#fff;
+    classDef tail fill:#2e2616,stroke:#8a6d3b,color:#f0dcb0;
+    classDef store fill:#241f3a,stroke:#5a4b8a,color:#d7ccf5;
+    class SFR,SFU,NOREC,PROOF safety;
+    class REC,PERSIST,DERIVE,DONE tail;
+      </pre>
+    </div>
+
+    <div class="panel">
+      <h2>Stores &amp; the conversational floor</h2>
+      <pre class="mermaid">
+flowchart LR
+    SS["SpokeSessionService<br/>Redis · TTL 10m · getDel"]
+    BUF["Session buffer<br/>Redis · ephemeral · no transcripts (ADR-0013)"]
+    PG[("Postgres · Prisma<br/>only authoritative store")]
+    MEM["Mem0 · derived memory<br/>Qdrant + neo4j"]
+
+    SS -. arm/consume floor .- JOURNAL2[journal/mood spokes]
+    BUF -. append turns .- COACH2[coach spoke]
+    PG -. journal.write / mood.create .- REC2[recorder]
+    MEM -. deriveIfConsented .- REC2
+
+    classDef store fill:#241f3a,stroke:#5a4b8a,color:#d7ccf5;
+    class SS,BUF,PG,MEM store;
+      </pre>
+    </div>
+
+  </div>
+
+  <footer>Source of truth: <code>packages/bot/src/modules/coaching</code>, <code>/crisis</code>, <code>/inner-state-logger</code> · ADR-0011/0013/0028/0030/0031/0032</footer>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "dark",
+      themeVariables: {
+        fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif",
+        primaryColor: "#1f2740",
+        primaryBorderColor: "#7c9cff",
+        primaryTextColor: "#e7e9ee",
+        lineColor: "#5b6478"
+      },
+      flowchart: { curve: "basis", nodeSpacing: 45, rankSpacing: 55 }
+    });
+  </script>
+</body>
+</html>
