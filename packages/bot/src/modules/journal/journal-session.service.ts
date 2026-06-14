@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { createClient, RedisClientType } from 'redis';
+import { JsonLogger } from '../../lib/json-logger';
 
 const PENDING_KEY_PREFIX = 'wabi:journalpending:';
 /** Capture window for the conversational journal prompt. After this, a bare prompt is silently dropped. */
@@ -18,7 +19,7 @@ const REDIS_CONNECT_TIMEOUT_MS = 5000;
  */
 @Injectable()
 export class JournalSessionService {
-  private readonly logger = new Logger(JournalSessionService.name);
+  private readonly logger = new JsonLogger(JournalSessionService.name);
   private client: RedisClientType;
   private initialized = false;
 

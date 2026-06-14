@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { MemoryStoreService } from './memory-store.service';
 import { UserService } from '../user/user.service';
+import { JsonLogger } from '../../lib/json-logger';
 
 /**
  * Feeds a person's free-text inner state (journal / mood note / tilt trigger) into derived Memory —
@@ -14,7 +15,7 @@ import { UserService } from '../user/user.service';
  */
 @Injectable()
 export class InnerStateMemoryService {
-  private readonly logger = new Logger(InnerStateMemoryService.name);
+  private readonly logger = new JsonLogger(InnerStateMemoryService.name);
 
   constructor(
     private readonly memoryStore: MemoryStoreService,
