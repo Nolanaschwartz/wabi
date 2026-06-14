@@ -155,6 +155,29 @@ describe('TiltService', () => {
     });
   });
 
+  describe('offerFromIntent — classifier-driven offer (no keyword gate)', () => {
+    it('offers a session even when no tilt keyword is present (paraphrased frustration)', () => {
+      // The discovery classifier said "tilt" though the keyword heuristic would miss this phrasing.
+      const message = service.offerFromIntent('123', 'i just cannot catch a break out there tonight');
+
+      expect(message).toContain('accept');
+      expect(message).toContain('decline');
+      expect(service.getPendingOffer('123')).toBe('frustration'); // generic trigger when no keyword
+    });
+
+    it('uses a detected keyword as the trigger when one IS present', () => {
+      service.offerFromIntent('123', 'my team keeps feeding');
+      expect(service.getPendingOffer('123')).toBe('feeding');
+    });
+
+    it('does not stack a second offer while one is already pending (returns null)', () => {
+      service.setPendingOffer('123', 'raging');
+      const message = service.offerFromIntent('123', 'still so done with this');
+      expect(message).toBeNull();
+      expect(service.getPendingOffer('123')).toBe('raging');
+    });
+  });
+
   it('creates an offer for detected frustration', () => {
     const offer = service.createOffer('raging');
 

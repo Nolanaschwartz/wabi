@@ -145,6 +145,19 @@ export class TiltService {
     return this.createOffer(trigger).acceptMessage;
   }
 
+  /**
+   * Classifier-driven offer for the tilt spoke: the discovery classifier already judged this turn as tilt,
+   * so unlike {@link maybeOffer} there is no keyword gate. Still self-suppresses while an offer is
+   * pending (returns null → the hub falls through to coaching). Uses a detected keyword as the trigger,
+   * or a generic "frustration" when the phrasing carried none.
+   */
+  offerFromIntent(discordId: string, text: string): string | null {
+    if (this.getPendingOffer(discordId)) return null;
+    const trigger = this.detectTrigger(text) ?? 'frustration';
+    this.setPendingOffer(discordId, trigger);
+    return this.createOffer(trigger).acceptMessage;
+  }
+
   createOffer(trigger: string): TiltOffer {
     return {
       acceptMessage: `I noticed you're dealing with "${trigger}". Want to start a tilt session to reset? Reply **accept** or **decline**.`,
