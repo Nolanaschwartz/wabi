@@ -14,18 +14,18 @@ jest.mock('pg-boss', () => ({
 
 import { startInfra, randomDiscordId } from '../integration-harness';
 import type { SessionBufferService } from '../modules/session-buffer/session-buffer.service';
-import type { JournalSessionService } from '../modules/journal/journal-session.service';
+import type { SpokeSessionService } from '../modules/spoke-session/spoke-session.service';
 import type { CoachingService } from '../modules/coaching/coaching.service';
 
 // The two-turn conversational journal capture, end-to-end against real Postgres + Redis. A bare "i want
-// to journal" arms a pending marker (Redis) and writes NO entry; the next DM is consumed and persisted
-// as a JournalEntry (Postgres). A crisis on the capture turn clears the marker and saves nothing — the
+// to journal" arms the spoke floor (Redis) and writes NO entry; the next DM is consumed and persisted
+// as a JournalEntry (Postgres). A crisis on the capture turn clears the floor and saves nothing — the
 // crisis text never reaches the journal writer (ADR-0021/0028).
 describe('Journal DM two-turn capture integration', () => {
   let infra: Awaited<ReturnType<typeof startInfra>>;
   let coaching: CoachingService;
   let sessionBuffer: SessionBufferService;
-  let journalSession: JournalSessionService;
+  let spokeSession: SpokeSessionService;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let prisma: any;
 
@@ -56,15 +56,15 @@ describe('Journal DM two-turn capture integration', () => {
     const { DmRouterService } = await import('../modules/coaching/dm-router.service');
     const { JournalService } = await import('../modules/journal/journal.service');
     const { JournalDmHandler } = await import('../modules/journal/journal-dm.handler');
-    const { JournalSessionService } = await import('../modules/journal/journal-session.service');
+    const { SpokeSessionService } = await import('../modules/spoke-session/spoke-session.service');
     const shared = await import('@wabi/shared');
     prisma = shared.prisma;
 
     const coachingSession = new CoachingSessionService();
     sessionBuffer = new SessionBufferService(infra.redisUrl);
     await sessionBuffer.init();
-    journalSession = new JournalSessionService(infra.redisUrl);
-    await journalSession.init();
+    spokeSession = new SpokeSessionService(infra.redisUrl);
+    await spokeSession.init();
 
     // Real writers where the test asserts persistence; mocked collaborators for everything else.
     const coach = {
@@ -77,7 +77,7 @@ describe('Journal DM two-turn capture integration', () => {
     const habitEngagement = { record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }) } as any;
     const journalService = new JournalService(coach, habitEngagement);
     const innerStateMemory = { deriveIfConsented: jest.fn().mockResolvedValue(undefined) } as any;
-    const journalHandler = new JournalDmHandler(journalService, innerStateMemory, journalSession);
+    const journalHandler = new JournalDmHandler(journalService, innerStateMemory, spokeSession);
 
     const memoryStore = {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
@@ -87,7 +87,16 @@ describe('Journal DM two-turn capture integration', () => {
     const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement);
     const classifier = { classify } as any;
     const intentRouter = { route: intentRoute } as any;
-    const dmRouter = new DmRouterService(coachHandler, journalHandler, journalSession, intentRouter);
+    const tiltDmHandler = { handle: jest.fn().mockResolvedValue(false) } as any;
+    const moodDmHandler = { promptForRating: jest.fn(), capture: jest.fn() } as any;
+    const dmRouter = new DmRouterService(
+      coachHandler,
+      journalHandler,
+      spokeSession,
+      intentRouter,
+      tiltDmHandler,
+      moodDmHandler,
+    );
     const strategyRetrieval = { search: jest.fn().mockResolvedValue([]) } as any;
     const burstCoalescer = new BurstCoalescer();
     const accessResolver = { resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }) } as any;
@@ -120,7 +129,7 @@ describe('Journal DM two-turn capture integration', () => {
 
   afterAll(async () => {
     await sessionBuffer?.disconnect();
-    await journalSession?.disconnect();
+    await spokeSession?.disconnect();
     await prisma?.$disconnect();
     await infra.stop();
   }, 30000);
@@ -139,7 +148,7 @@ describe('Journal DM two-turn capture integration', () => {
     intentRoute.mockResolvedValue({ intent: 'journal', confidence: 0.95 });
     await coaching.handle(makeDm(discordId, 'i want to journal'));
 
-    expect(await journalSession.isPending(discordId)).toBe(true);
+    expect(await spokeSession.active(discordId)).toBe('journal');
     expect(await prisma.journalEntry.count({ where: { userId: discordId } })).toBe(0);
     // The router LLM must NOT have been consulted on either turn (it's the bare turn that arms it, and
     // the capture turn skips it). Turn 1 DID call it (to get the journal verdict); turn 2 must not.
@@ -150,10 +159,26 @@ describe('Journal DM two-turn capture integration', () => {
     await coaching.handle(makeDm(discordId, 'lost five ranked games in a row and i feel hopeless'));
 
     expect(intentRoute).toHaveBeenCalledTimes(1); // still 1 — skipped on the capture turn
-    expect(await journalSession.isPending(discordId)).toBe(false); // consumed
+    expect(await spokeSession.active(discordId)).toBeNull(); // consumed
     const entries = await prisma.journalEntry.findMany({ where: { userId: discordId } });
     expect(entries).toHaveLength(1);
     expect(entries[0].content).toBe('lost five ranked games in a row and i feel hopeless');
+  });
+
+  it('treats a request for a prompt as give_prompt: arms the floor, writes no entry', async () => {
+    const discordId = randomDiscordId();
+    await prisma.user.create({ data: { discordId, consentAcceptedAt: new Date() } });
+
+    // The bug: "i need a journal entry prompt" is a REQUEST, not an entry. The discovery classifier tags
+    // it give_prompt → the hub prompts and arms the floor, persisting nothing on this turn.
+    classify.mockResolvedValue('safe');
+    intentRoute.mockResolvedValue({ intent: 'journal', confidence: 0.95, tool: 'give_prompt' });
+    const dm = makeDm(discordId, 'i need a journal entry prompt');
+    await coaching.handle(dm);
+
+    expect(await spokeSession.active(discordId)).toBe('journal'); // floor armed for the next turn
+    expect(await prisma.journalEntry.count({ where: { userId: discordId } })).toBe(0); // nothing saved
+    expect(dm.reply).toHaveBeenCalled(); // a prompt was sent back
   });
 
   it('clears the pending marker and writes nothing when the capture turn is a crisis', async () => {
@@ -164,13 +189,13 @@ describe('Journal DM two-turn capture integration', () => {
     classify.mockResolvedValue('safe');
     intentRoute.mockResolvedValue({ intent: 'journal', confidence: 0.95 });
     await coaching.handle(makeDm(discordId, 'i want to journal'));
-    expect(await journalSession.isPending(discordId)).toBe(true);
+    expect(await spokeSession.active(discordId)).toBe('journal');
 
-    // Turn 2: crisis. Marker cleared, no entry written, crisis text never persisted.
+    // Turn 2: crisis. Floor cleared, no entry written, crisis text never persisted.
     classify.mockResolvedValue('crisis');
     await coaching.handle(makeDm(discordId, "i don't want to be here anymore"));
 
-    expect(await journalSession.isPending(discordId)).toBe(false);
+    expect(await spokeSession.active(discordId)).toBeNull();
     expect(await prisma.journalEntry.count({ where: { userId: discordId } })).toBe(0);
   });
 });

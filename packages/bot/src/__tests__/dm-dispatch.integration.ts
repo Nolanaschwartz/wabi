@@ -109,12 +109,21 @@ describe('DM dispatch integration', () => {
     );
     // Journal handler/session unused on this coach-path test (intent coach/0, nothing pending) — mock.
     const journalDmHandler = { handle: jest.fn().mockResolvedValue(undefined) } as any;
-    const journalSession = {
-      isPending: jest.fn().mockResolvedValue(false),
-      consume: jest.fn().mockResolvedValue(false),
+    const spokeSession = {
+      active: jest.fn().mockResolvedValue(null),
+      consume: jest.fn().mockResolvedValue(null),
       clear: jest.fn().mockResolvedValue(undefined),
     } as any;
-    const dmRouter = new DmRouterService(coachHandler, journalDmHandler, journalSession, intentRouter);
+    const tiltDmHandler = { handle: jest.fn().mockResolvedValue(false) } as any;
+    const moodDmHandler = { promptForRating: jest.fn(), capture: jest.fn() } as any;
+    const dmRouter = new DmRouterService(
+      coachHandler,
+      journalDmHandler,
+      spokeSession,
+      intentRouter,
+      tiltDmHandler,
+      moodDmHandler,
+    );
     const coaching = new CoachingService(
       classifier,
       sessionBuffer,

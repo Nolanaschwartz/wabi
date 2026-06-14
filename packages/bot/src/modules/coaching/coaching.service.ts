@@ -12,6 +12,7 @@ import { EscalationService } from '../crisis/escalation.service';
 import { TiltService } from '../tilt/tilt.service';
 import { UserService } from '../user/user.service';
 import { DmRouterService } from './dm-router.service';
+import { planTool, toolAllowed } from './tool-access';
 import { setupLinkMessage } from '../../lib/setup-link';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
 
@@ -136,10 +137,12 @@ export class CoachingService {
 
         if (classification === 'crisis') {
           this.burstCoalescer.cancel(userId);
-          // Crisis on the capture turn: drop the pending marker so the crisis text never reaches
-          // JournalService.write and a later DM routes fresh. (Quarantine clears buffers too, but the
-          // pending marker is the router's to clear.) Best-effort — a lingering marker expires on its TTL.
-          if (decision.plan.kind === 'journal-capture') await this.dmRouter.clearPending(userId);
+          // Crisis on a capture turn (journal or mood): drop the spoke floor so the crisis text never
+          // reaches a spoke writer and a later DM routes fresh. (Quarantine clears buffers too, but the
+          // floor is the router's to clear.) Best-effort — a lingering marker expires on its TTL.
+          if (decision.plan.kind === 'journal-capture' || decision.plan.kind === 'mood-capture') {
+            await this.dmRouter.clearPending(userId);
+          }
           this.langfuseTracer.span({ traceId, span: 'classify', input: batch, output: 'crisis', isCrisis: true });
           // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
           // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
@@ -187,11 +190,12 @@ export class CoachingService {
           },
         });
 
-        // Safety has run (tripwire + classifier). Coaching is the paid surface: a lapsed user gets a
-        // resubscribe prompt HERE — after crisis screening, never instead of it. (ADR-0011: classifier
-        // = consented; coach + store = active access. Dashboard carries the Subscribe control, #28.)
-        if (!access.hasActiveAccess) {
-          this.logger.log('no active access', { userId });
+        // Safety has run (tripwire + classifier). Gate at the TOOL boundary (ADR-0011): coaching and any
+        // new write (coach/give_prompt/save_entry) need active access — a lapsed user gets a resubscribe
+        // prompt HERE, after crisis screening, never instead of it. Reads of own data (get_entry) are
+        // allowed at any tier and pass this gate. (Dashboard carries the Subscribe control, #28.)
+        if (!toolAllowed(planTool(decision.plan), access.hasActiveAccess)) {
+          this.logger.log('tool gated: no active access', { userId, tool: planTool(decision.plan) });
           const subscribeUrl = `${baseUrl}/dashboard`;
           await message.reply({
             content: `Your trial has ended. Subscribe to continue chatting: ${subscribeUrl}`,
