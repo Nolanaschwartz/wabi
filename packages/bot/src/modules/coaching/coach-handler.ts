@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Message } from 'discord.js';
 import { CoachService } from './coach.service';
 import { buildCoachPrompt } from './coach-prompt';
@@ -9,6 +9,7 @@ import { MemoryStoreService } from '../memory/memory-store.service';
 import { rankByRecency } from '../memory/memory-ranker';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import type { StrategyPoint } from '../strategy-retrieval/strategy-retrieval.service';
+import { JsonLogger } from '../../lib/json-logger';
 
 /**
  * The already-safe, already-active turn handed to a DM handler. CoachingService gathers all of this
@@ -36,7 +37,7 @@ export interface DmTurnContext {
  */
 @Injectable()
 export class CoachHandler {
-  private readonly logger = new Logger(CoachHandler.name);
+  private readonly logger = new JsonLogger(CoachHandler.name);
 
   constructor(
     private readonly coach: CoachService,
@@ -48,6 +49,9 @@ export class CoachHandler {
 
   async handle(ctx: DmTurnContext): Promise<void> {
     const { message, userId, batch, session, strategies, inAftermath, timezone, traceId } = ctx;
+    const start = Date.now();
+
+    this.logger.log('coach handler start', { userId });
 
     // Hand the already-fetched session (gathered above for the classifier) to the pure prompt
     // assembler. CoachingService never shapes the prompt string itself — buildCoachPrompt owns
@@ -70,10 +74,12 @@ export class CoachHandler {
     const coachLatency = Date.now() - coachStart;
 
     if (!reply) {
-      this.logger.warn('coach returned empty, sending fallback', { userId });
+      this.logger.warn('coach returned empty, sending fallback', { userId, latencyMs: coachLatency });
       await message.reply("I'm not sure how to respond to that right now. Want to try again?");
       return;
     }
+
+    this.logger.log('coach reply generated', { userId, latencyMs: coachLatency, replyLength: reply.length });
 
     await this.sessionBuffer.append(userId, 'user', message.content);
     await this.sessionBuffer.append(userId, 'assistant', reply);
@@ -91,6 +97,8 @@ export class CoachHandler {
     if (streakResult && streakResult.message) {
       await message.reply(streakResult.message);
     }
+
+    this.logger.log('coach handler complete', { userId, durationMs: Date.now() - start, replyParts: parts.length });
 
     // Fire-and-forget: persistence failures are already logged inside deriveAndStore, and memory is
     // not needed to answer this turn. Awaiting it here previously starved the reply.

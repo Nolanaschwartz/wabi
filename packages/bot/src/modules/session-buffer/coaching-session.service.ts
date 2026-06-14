@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
+import { JsonLogger } from '../../lib/json-logger';
 
 const SESSION_IDLE_MS = 30 * 60 * 1000;
 
 @Injectable()
 export class CoachingSessionService {
+  private readonly logger = new JsonLogger(CoachingSessionService.name);
   async touch(discordId: string) {
     return prisma.coachingSession.upsert({
       where: { discordId },
@@ -52,7 +54,7 @@ export class CoachingSessionService {
         update: { doNotMine: true },
       })
       .catch((err) => {
-        console.error('[coaching-session] quarantine failed', err);
+        this.logger.error('quarantine failed', { discordId, error: err instanceof Error ? err.message : String(err) });
       });
   }
 
