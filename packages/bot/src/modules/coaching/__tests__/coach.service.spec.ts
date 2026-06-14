@@ -65,6 +65,51 @@ describe('CoachService', () => {
     expect(generateText).toHaveBeenCalledTimes(2);
   });
 
+  it('reports model id and token usage from the provider response (generateDetailed)', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: 'hello',
+      usage: { inputTokens: 12, outputTokens: 34 },
+    });
+
+    const result = await service.generateDetailed('system', 'test');
+
+    expect(result.text).toBe('hello');
+    expect(result.model).toBe('test-coach');
+    expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 34 });
+  });
+
+  it('sums token usage across the first attempt and the retry (no tokens lost)', async () => {
+    (generateText as jest.Mock)
+      .mockResolvedValueOnce({ text: '   ', usage: { inputTokens: 50, outputTokens: 0 } })
+      .mockResolvedValueOnce({ text: 'Retry works.', usage: { inputTokens: 30, outputTokens: 20 } });
+
+    const result = await service.generateDetailed('system', 'test');
+
+    expect(result.text).toBe('Retry works.');
+    // First attempt billed 50 input tokens before returning whitespace; those must not vanish.
+    expect(result.usage).toEqual({ inputTokens: 80, outputTokens: 20 });
+  });
+
+  it('reports the model id with usage absent when the provider omits token counts', async () => {
+    (generateText as jest.Mock).mockResolvedValue({ text: 'hello' });
+
+    const result = await service.generateDetailed('system', 'test');
+
+    expect(result.text).toBe('hello');
+    expect(result.model).toBe('test-coach');
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('reports the model id even when generation fails (empty text, no usage)', async () => {
+    (generateText as jest.Mock).mockRejectedValue(new Error('500'));
+
+    const result = await service.generateDetailed('system', 'test');
+
+    expect(result.text).toBe('');
+    expect(result.model).toBe('test-coach');
+    expect(result.usage).toBeUndefined();
+  });
+
   // The coach model (qwopus-3.6) is a reasoning model: a 500-token budget got truncated
   // mid-sentence and sometimes left content empty (all budget spent reasoning). Both the initial
   // attempt and the retry need enough room to finish reasoning and emit a full <400-char reply.
