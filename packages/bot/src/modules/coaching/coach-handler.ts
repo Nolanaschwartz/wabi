@@ -54,12 +54,9 @@ export class CoachHandler {
     // persona + layout + read-back labels.
     // Recency-aware recall: search pulls a wide candidate pool; re-rank so recently-salient facts
     // lead before buildCoachPrompt truncates to its display budget (PRD recency-aware-memory-
-    // retrieval). similarity defaults to 0 for any hit mem0 returns without a score.
+    // retrieval). A MemorySearchHit already carries a numeric similarity, so it is directly rankable.
     const memories = await this.memoryStore.search(userId, batch);
-    const rankedMemories = rankByRecency(
-      memories.map((m) => ({ ...m, similarity: m.similarity ?? 0 })),
-      Date.now(),
-    );
+    const rankedMemories = rankByRecency(memories, Date.now());
     const { system, prompt } = buildCoachPrompt({
       currentMessage: batch,
       turns: session?.turns ?? [],

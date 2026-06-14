@@ -97,9 +97,7 @@ describe('CrisisScreeningService.screen', () => {
     const verdict = await service.screen('123', 'I want to die');
 
     expect(classifier.classify).not.toHaveBeenCalled();
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', {
-      startAftermath: false,
-    });
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', 'field');
     expect(verdict).toEqual({ kind: 'crisis', response: payload });
   });
 
@@ -111,9 +109,7 @@ describe('CrisisScreeningService.screen', () => {
     expect(classifier.classify).toHaveBeenCalledWith(
       "i just don't see the point in any of it",
     );
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', {
-      startAftermath: false,
-    });
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'field');
     expect(verdict).toEqual({ kind: 'crisis', response: payload });
   });
 
@@ -154,9 +150,7 @@ describe('CrisisScreeningService.guard — the shared screened-record path', () 
     const result = await service.guard('123', 'I want to die', persist);
 
     expect(persist).not.toHaveBeenCalled();
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', {
-      startAftermath: false,
-    });
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'tripwire', 'field');
     expect(result).toEqual({ crisis: true, response: payload });
   });
 

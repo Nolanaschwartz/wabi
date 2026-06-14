@@ -1,5 +1,7 @@
+import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 
+@Injectable()
 export class XpService {
   async award(
     discordId: string,

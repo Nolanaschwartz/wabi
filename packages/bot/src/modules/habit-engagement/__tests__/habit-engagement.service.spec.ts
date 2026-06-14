@@ -3,11 +3,15 @@ import { XpService } from '../../xp/xp.service';
 import { StreaksService } from '../../streaks/streaks.service';
 
 jest.mock('../../xp/xp.service', () => ({
-  XpService: jest.fn().mockImplementation(() => ({ award: jest.fn() })),
+  XpService: jest.fn().mockImplementation(() => ({ award: jest.fn(), total: jest.fn() })),
 }));
 
 jest.mock('../../streaks/streaks.service', () => ({
-  StreaksService: jest.fn().mockImplementation(() => ({ advance: jest.fn() })),
+  StreaksService: jest.fn().mockImplementation(() => ({
+    advance: jest.fn(),
+    getCurrentStreak: jest.fn(),
+    wellnessScore: jest.fn(),
+  })),
 }));
 
 jest.mock('../../user/user.service', () => ({
@@ -24,7 +28,7 @@ describe('HabitEngagementService — the single Engagement writer (ADR-0027)', (
   beforeEach(() => {
     jest.clearAllMocks();
     xp = new XpService() as any;
-    streaks = new StreaksService(xp) as any;
+    streaks = new StreaksService() as any;
     service = new HabitEngagementService(xp, streaks);
   });
 
@@ -65,5 +69,28 @@ describe('HabitEngagementService — the single Engagement writer (ADR-0027)', (
     await service.record('123', 'journal');
 
     expect(xp.award).toHaveBeenCalledWith('123', 10, 'journal');
+  });
+
+  // The Engagement read seam (ADR-0027). Engagement is the single unit behind streak/XP/wellness, so
+  // the cross-cutting profile read lives HERE — the one place that already holds both the XP and streak
+  // collaborators — not reached upward from inside StreaksService.
+  describe('profile (the Engagement read model)', () => {
+    it('aggregates total XP, current streak, and wellness from the collaborators', async () => {
+      (xp.total as jest.Mock).mockResolvedValue(120);
+      (streaks.getCurrentStreak as jest.Mock).mockResolvedValue(5);
+      (streaks.wellnessScore as jest.Mock).mockResolvedValue({ score: 80, level: '🌟 Wellness Champion' });
+
+      const profile = await service.profile('123');
+
+      expect(xp.total).toHaveBeenCalledWith('123');
+      expect(streaks.getCurrentStreak).toHaveBeenCalledWith('123');
+      expect(streaks.wellnessScore).toHaveBeenCalledWith('123');
+      expect(profile).toEqual({
+        xp: 120,
+        streak: 5,
+        wellnessScore: 80,
+        wellnessLevel: '🌟 Wellness Champion',
+      });
+    });
   });
 });

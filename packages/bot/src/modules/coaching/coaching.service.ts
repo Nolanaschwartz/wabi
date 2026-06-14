@@ -12,8 +12,6 @@ import { EscalationService } from '../crisis/escalation.service';
 import { TiltService } from '../tilt/tilt.service';
 import { UserService } from '../user/user.service';
 import { DmRouterService } from './dm-router.service';
-import { IntentRouterService } from '../intent-router/intent-router.service';
-import { JournalSessionService } from '../journal/journal-session.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 
 @Injectable()
@@ -33,8 +31,6 @@ export class CoachingService {
     private readonly tilt: TiltService,
     private readonly userService: UserService,
     private readonly dmRouter: DmRouterService,
-    private readonly intentRouter: IntentRouterService,
-    private readonly journalSession: JournalSessionService,
   ) {}
 
   async handle(message: Message): Promise<void> {
@@ -98,35 +94,30 @@ export class CoachingService {
       const session = await this.sessionBuffer.getContext(userId).catch(() => null);
       const classifierContext = await this.buildClassifierContext(userId, session);
 
-      // Is a two-turn journal capture armed? Cheap, fail-soft Redis read. When set, THIS turn is the
-      // entry, so the intent-router LLM call is pointless — skip it (the dispatch is predetermined).
-      const pendingJournal = await this.journalSession.isPending(userId);
-
-      // The intent router runs IN this block — parallel with the crisis classifier and strategy
-      // search, so dispatch intent costs no added serial latency. It is fail-soft (coach/0 on any
-      // error) and is NEVER consulted on a crisis turn: a crisis short-circuits below and the intent
-      // is discarded. (ADR-0021: safety is the floor; routing is downstream of it.) When a journal
-      // capture is pending we substitute a synthetic verdict and skip the LLM entirely.
-      const [classification, strategies, intent] = await Promise.all([
+      // The router's routing decision runs IN this block — parallel with the crisis classifier and
+      // strategy search, so it costs no added serial latency. prepare() is side-effect-free and the
+      // whole routing decision (pending-capture check, intent classifier, θ, inline extraction) lives
+      // behind it; the dispatch is deferred to the safe path below. The crisis floor stays upstream of
+      // the router: a crisis short-circuits here and the plan is discarded. (ADR-0021: safety is the
+      // floor; routing is downstream of it.)
+      const [classification, strategies, decision] = await Promise.all([
         this.classifier.classify(batch, classifierContext),
         this.strategyRetrieval.search(batch).catch(() => []),
-        pendingJournal
-          ? Promise.resolve({ intent: 'journal' as const, confidence: 1 })
-          : this.intentRouter.route(batch, { recentTurns: session?.turns }),
+        this.dmRouter.prepare(userId, batch, { recentTurns: session?.turns }),
       ]);
 
       if (classification === 'crisis') {
         this.burstCoalescer.cancel(userId);
         // Crisis on the capture turn: drop the pending marker so the crisis text never reaches
         // JournalService.write and a later DM routes fresh. (Quarantine clears buffers too, but the
-        // pending marker is ours to clear.) Best-effort — a lingering marker would expire on its TTL.
-        if (pendingJournal) await this.journalSession.clear(userId);
+        // pending marker is the router's to clear.) Best-effort — a lingering marker expires on its TTL.
+        if (decision.plan.kind === 'journal-capture') await this.dmRouter.clearPending(userId);
         this.langfuseTracer.trace(traceId, 'classify', batch, 'crisis', { isCrisis: true });
         // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
         // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
         // DM channel. No more hand-assembling the sequence here and again on the tripwire path.
         // (ADR-0006/0010/0028.)
-        const response = await this.escalation.escalate(userId, 'classifier');
+        const response = await this.escalation.escalate(userId, 'classifier', 'conversation');
         await message.reply(response);
         return;
       }
@@ -135,8 +126,8 @@ export class CoachingService {
 
       // Observe-only: record the router's verdict on every safe turn so the dispatch threshold (θ) can
       // be tuned against real traffic before any intent actually changes behaviour (Slice A2).
-      this.langfuseTracer.trace(traceId, 'intent', batch, intent.intent, {
-        confidence: intent.confidence,
+      this.langfuseTracer.trace(traceId, 'intent', batch, decision.verdict.intent, {
+        confidence: decision.verdict.confidence,
       });
 
       // Safety has run (tripwire + classifier). Coaching is the paid surface: a lapsed user gets a
@@ -164,9 +155,9 @@ export class CoachingService {
       }
 
       // The turn has cleared every gate: consented user, screened safe, active access, no tilt offer
-      // outstanding. Hand it to the router, which dispatches to the right handler (today: coach only).
+      // outstanding. Run the prepared plan, which dispatches to the right handler (coach or journal).
       // The crisis-safety floor does NOT live in the router — it is always upstream of this call.
-      await this.dmRouter.route(
+      await this.dmRouter.dispatch(
         {
           message,
           userId,
@@ -177,8 +168,7 @@ export class CoachingService {
           timezone: user.timezone ?? 'UTC',
           traceId,
         },
-        intent,
-        pendingJournal,
+        decision.plan,
       );
     } finally {
       if (typingInterval) clearInterval(typingInterval);

@@ -64,23 +64,19 @@ export class CrisisScreeningService {
    * Full screening for one piece of a person's free-text input from any atomic surface — a Journal
    * Entry, a Mood note, a Tilt trigger (ADR-0028). Runs the two crisis-detection layers cheap-first
    * (tripwire then classifier) and, on a hit, performs a Crisis Escalation that surfaces resources +
-   * records one Escalation Event but does NOT open the DM-session aftermath window (a logged field is
-   * not a Conversation, so `startAftermath: false`). Returns the renderable crisis response for the
-   * caller to send on its own surface, or `{ kind: 'safe' }`.
+   * records one Escalation Event but does NOT open the DM-session aftermath window — a logged field is
+   * not a Conversation, so it escalates on the `'field'` surface. Returns the renderable crisis response
+   * for the caller to send on its own surface, or `{ kind: 'safe' }`.
    */
   async screen(userId: string, content: string): Promise<ScreeningVerdict> {
     if (this.tripwire(content)) {
-      const response = await this.escalation.escalate(userId, 'tripwire', {
-        startAftermath: false,
-      });
+      const response = await this.escalation.escalate(userId, 'tripwire', 'field');
       return { kind: 'crisis', response };
     }
 
     const classification = await this.classifier.classify(content);
     if (classification === 'crisis') {
-      const response = await this.escalation.escalate(userId, 'classifier', {
-        startAftermath: false,
-      });
+      const response = await this.escalation.escalate(userId, 'classifier', 'field');
       return { kind: 'crisis', response };
     }
 

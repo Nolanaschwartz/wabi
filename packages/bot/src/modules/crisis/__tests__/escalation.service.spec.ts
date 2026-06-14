@@ -44,7 +44,7 @@ describe('EscalationService', () => {
   });
 
   it('returns the locale crisis resources as a renderable payload — no transport', async () => {
-    const response = await service.escalate('123', 'tripwire');
+    const response = await service.escalate('123', 'tripwire', 'conversation');
 
     expect(crisisResources.resourcesFor).toHaveBeenCalledWith('en-US');
     expect(response).toEqual(
@@ -57,13 +57,13 @@ describe('EscalationService', () => {
   });
 
   it('resolves the locale from the userId, not a Message', async () => {
-    await service.escalate('123', 'tripwire');
+    await service.escalate('123', 'tripwire', 'conversation');
 
     expect(userService.findByDiscordId).toHaveBeenCalledWith('123');
   });
 
   it('records exactly ONE Escalation Event, tagged with the layer that fired', async () => {
-    await service.escalate('123', 'classifier');
+    await service.escalate('123', 'classifier', 'conversation');
 
     expect(prisma.escalationEvent.create).toHaveBeenCalledTimes(1);
     expect(prisma.escalationEvent.create).toHaveBeenCalledWith({
@@ -71,17 +71,15 @@ describe('EscalationService', () => {
     });
   });
 
-  it('hands off to the Crisis Aftermath by default (DM-surfaced crisis)', async () => {
-    await service.escalate('123', 'tripwire');
+  it('opens the Crisis Aftermath for a conversation surface (a live DM turn)', async () => {
+    await service.escalate('123', 'tripwire', 'conversation');
 
     expect(crisisAftermath.onEscalation).toHaveBeenCalledTimes(1);
     expect(crisisAftermath.onEscalation).toHaveBeenCalledWith('123');
   });
 
-  it('skips the DM-session Aftermath when startAftermath is false (a logged field is not a Conversation)', async () => {
-    const response = await service.escalate('123', 'classifier', {
-      startAftermath: false,
-    });
+  it('skips the DM-session Aftermath for a field surface (a logged field is not a Conversation)', async () => {
+    const response = await service.escalate('123', 'classifier', 'field');
 
     // Resources + event still happen — only the DM-session aftermath is withheld.
     expect(response.embeds.length).toBeGreaterThan(0);
@@ -90,7 +88,7 @@ describe('EscalationService', () => {
   });
 
   it('passes the tripwire layer through unchanged', async () => {
-    await service.escalate('123', 'tripwire');
+    await service.escalate('123', 'tripwire', 'conversation');
 
     expect(prisma.escalationEvent.create).toHaveBeenCalledWith({
       data: { userId: '123', layer: 'tripwire' },

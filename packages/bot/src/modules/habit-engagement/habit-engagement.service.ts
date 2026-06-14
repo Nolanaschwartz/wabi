@@ -44,4 +44,25 @@ export class HabitEngagementService {
     await this.xp.award(userId, xpAwarded, habit);
     return { streak: transition.streak, message: transition.message, xpAwarded };
   }
+
+  /**
+   * The Engagement read model (ADR-0027): the single cross-cutting view of a person's gamification —
+   * total XP, current Streak, Wellness Score + level. It lives here, the one place that already holds
+   * both collaborators, so neither leaf model has to reach into the other (Streaks no longer depends on
+   * XP). Each field reads the Engagement log independently, so they fetch concurrently.
+   */
+  async profile(userId: string): Promise<{
+    xp: number;
+    streak: number;
+    wellnessScore: number;
+    wellnessLevel: string;
+  }> {
+    const [xp, streak, wellness] = await Promise.all([
+      this.xp.total(userId),
+      this.streaks.getCurrentStreak(userId),
+      this.streaks.wellnessScore(userId),
+    ]);
+
+    return { xp, streak, wellnessScore: wellness.score, wellnessLevel: wellness.level };
+  }
 }

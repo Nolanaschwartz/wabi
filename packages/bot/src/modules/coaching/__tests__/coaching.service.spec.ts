@@ -206,7 +206,12 @@ describe('CoachingService', () => {
       consume: jest.fn().mockResolvedValue(true),
       clear: jest.fn().mockResolvedValue(undefined),
     };
-    const dmRouter = new DmRouterService(coachHandler, journalDmHandler as any, journalSession as any);
+    const dmRouter = new DmRouterService(
+      coachHandler,
+      journalDmHandler as any,
+      journalSession as any,
+      intentRouter as any,
+    );
     service = new CoachingService(
       classifier,
       sessionBuffer,
@@ -220,8 +225,6 @@ describe('CoachingService', () => {
       tilt,
       userService,
       dmRouter,
-      intentRouter as any,
-      journalSession as any,
     );
   });
 
@@ -301,7 +304,7 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     // Crisis response fires; the lapsed user is NOT handed a subscribe prompt instead.
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
     expect(mockMessage.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
@@ -327,7 +330,7 @@ describe('CoachingService', () => {
     // The classifier path now crosses ONE seam for the whole crisis response — it no longer
     // hand-assembles quarantine/log/aftermath inline (which used to double-fire via onCrisis).
     expect(escalation.escalate).toHaveBeenCalledTimes(1);
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
     // The returned crisis payload is rendered on the DM channel.
     expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
     expect(coach.generate).not.toHaveBeenCalled();
@@ -553,7 +556,7 @@ describe('CoachingService', () => {
     // The crisis text never reaches the journal writer; the marker is cleared so a later DM routes fresh.
     expect(journalSession.clear).toHaveBeenCalledWith('123');
     expect(journalDmHandler.handle).not.toHaveBeenCalled();
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
   });
 
   it('discards the intent verdict on a crisis turn (never traced as intent, never dispatched)', async () => {
@@ -565,7 +568,7 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier');
+    expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
     expect(coach.generate).not.toHaveBeenCalled();
     // The crisis short-circuit happens before the intent trace — the routing verdict is dropped.
     expect(langfuseTracer.trace).not.toHaveBeenCalledWith(

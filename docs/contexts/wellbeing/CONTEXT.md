@@ -64,6 +64,10 @@ _Avoid_: filter, sentiment analysis, moderation
 Running the two detection layers — Crisis Tripwire then Crisis Classifier — over a piece of a person's free-text input and, on a hit, performing a Crisis Escalation. **Every free-text field a person can express distress into must cross it** — a Mood note, a Tilt trigger, a Journal Entry, a DM — so the safety response is identical regardless of which command surfaced the words; an unscreened free-text field is a safety gap. Atomic surfaces (a Mood note, Tilt trigger, Journal Entry) screen in one call; the DM path runs the Tripwire *before* burst-coalescing and the Classifier *after*, but either layer routes its hit through the one Escalation seam. An inner-state-field crisis escalates resources + Escalation Event but **not** the DM-session Crisis Aftermath — a logged field is not a Conversation.
 _Avoid_: moderation, content screening
 
+**Crisis Surface**:
+The *kind* of input a Crisis Escalation fired on — the one axis that varies what happens after resources are surfaced. A **Conversation** surface (a live DM turn) opens the Crisis Aftermath; a **field** surface (a logged Mood note, Tilt trigger, or Journal Entry) escalates resources + Escalation Event only — a logged field is not a Conversation, so it never opens the Aftermath Window (ADR-0010/0028). Every escalation names its surface; the surface→aftermath mapping lives in one place so the DM path and the screened-field path cannot drift.
+_Avoid_: channel, source, context (too generic)
+
 **Crisis Resources**:
 The locale-appropriate hotlines and support lines Wabi surfaces on escalation, keyed by the person's Discord locale. Wabi points to these; it never substitutes for them.
 _Avoid_: helpline list, referrals
