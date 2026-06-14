@@ -160,7 +160,7 @@ describe('EchoController', () => {
       // The whole crisis response goes through the single Escalation seam, tagged 'tripwire' and
       // keyed by userId — and the returned payload is rendered on the DM channel.
       expect(escalate).toHaveBeenCalledTimes(1);
-      expect(escalate).toHaveBeenCalledWith('123', 'tripwire');
+      expect(escalate).toHaveBeenCalledWith('123', 'tripwire', 'conversation');
       expect(message.reply).toHaveBeenCalledWith(crisisPayload);
     });
   });
