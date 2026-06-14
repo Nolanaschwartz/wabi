@@ -1,10 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { safeFetch } from '../../lib/safe-fetch';
+/** A derived-memory fact with no query context (e.g. a full export / delete enumeration). */
 export type MemoryEntry = {
   id: string;
   content: string;
-  /** mem0 similarity score for the search query; present on search hits, omitted elsewhere. */
-  similarity?: number;
+};
+
+/**
+ * A derived-memory fact returned by {@link MemoryStoreService.search}. Unlike a bare {@link MemoryEntry}
+ * it ALWAYS carries a numeric `similarity` (the store defaults a missing mem0 score to 0), so callers
+ * can hand a hit straight to the recency ranker — `MemorySearchHit` structurally satisfies the ranker's
+ * `RankableMemory` with no per-call massaging. `updatedAt` is still optional: not every hit is timestamped.
+ */
+export type MemorySearchHit = {
+  id: string;
+  content: string;
+  /** mem0 similarity score for the query; the store guarantees a number (0 when mem0 omits a score). */
+  similarity: number;
   /** When mem0 last touched this fact, epoch ms (from updated_at, falling back to created_at). */
   updatedAt?: number;
 };
@@ -110,7 +122,7 @@ export class MemoryStoreService {
   async search(
     userId: string,
     query: string,
-  ): Promise<MemoryEntry[]> {
+  ): Promise<MemorySearchHit[]> {
     if (!this.enabled) return [];
 
     try {
@@ -130,7 +142,7 @@ export class MemoryStoreService {
         },
       );
       if (!json) return [];
-      const results: MemoryEntry[] = (json.results ?? []).map((r) => ({
+      const results: MemorySearchHit[] = (json.results ?? []).map((r) => ({
         id: r.id ?? '',
         content: r.memory ?? '',
         similarity: r.score ?? 0,
@@ -139,7 +151,7 @@ export class MemoryStoreService {
       this.logOp('search', userId, 'success', {
         query,
         hitCount: results.length,
-        ids: results.map((r: MemoryEntry) => r.id),
+        ids: results.map((r: MemorySearchHit) => r.id),
       });
       return results;
     } catch (err) {
