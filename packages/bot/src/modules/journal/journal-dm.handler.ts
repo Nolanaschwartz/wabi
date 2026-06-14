@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { JournalService } from './journal.service';
-import { JournalSessionService } from './journal-session.service';
+import { SpokeSessionService } from '../spoke-session/spoke-session.service';
 import { InnerStateMemoryService } from '../memory/inner-state-memory.service';
 import type { DmTurnContext } from '../coaching/coach-handler';
 
@@ -21,7 +21,7 @@ export class JournalDmHandler {
   constructor(
     private readonly journal: JournalService,
     private readonly innerStateMemory: InnerStateMemoryService,
-    private readonly journalSession: JournalSessionService,
+    private readonly spokeSession: SpokeSessionService,
   ) {}
 
   /** `content` is the entry text — inline content (one-turn) or the whole verbatim capture turn (two-turn). */
@@ -43,8 +43,22 @@ export class JournalDmHandler {
    * router's pending-capture branch calls {@link handle} with that verbatim text).
    */
   async beginConversation(ctx: DmTurnContext): Promise<void> {
-    await this.journalSession.setPending(ctx.userId);
+    await this.spokeSession.setActive(ctx.userId, 'journal');
     const prompt = await this.journal.prompt();
     await ctx.message.reply(`Sure — let's journal. ${prompt}`);
+  }
+
+  /**
+   * Read back the person's most recent entry (get_entry tool). A pure read: it never writes and never
+   * arms the floor, so it is allowed at any access tier (the gate lives upstream — ADR-0011). When there
+   * is nothing to read, it replies gracefully rather than erroring.
+   */
+  async getEntry(ctx: DmTurnContext): Promise<void> {
+    const entry = await this.journal.latestEntry(ctx.userId);
+    if (!entry) {
+      await ctx.message.reply("You haven't journaled anything yet. Want to start? Just say \"journal\".");
+      return;
+    }
+    await ctx.message.reply(`Here's your last entry:\n\n> ${entry.content}`);
   }
 }

@@ -21,6 +21,12 @@ export interface JournalWriteResult {
   xpAwarded: number;
 }
 
+export interface JournalEntrySummary {
+  content: string;
+  reflection: string | null;
+  createdAt: Date;
+}
+
 @Injectable()
 export class JournalService {
   constructor(
@@ -53,6 +59,15 @@ export class JournalService {
     const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
 
     return { reflection: reflection || '', xpAwarded };
+  }
+
+  // Read-back for the get_entry tool: the person's most recent entry, or null if they have none. A pure
+  // read — no write, no engagement. Allowed at any access tier (ADR-0011), so the gate lives upstream.
+  async latestEntry(discordId: string): Promise<JournalEntrySummary | null> {
+    return prisma.journalEntry.findFirst({
+      where: { userId: discordId },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   private async generateReflection(content: string): Promise<string> {

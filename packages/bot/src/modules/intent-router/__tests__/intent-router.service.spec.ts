@@ -36,6 +36,56 @@ describe('IntentRouterService', () => {
     expect(result).toEqual({ intent: 'journal', confidence: 0.82 });
   });
 
+  it('parses the journal tool sub-intent when the model asks for a prompt (give_prompt)', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: '{"intent":"journal","confidence":0.9,"tool":"give_prompt"}',
+    });
+
+    const result = await service.route('i need a journal entry prompt');
+
+    expect(result).toEqual({ intent: 'journal', confidence: 0.9, tool: 'give_prompt' });
+  });
+
+  it('parses the journal tool sub-intent when the model writes an entry (save_entry)', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: '{"intent":"journal","confidence":0.88,"tool":"save_entry"}',
+    });
+
+    const result = await service.route('journal: rough ranked night');
+
+    expect(result).toEqual({ intent: 'journal', confidence: 0.88, tool: 'save_entry' });
+  });
+
+  it('parses the journal tool sub-intent when the model reads back an entry (get_entry)', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: '{"intent":"journal","confidence":0.84,"tool":"get_entry"}',
+    });
+
+    const result = await service.route('what did i journal yesterday');
+
+    expect(result).toEqual({ intent: 'journal', confidence: 0.84, tool: 'get_entry' });
+  });
+
+  it('ignores an unknown tool value (verdict carries no tool)', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: '{"intent":"journal","confidence":0.7,"tool":"frobnicate"}',
+    });
+
+    const result = await service.route('something');
+
+    expect(result).toEqual({ intent: 'journal', confidence: 0.7 });
+  });
+
+  it('ignores a tool on a non-journal intent (tool is journal-only)', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: '{"intent":"coach","confidence":0.9,"tool":"give_prompt"}',
+    });
+
+    const result = await service.route('just venting');
+
+    expect(result).toEqual({ intent: 'coach', confidence: 0.9 });
+  });
+
   it('passes the confidence through verbatim', async () => {
     (generateText as jest.Mock).mockResolvedValue({
       text: '{"intent":"tilt","confidence":0.41}',

@@ -9,10 +9,21 @@ export type Intent = 'journal' | 'tilt' | 'mood' | 'coach';
 
 const INTENTS: readonly Intent[] = ['journal', 'tilt', 'mood', 'coach'];
 
+/**
+ * Journal sub-intent (which journal tool the person wants), folded into the discovery verdict so the
+ * hub never has to guess it from regex. `give_prompt` = they're ASKING for a prompt to write against;
+ * `save_entry` = they're providing the entry text. Only meaningful when intent === 'journal'.
+ */
+export type JournalTool = 'give_prompt' | 'save_entry' | 'get_entry';
+
+const JOURNAL_TOOLS: readonly JournalTool[] = ['give_prompt', 'save_entry', 'get_entry'];
+
 export interface IntentResult {
   intent: Intent;
   /** Model confidence in [0, 1]. 0 means "no usable signal" (fail-soft default). */
   confidence: number;
+  /** Journal sub-intent. Present only for a journal verdict that carried a valid tool. */
+  tool?: JournalTool;
 }
 
 /**
@@ -34,7 +45,11 @@ const ROUTER_SYSTEM_PROMPT =
   'intent is one of: "journal" (they want to write/reflect on how they are doing), ' +
   '"tilt" (they want help calming gameplay frustration), "mood" (they want to log how they feel), ' +
   'or "coach" (anything else — general venting, chat, advice). ' +
-  'confidence is your certainty in [0,1]. When unsure, use "coach" with low confidence.';
+  'confidence is your certainty in [0,1]. When unsure, use "coach" with low confidence. ' +
+  'When intent is "journal", ALSO include "tool": "give_prompt" if they are ASKING you for a prompt or ' +
+  'question to write against (e.g. "give me a journal prompt", "what should I journal about"), ' +
+  '"get_entry" if they want to READ BACK a past entry (e.g. "what did I journal yesterday"), or ' +
+  '"save_entry" if the message already IS the entry text they want recorded.';
 
 /**
  * Stateless inference seam that classifies a DM's intent so the DM router can dispatch it. It is NOT a
@@ -84,7 +99,7 @@ export class IntentRouterService {
       return FAIL_SOFT;
     }
 
-    const obj = parsed as { intent?: unknown; confidence?: unknown };
+    const obj = parsed as { intent?: unknown; confidence?: unknown; tool?: unknown };
     const intent = obj.intent;
     const confidence = obj.confidence;
 
@@ -93,7 +108,12 @@ export class IntentRouterService {
       return FAIL_SOFT;
     }
 
-    return { intent: intent as Intent, confidence };
+    const result: IntentResult = { intent: intent as Intent, confidence };
+    // The tool sub-intent is journal-only; ignore it elsewhere or when the value is unrecognised.
+    if (intent === 'journal' && typeof obj.tool === 'string' && JOURNAL_TOOLS.includes(obj.tool as JournalTool)) {
+      result.tool = obj.tool as JournalTool;
+    }
+    return result;
   }
 
   private buildPrompt(batch: string, context?: IntentContext): string {
