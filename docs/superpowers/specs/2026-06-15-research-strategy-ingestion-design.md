@@ -17,7 +17,17 @@ This spec covers the **research pipeline**: how Wabi autonomously discovers and 
 2. **Agenda:** a curated seed topic list **plus** agentic discovery — the agent may branch to related papers, not just walk a fixed list.
 3. **Execution:** a separate worker package/process, isolated from the always-on bot. It submits drafts to the bot over an authenticated HTTP endpoint; it never writes Postgres or Qdrant directly.
 4. **Sources (v1):** NCBI/PubMed E-utilities + medRxiv. Both keyless, structured, programmatic. Open-web search/fetch ("common practices") is phase 2.
-5. **Scope (v1):** prove high-quality, well-grounded *technique* extraction into the queue. No `StrategyDraft` shape change; no behavioral-applicability metadata; no retrieval changes beyond reusing `search` for dedup.
+5. **Scope (v1):** prove high-quality, well-grounded *technique* extraction into the queue. No `StrategyDraft` shape change; no behavioral-applicability metadata; no retrieval changes beyond reusing `search` for dedup. One small new model — `ProcessedSource` (a source-ID ledger for cross-run idempotency, §Agent behavior) — is in scope; it is not a `StrategyDraft` change.
+
+### Agent behavior (resolved this round)
+
+The agent is no longer a black box. Five decisions fix how it reads and what it stores:
+
+- **Reading depth — full text when freely available, abstract otherwise.** A coaching *technique* (the usable protocol) lives in a paper's intervention/methods section, not the abstract. The agent reads PubMed Central open-access full text and medRxiv full text when cleanly fetchable, and falls back to the abstract otherwise — returning `null` rather than guessing when the abstract is too thin. Bounded by the existing per-topic timeout and token budget.
+- **What we store — grounded, *generalized* technique, not audience-adapted text.** The extractor pulls the transferable, actionable mechanism in audience-neutral language ("tense-and-release the major muscle groups for ~5 min lowers acute anxiety"), keeping the verbatim quote + the studied population as grounding/context. It does **not** rewrite findings into gamer-speak. Gamer framing and Wabi's voice are applied at **coaching time**, where the user's actual state and memory live — pre-baking a framing here would freeze a context-blind guess and, decisively, break `faithfulnessCheck` (an adapted technique has no source text to ground against). The studied-population context captured now is the raw material for the deferred behavioral-applicability spec.
+- **Decision policy — deterministic selection + a thin LLM relevance gate.** Search hits are ranked deterministically (E-utilities relevance + publication type, preferring meta-analysis/RCT/review). One cheap LLM call per candidate acts as a relevance gate — "is this a coaching-relevant behavioral technique worth reading/branching from?" — and drives branch-or-stop; all hard caps still bound the loop. The gate runs on the **abstract first**, so full text is fetched only for papers that pass.
+- **In-run technique dedup — yes, via the worker's existing LLM (no embeddings in the worker).** At COLLECT, each candidate is checked against candidates already kept this run: a lexical prefilter (normalized title/technique overlap) then an LLM confirm on close calls. Duplicates are dropped *and* the agent prefers to keep reading/branching (within caps) to fill its quota with **distinct** techniques rather than waste a draft slot.
+- **Source-level idempotency — a persistent `ProcessedSource` ledger queried via a bot tool.** Before READ, the agent calls an authenticated bot endpoint `GET /admin/strategies/seen?sourceId=…`; if the paper was processed on any prior run it is skipped before any full-text fetch or extraction. The ledger is ID-only (no content, no personal data), **written by the bot** at ingest as a side-effect of `submitDraft` — the worker has no DB access (ADR-0002/0033). A tiny in-memory visited set is kept *within* a run only, to avoid re-calling the tool when `elink` loops back to a paper already touched this run.
 
 ## Non-goals (explicitly deferred)
 
@@ -34,28 +44,36 @@ A new isolated worker, `packages/research`, does all heavy/bursty agentic work *
 packages/research  (new, separate process)
   seed-topics.ts ........ curated list of gamer-wellbeing themes (config)
   sources/
-    pubmed.ts ........... NCBI E-utilities: esearch, efetch/esummary, elink (related → discovery)
-    medrxiv.ts .......... medRxiv details API (preprints; tagged lower-evidence)
+    pubmed.ts ........... NCBI E-utilities: esearch, efetch/esummary, elink (related → discovery), PMC full text
+    medrxiv.ts .......... medRxiv details API + full text (preprints; tagged lower-evidence)
   agent/
-    research-agent.ts ... bounded tool-calling loop (search → discover → read)
-    extract.ts .......... LLM turns one source into a grounded StrategyDraft candidate
-  ingest-client.ts ...... POSTs candidates to the bot, x-admin-secret auth
+    research-agent.ts ... bounded loop: search → seen-check → gate → discover → read → extract → dedup → collect
+    relevance-gate.ts ... thin LLM call on the abstract; gates full-text read and branch-or-stop
+    extract.ts .......... LLM turns one full-text/abstract source into a grounded StrategyDraft candidate
+    dedup.ts ............ in-run technique dedup (lexical prefilter → LLM confirm), no embeddings
+  bot-client.ts ......... talks to the bot, x-admin-secret auth: submit() + seen()
   run.ts ................ entrypoint: scheduled run + `--topic X` manual run, hard bounds
 
 packages/bot  (existing, minimal additions)
   strategy-admin.controller.ts
-    + POST /admin/strategies/ingest  (AdminGuard) → dedup → submitDraft() → trust gate → pending-review
+    + POST /admin/strategies/ingest  (AdminGuard) → dedup → submitDraft() → record ProcessedSource → pending-review
+    + GET  /admin/strategies/seen    (AdminGuard) → ProcessedSource lookup → { seen: bool }
+  prisma/schema.prisma
+    + model ProcessedSource { sourceId @unique, source, firstSeenAt, lastStatus }  (ID-only ledger)
 ```
 
 ### Units (each one job, injected dependencies, no hidden globals)
 
-1. **`PubMedTool`** — wraps NCBI E-utilities. `search(query)`, `fetch(ids)`, `related(id)` (`elink`, the agentic-discovery primitive). Pure HTTP, no LLM. Serializes through a rate limiter.
-2. **`MedrxivTool`** — wraps the medRxiv details API. Same `search`/`fetch` surface; every result carries `isPreprint: true`.
-3. **`ResearchAgent`** — the only agentic unit. Given a seed topic, calls the tools, decides branch-or-stop, halts at hard bounds. Returns candidate drafts.
-4. **`extract`** — one source record → one candidate draft *or* `null`, with a **verbatim** `sourceText` quote grounding the technique. Returns `null` when the source has no clean, safe, self-contained technique.
-5. **`IngestClient`** — thin HTTP client to the bot's ingest endpoint; the only outbound coupling to the bot.
-6. **Bot ingest endpoint** — new authenticated route: dedup (reuse `strategyRetrieval.search` against the live library) → existing `submitDraft()` → trust gate.
-7. **`run` entrypoint** — schedules runs, enforces the per-run budget, supports a manual single-topic run for evaluating extraction quality.
+1. **`PubMedTool`** — wraps NCBI E-utilities. `search(query)`, `fetch(ids)` (abstract + structured metadata), `fullText(id)` (PMC open-access when available), `related(id)` (`elink`, the agentic-discovery primitive). Pure HTTP, no LLM. Serializes through a rate limiter.
+2. **`MedrxivTool`** — wraps the medRxiv details API + full text. Same `search`/`fetch`/`fullText` surface; every result carries `isPreprint: true`.
+3. **`relevanceGate`** — one cheap LLM call on a paper's *abstract*: is this a coaching-relevant behavioral technique worth reading/branching from? Returns a keep/skip + a branch hint. Gates the expensive full-text read.
+4. **`ResearchAgent`** — the only agentic orchestrator. Given a seed topic: `seen`-check each candidate, deterministically rank, run the relevance gate, branch-or-stop via `related()`, read full text, call `extract`, dedup in-run, collect. Halts at hard bounds; holds an in-memory `RunState` (visited set + counters + tally/stop-reason).
+5. **`extract`** — one full-text/abstract source → one candidate draft *or* `null`, storing a **generalized, audience-neutral** technique with a **verbatim** `sourceText` quote grounding it (never gamer-adapted — that is coaching-time work). Returns `null` when the source has no clean, safe, self-contained technique.
+6. **`dedup` (in-run)** — given a candidate and the run's kept candidates, returns duplicate/distinct via lexical prefilter then LLM confirm. No embeddings.
+7. **`BotClient`** — thin authenticated HTTP client to the bot: `submit(candidate)` and `seen(sourceId)`. The only outbound coupling to the bot.
+8. **Bot ingest endpoint** — new authenticated route: library dedup (reuse `strategyRetrieval.search`) → `submitDraft()` → trust gate → record `ProcessedSource`.
+9. **Bot seen endpoint** — new authenticated read route: `ProcessedSource` lookup by `sourceId` → `{ seen }`. Source-level idempotency primitive.
+10. **`run` entrypoint** — schedules runs, enforces the per-run budget, supports a manual single-topic run for evaluating extraction quality.
 
 ### Boundaries this buys
 
@@ -69,28 +87,36 @@ packages/bot  (existing, minimal additions)
 run.ts
   └─ load seed topics (config)
   └─ for each topic, within the run budget:
-       ResearchAgent.run(topic)
-         1. SEARCH    PubMedTool.search(topic) + MedrxivTool.search(topic) → candidate papers
-         2. DISCOVER  (agentic) PubMedTool.related(bestHit) → adjacent papers; branch-or-stop,
+       ResearchAgent.run(topic)         (holds RunState: visited set + counters + tally/stop-reason)
+         1. SEARCH    PubMedTool.search(topic) + MedrxivTool.search(topic); rank deterministically
+                      (E-utilities relevance + pub-type, preferring meta-analysis/RCT/review)
+         2. SEEN      per candidate: BotClient.seen(sourceId) ──HTTP──▶ GET …/seen
+                      true (processed any prior run) → skip before any read/extract
+         3. GATE      relevanceGate(abstract) → skip off-topic; full text only for papers that pass
+         4. DISCOVER  (agentic) PubMedTool.related(keptHit) → adjacent papers; branch-or-stop,
                       bounded by maxDiscoverySteps / maxPapersPerTopic
-         3. READ      fetch abstract (+ medRxiv flag) per chosen paper
-         4. EXTRACT   extract(source) → candidate | null
+         5. READ      fullText(id) when freely available, else abstract (+ medRxiv flag)
+         6. EXTRACT   extract(source) → candidate | null  (generalized technique, verbatim quote)
                       { title, technique, evidence, sourceText (verbatim), sourceUrl, trustLevel:'research-agent' }
-         5. COLLECT   accumulate until maxDraftsPerTopic
-  └─ for each candidate:
-       IngestClient.submit ──HTTP──▶ POST /admin/strategies/ingest (x-admin-secret)
-                                       a. DEDUP: strategyRetrieval.search(title+technique)
-                                                 ≥ threshold → 409, skip (logged)
-                                       b. submitDraft → trust gate: 'research-agent' ⇒ QUEUE
-                                                      → Postgres row status='pending-review'
-  └─ write run summary: searched / extracted / submitted / deduped / rejected
+         7. DEDUP     dedup(candidate, kept) → distinct ? keep : drop & prefer reading on for a novel one
+         8. COLLECT   accumulate until maxDraftsPerTopic
+  └─ for each collected candidate:
+       BotClient.submit ──HTTP──▶ POST /admin/strategies/ingest (x-admin-secret)
+                                    a. LIB DEDUP: strategyRetrieval.search(title+technique)
+                                                  ≥ threshold → 409, skip (logged)
+                                    b. submitDraft → trust gate: 'research-agent' ⇒ QUEUE
+                                                   → Postgres row status='pending-review'
+                                    c. record ProcessedSource(sourceId)  (single writer = bot)
+  └─ write run summary: searched / gated-out / source-seen-skipped / extracted /
+                        in-run-deduped / submitted / lib-deduped / rejected / stop-reason
 ```
 
 The existing human path is unchanged: operator opens `/admin/strategies`, reviews pending drafts, approves/rejects.
 
-**Two load-bearing choices:**
-- **Dedup lives at the ingest boundary, not in the worker.** The bot owns the embeddings and live library, so it is the only place that can reliably answer "do we already have this?" The worker stays stateless. A near-duplicate returns `409` and is counted in the summary, never silently dropped.
-- **The agent extracts; the bot vets.** The worker's extraction LLM produces a *candidate*. The bot's existing `safetyFilter` + `faithfulnessCheck` (verifies `sourceText` supports the technique) are the authority — the worker never asserts a strategy is safe or faithful.
+**Three load-bearing choices:**
+- **Dedup is layered, cheapest-first.** (a) *Source seen* — a bot lookup against the `ProcessedSource` ledger short-circuits a paper we've processed on any prior run, before any read/extract. (b) *In-run technique* — the worker's LLM drops same-technique candidates within a run (no embeddings in the worker). (c) *Library technique* — the bot's embedding search rejects near-duplicates of the published library at ingest (`409`, counted, never silently dropped). Embeddings live only on the bot; the worker stays embedding-free.
+- **The agent extracts a *generalized* technique; the bot vets; the coach adapts.** The worker's extraction LLM produces a context-neutral *candidate* grounded in a verbatim quote. The bot's existing `safetyFilter` + `faithfulnessCheck` (verifies `sourceText` supports the technique) are the authority — the worker never asserts safe/faithful. Audience adaptation (gamer voice, the user's live state) happens later, at coaching time — never at ingestion.
+- **The bot is the single writer of every store, including the new ledger.** The worker has no DB credentials; it reaches the ledger only through the authenticated `seen`/`ingest` endpoints. This keeps ADR-0002's privacy boundary and ADR-0033's single-writer rule intact even as we add cross-run state.
 
 ## Bounds & budget
 
@@ -131,25 +157,30 @@ The reviewer sees this in `/admin/strategies` and can edit it via the existing `
 ## Test plan (TDD, repo norm)
 
 **Worker unit tests (`packages/research`), mocked HTTP/LLM:**
-- `PubMedTool` — `search`/`fetch`/`related` parse real-shaped E-utilities fixtures; rate limiter serializes; HTTP error throws cleanly.
-- `MedrxivTool` — parses fixtures; every result `isPreprint: true`.
-- `extract` — fixture abstract → candidate whose `sourceText` is an **actual substring** of the input (assert substring, not paraphrase); vague/unsafe abstract → `null`; preprint input → `"preprint…"` evidence tag.
-- `ResearchAgent` — respects every bound (`maxPapersPerTopic`, `maxDraftsPerTopic`, `maxDiscoverySteps`, per-topic timeout); a tool failure drops one candidate and the run continues.
-- `IngestClient` — sends `x-admin-secret`; maps `409`→deduped, `2xx`→submitted, other→error in the summary.
-- `run` — honors `maxDraftsPerRun` and token budget across topics; emits the searched/extracted/submitted/deduped/rejected summary.
+- `PubMedTool` — `search`/`fetch`/`fullText`/`related` parse real-shaped E-utilities + PMC fixtures; `fullText` returns `null` cleanly for non-open-access; rate limiter serializes; HTTP error throws cleanly.
+- `MedrxivTool` — parses fixtures; `fullText` resolves preprint body; every result `isPreprint: true`.
+- `relevanceGate` — on-topic abstract → keep; off-topic abstract → skip (full text never fetched); asserts the gate runs on abstract *before* any `fullText` call.
+- `extract` — fixture full text → candidate whose `sourceText` is an **actual substring** of the input (assert substring, not paraphrase) and whose technique is **audience-neutral** (asserts no gamer-specific tokens injected); vague/unsafe source → `null`; preprint input → `"preprint…"` evidence tag; thin abstract-only source with no protocol → `null` (prefers null over guessing).
+- `dedup` — two candidates of the same technique → second is `duplicate`; distinct techniques → `distinct`; lexical prefilter short-circuits before the LLM confirm on obvious cases.
+- `ResearchAgent` — respects every bound (`maxPapersPerTopic`, `maxDraftsPerTopic`, `maxDiscoverySteps`, per-topic timeout); a `seen=true` paper is skipped before read/extract; an in-run duplicate is dropped and the agent reads on for a novel one (within caps); the in-memory visited set prevents an `elink` loop from re-calling `seen`; a tool failure drops one candidate and the run continues; `RunState` stop-reason is set.
+- `BotClient` — `submit` sends `x-admin-secret`, maps `409`→lib-deduped / `2xx`→submitted / other→error; `seen` maps `{seen:true}`→skip.
+- `run` — honors `maxDraftsPerRun` and token budget across topics; emits the full searched / gated-out / source-seen-skipped / extracted / in-run-deduped / submitted / lib-deduped / rejected / stop-reason summary.
 
 **Bot-side tests (`packages/bot`):**
-- `strategy-admin.controller.spec.ts` — new `POST /admin/strategies/ingest`: rejects without `x-admin-secret`; near-duplicate → `409`; novel → calls `submitDraft`, returns draft id.
+- `strategy-admin.controller.spec.ts` — new `POST /admin/strategies/ingest`: rejects without `x-admin-secret`; near-duplicate → `409`; novel → calls `submitDraft`, records `ProcessedSource`, returns draft id. New `GET /admin/strategies/seen`: rejects without secret; known `sourceId` → `{seen:true}`; unknown → `{seen:false}`.
 - `strategy-trust-gate.spec.ts` — **new guarded case:** `trustLevel: 'research-agent'` routes to `queue` even when source is allowlisted and both checks pass (the ADR-0012 override; named so the deviation can't silently regress).
-- Dedup unit — candidate above similarity threshold vs a seeded point → `409`; below → proceeds.
+- Library dedup unit — candidate above similarity threshold vs a seeded point → `409`; below → proceeds.
+- `ProcessedSource` — ingest records the `sourceId`; a second ingest of the same `sourceId` finds it via `seen`.
 
 **Integration (testcontainers, existing pattern):**
-- Real Qdrant + Postgres: seed one published strategy, submit a near-duplicate via ingest → deduped; submit a novel candidate → lands `pending-review` in Postgres and is **not** yet retrievable (queued, not published). Reuses `strategy-retrieval.integration.ts` harness.
+- Real Qdrant + Postgres: seed one published strategy, submit a near-duplicate via ingest → lib-deduped; submit a novel candidate → lands `pending-review` in Postgres, records a `ProcessedSource` row, and is **not** yet retrievable (queued, not published); a follow-up `seen(sourceId)` returns `true`. Reuses `strategy-retrieval.integration.ts` harness.
 
 The testability seam: the worker is pure functions + injected tool/LLM/HTTP clients; the bot side reuses already-covered machinery. The only genuinely new bot logic is dedup + the `research-agent` trust branch, both small and directly tested.
 
 ## Open implementation questions (for the plan, not blocking)
 
 - Exact medRxiv query strategy (its API is date-window/cursor based, not a free-text search like E-utilities — may need an esearch-style filter on returned metadata, or a narrower date window per run).
-- Which `getProvider` role the extractor uses (new `'research'` role vs reuse an existing one) — keep extraction on the self-controlled tier per the production inference topology.
+- Full-text fetch/parse path: PMC open-access via E-utilities (BioC/XML) vs the OA service; how to detect "freely available" cleanly; size cap before extraction so a huge body can't blow the token budget.
+- Which `getProvider` role the extractor, relevance gate, and in-run dedup use (new `'research'` role vs reuse an existing one; the gate/dedup are cheap and could share a lighter role) — keep all of it on the self-controlled tier per the production inference topology.
+- `ProcessedSource` write timing/semantics: record on every ingest (incl. `409` lib-dedup and rejected) vs only on accepted submit — leaning record-on-every-ingest so a re-run never re-reads a paper regardless of outcome; confirm in the plan.
 - Worker scheduling mechanism (its own cron in-process vs invoked by an external scheduler) — decision (3) only fixes that it is a *separate process*.

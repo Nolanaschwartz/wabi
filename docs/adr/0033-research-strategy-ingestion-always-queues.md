@@ -13,7 +13,7 @@ This **overrides ADR-0012's auto-publish rule** for the research path. ADR-0012 
 ## Scope and bounds
 
 - **Adds a trust level, not a new gate.** `'research-agent'` joins `allowlisted | community | session-mined`. The trust gate's existing "session-mined → queue regardless" branch gains a sibling; nothing else in the gate changes.
-- **The worker never writes the stores.** It submits over HTTP (`POST /admin/strategies/ingest`, `AdminGuard`); the bot remains the single writer of Postgres and `wabi_strategies`, so all trust/safety/dedup logic stays single-sourced (ADR-0012/0004).
+- **The worker never reads or writes the stores directly.** It only calls authenticated bot endpoints — `POST /admin/strategies/ingest` to submit and `GET /admin/strategies/seen` to check a source-ID ledger (`ProcessedSource`) for cross-run idempotency (`AdminGuard` on both). The bot remains the single writer of Postgres and `wabi_strategies` and writes the ledger itself at ingest, so all trust/safety/dedup logic stays single-sourced (ADR-0012/0004) and the worker keeps no DB credentials.
 - **Public data only (ADR-0002).** The worker has no access to user data, Redis session buffers, or personal memory. It is a separate, non-always-on process and does not weaken the bot's always-on guarantee (ADR-0019/0020).
 - **This is a tightening, not a reversal of ADR-0012.** ADR-0012's auto-publish path remains valid for any *other* future pipeline that fetches fixed allowlisted sources without agentic discovery. This ADR governs only the `research-agent` provenance.
 
