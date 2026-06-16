@@ -28,6 +28,8 @@ The agent is no longer a black box. Five decisions fix how it reads and what it 
 - **Decision policy — deterministic selection + a thin LLM relevance gate.** Search hits are ranked deterministically (E-utilities relevance + publication type, preferring meta-analysis/RCT/review). One cheap LLM call per candidate acts as a relevance gate — "is this a coaching-relevant behavioral technique worth reading/branching from?" — and drives branch-or-stop; all hard caps still bound the loop. The gate runs on the **abstract first**, so full text is fetched only for papers that pass.
 - **In-run technique dedup — yes, via the worker's existing LLM (no embeddings in the worker).** At COLLECT, each candidate is checked against candidates already kept this run: a lexical prefilter (normalized title/technique overlap) then an LLM confirm on close calls. Duplicates are dropped *and* the agent prefers to keep reading/branching (within caps) to fill its quota with **distinct** techniques rather than waste a draft slot.
 - **Source-level idempotency — a persistent `ProcessedSource` ledger queried via a bot tool.** Before READ, the agent calls an authenticated bot endpoint `GET /admin/strategies/seen?sourceId=…`; if the paper was processed on any prior run it is skipped before any full-text fetch or extraction. The ledger is ID-only (no content, no personal data), **written by the bot** at ingest as a side-effect of `submitDraft` — the worker has no DB access (ADR-0002/0033). A tiny in-memory visited set is kept *within* a run only, to avoid re-calling the tool when `elink` loops back to a paper already touched this run.
+  - **Write timing (v1):** record only the three *candidate-producing* terminal outcomes — submitted / library-deduped (`409`) / safety-rejected — all written by the bot at ingest. Gated-out and null-extraction papers (which never reach ingest, so only the worker knows them) are **not** recorded in v1: that would need a second worker-driven write path and would permanently freeze a *first-pass negative* judgment a reviewer never saw, which is wrong while we're still proving extraction quality. Accepted consequence: a re-run still re-reads papers that yielded nothing last time (bounded by the small per-run caps). If that waste bites at volume, v2 adds barren-paper marking *with a gate/extractor version stamp* so improving a prompt re-opens old papers.
+- **Inference roles — capable extractor, lighter triage.** `extract` runs on a capable `getProvider('research')` role (quality-critical: faithful, generalized extraction; tunable/swappable independently). `relevanceGate` (the highest-volume call) and `dedup` (a simple same/different judgment, both low-stakes and recoverable) share a **lighter triage role** — reuse the existing classifier-tier model if it fits cleanly, else a new `'research-triage'` role. All on the self-controlled tier (production-inference topology). Guard: the classifier tier is the floor for the gate — if its false-negative rate (silently dropping relevant papers) looks bad in quality eval, bump only that role.
 
 ## Non-goals (explicitly deferred)
 
@@ -106,7 +108,8 @@ run.ts
                                                   ≥ threshold → 409, skip (logged)
                                     b. submitDraft → trust gate: 'research-agent' ⇒ QUEUE
                                                    → Postgres row status='pending-review'
-                                    c. record ProcessedSource(sourceId)  (single writer = bot)
+                                    c. record ProcessedSource(sourceId) on submit / 409 / safety-reject
+                                       (candidate-producing outcomes only; single writer = bot)
   └─ write run summary: searched / gated-out / source-seen-skipped / extracted /
                         in-run-deduped / submitted / lib-deduped / rejected / stop-reason
 ```
@@ -181,6 +184,5 @@ The testability seam: the worker is pure functions + injected tool/LLM/HTTP clie
 
 - Exact medRxiv query strategy (its API is date-window/cursor based, not a free-text search like E-utilities — may need an esearch-style filter on returned metadata, or a narrower date window per run).
 - Full-text fetch/parse path: PMC open-access via E-utilities (BioC/XML) vs the OA service; how to detect "freely available" cleanly; size cap before extraction so a huge body can't blow the token budget.
-- Which `getProvider` role the extractor, relevance gate, and in-run dedup use (new `'research'` role vs reuse an existing one; the gate/dedup are cheap and could share a lighter role) — keep all of it on the self-controlled tier per the production inference topology.
-- `ProcessedSource` write timing/semantics: record on every ingest (incl. `409` lib-dedup and rejected) vs only on accepted submit — leaning record-on-every-ingest so a re-run never re-reads a paper regardless of outcome; confirm in the plan.
+- Whether the triage role reuses the existing classifier-tier model or introduces a dedicated `'research-triage'` provider entry (resolved in design that it *is* a lighter shared role; only the wiring detail remains).
 - Worker scheduling mechanism (its own cron in-process vs invoked by an external scheduler) — decision (3) only fixes that it is a *separate process*.
