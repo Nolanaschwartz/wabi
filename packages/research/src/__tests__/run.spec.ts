@@ -32,5 +32,16 @@ describe('runResearch', () => {
     const result = await runResearch({ topics: ['a', 'b'], bounds, runAgent, submit });
     expect(runAgent).toHaveBeenCalledTimes(1);
     expect(result.submitted).toBe(3);
+    expect(result.stopReason).toBe('maxDraftsPerRun');
+  });
+
+  it('stops starting new topics once runTimeoutMs is exceeded', async () => {
+    let t = 0;
+    const now = () => t;
+    const runAgent = jest.fn().mockImplementation(async () => { t += 10_000; return { candidates: [], summary: {} as any, tokens: 0 }; });
+    const submit = jest.fn().mockResolvedValue('submitted');
+    const result = await runResearch({ topics: ['a', 'b', 'c'], bounds: { ...bounds, maxTopicsPerRun: 5, runTimeoutMs: 15_000 }, runAgent, submit, now });
+    expect(runAgent).toHaveBeenCalledTimes(2); // 3rd topic blocked: after 2 topics clock=20_000 >= 15_000
+    expect(result.stopReason).toBe('runTimeout');
   });
 });
