@@ -1,4 +1,4 @@
-export type ProviderRole = 'coach' | 'classifier' | 'embedding' | 'router';
+export type ProviderRole = 'coach' | 'classifier' | 'embedding' | 'router' | 'research' | 'research-triage';
 
 export interface ProviderConfig {
   baseUrl: string;
@@ -37,6 +37,20 @@ export function getProvider(role: ProviderRole): ProviderConfig {
       baseUrl: process.env.ROUTER_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.ROUTER_MODEL || 'gpt-4o-mini',
       apiKey: process.env.ROUTER_API_KEY || '',
+    },
+    // Capable extraction model for the research worker — faithful, generalized technique
+    // extraction with verbatim grounding. Self-controlled tier in production.
+    research: {
+      baseUrl: process.env.RESEARCH_BASE_URL || 'https://api.openai.com/v1',
+      model: process.env.RESEARCH_MODEL || 'gpt-4o',
+      apiKey: process.env.RESEARCH_API_KEY || '',
+    },
+    // Cheap, high-volume triage for the research worker's relevance gate + in-run dedup.
+    // Defaults to the classifier tier so it can share one small model unless split out.
+    'research-triage': {
+      baseUrl: process.env.RESEARCH_TRIAGE_BASE_URL || process.env.CLASSIFIER_BASE_URL || 'https://api.openai.com/v1',
+      model: process.env.RESEARCH_TRIAGE_MODEL || process.env.CLASSIFIER_MODEL || 'gpt-4o-mini',
+      apiKey: process.env.RESEARCH_TRIAGE_API_KEY || process.env.CLASSIFIER_API_KEY || '',
     },
   };
   return providerConfig[role];
