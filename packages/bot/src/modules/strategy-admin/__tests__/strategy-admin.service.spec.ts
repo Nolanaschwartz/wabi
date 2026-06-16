@@ -11,6 +11,10 @@ jest.mock('@wabi/shared', () => ({
       findUnique: jest.fn(),
       update: jest.fn(),
     },
+    processedSource: {
+      findUnique: jest.fn(),
+      upsert: jest.fn(),
+    },
   },
 }));
 
@@ -403,5 +407,31 @@ describe('StrategyAdminService', () => {
     (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue(null);
     await service.recordNegativeFeedback('999');
     expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('StrategyAdminService.isDuplicate', () => {
+  let svc: StrategyAdminService;
+  let retrieval: { search: jest.Mock };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
+    retrieval = { search: jest.fn() };
+    svc = new StrategyAdminService({} as any, retrieval as any, {} as any);
+  });
+
+  it('is a duplicate when the top match scores at/above threshold', async () => {
+    retrieval.search.mockResolvedValue([{ id: 'a', content: 'x', evidence: 'y', score: 0.97 }]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(true);
+    expect(retrieval.search).toHaveBeenCalledWith('PMR: tense and release', 1);
+  });
+  it('is not a duplicate below threshold', async () => {
+    retrieval.search.mockResolvedValue([{ id: 'a', content: 'x', evidence: 'y', score: 0.4 }]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(false);
+  });
+  it('is not a duplicate when the library is empty', async () => {
+    retrieval.search.mockResolvedValue([]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(false);
   });
 });

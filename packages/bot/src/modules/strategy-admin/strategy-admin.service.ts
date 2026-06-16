@@ -9,6 +9,12 @@ const RECONCILE_QUEUE = 'strategy-reconcile';
 // Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
 const RECONCILE_CRON = '0 * * * *';
 
+// Cosine similarity at/above this counts a candidate as already-present (ADR-0012 dedup).
+// Resolved lazily per call — never cache env-derived config (CLAUDE.md).
+function dedupThreshold(): number {
+  return parseFloat(process.env.RESEARCH_DEDUP_THRESHOLD || '0.95');
+}
+
 @Injectable()
 export class StrategyAdminService {
   constructor(
@@ -51,6 +57,13 @@ export class StrategyAdminService {
     });
 
     return this.toDraft(persisted);
+  }
+
+  /** True when the published library already contains a near-identical strategy. Queries the same
+   * "title: technique" string the index is built from (publishToQdrant), so query and corpus match. */
+  async isDuplicate(title: string, technique: string): Promise<boolean> {
+    const [top] = await this.retrieval.search(`${title}: ${technique}`, 1);
+    return !!top && typeof top.score === 'number' && top.score >= dedupThreshold();
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {
