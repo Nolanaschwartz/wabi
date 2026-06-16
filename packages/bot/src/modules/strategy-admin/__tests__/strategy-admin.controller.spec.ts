@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { StrategyAdminController } from '../strategy-admin.controller';
 import { StrategyAdminService } from '../strategy-admin.service';
 
@@ -33,6 +34,8 @@ describe('StrategyAdminController', () => {
       submitDraft: jest.fn(),
       recordNegativeFeedback: jest.fn(),
       setEvidenceLevel: jest.fn(),
+      ingestCandidate: jest.fn(),
+      hasSeen: jest.fn(),
     } as any;
     controller = new StrategyAdminController(service);
   });
@@ -70,5 +73,20 @@ describe('StrategyAdminController', () => {
     const res = await controller.setEvidence('1', 'RCT meta-analysis');
     expect(res?.evidence).toBe('RCT meta-analysis');
     expect(service.setEvidenceLevel).toHaveBeenCalledWith('1', 'RCT meta-analysis');
+  });
+
+  it('ingests a novel candidate and returns the draft id', async () => {
+    service.ingestCandidate.mockResolvedValue({ status: 'submitted', draftId: 'd1' });
+    const res = await controller.ingest({ sourceId: 'PMID:1' } as any);
+    expect(res).toEqual({ status: 'submitted', draftId: 'd1' });
+  });
+  it('maps a deduped candidate to 409 Conflict', async () => {
+    service.ingestCandidate.mockResolvedValue({ status: 'deduped' });
+    await expect(controller.ingest({ sourceId: 'PMID:1' } as any)).rejects.toBeInstanceOf(ConflictException);
+  });
+  it('reports seen status', async () => {
+    service.hasSeen.mockResolvedValue(true);
+    expect(await controller.seen('PMID:1')).toEqual({ seen: true });
+    expect(service.hasSeen).toHaveBeenCalledWith('PMID:1');
   });
 });
