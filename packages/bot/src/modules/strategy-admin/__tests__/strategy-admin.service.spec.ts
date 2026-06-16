@@ -457,3 +457,51 @@ describe('StrategyAdminService ledger', () => {
     });
   });
 });
+
+describe('StrategyAdminService.ingestCandidate', () => {
+  let svc: StrategyAdminService;
+  let trustGate: { evaluate: jest.Mock };
+  let retrieval: { search: jest.Mock };
+
+  const candidate = {
+    title: 'PMR', technique: 'tense and release', source: 'PubMed',
+    evidence: 'peer-reviewed: RCT', sourceText: 'progressive muscle relaxation reduced anxiety',
+    sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345',
+    sourceId: 'PMID:12345', sourceKind: 'pubmed',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
+    trustGate = { evaluate: jest.fn() };
+    retrieval = { search: jest.fn() };
+    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any);
+    jest.spyOn(svc, 'markProcessed').mockResolvedValue();
+  });
+
+  it('returns deduped and records the ledger when a near-duplicate exists', async () => {
+    retrieval.search.mockResolvedValue([{ id: 'a', content: '', evidence: '', score: 0.99 }]);
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res.status).toBe('deduped');
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'deduped');
+  });
+  it('returns rejected (and does not persist) when the trust gate rejects', async () => {
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'reject', reason: 'Failed safety filter' });
+    jest.spyOn(svc, 'submitDraft');
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res.status).toBe('rejected');
+    expect(svc.submitDraft).not.toHaveBeenCalled();
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'rejected');
+  });
+  it('submits a novel, safe candidate as a queued draft and forces research-agent trust', async () => {
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    jest.spyOn(svc, 'submitDraft').mockResolvedValue({ id: 'draft-1', status: 'pending-review' } as any);
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res).toEqual({ status: 'submitted', draftId: 'draft-1' });
+    const submitted = (svc.submitDraft as jest.Mock).mock.calls[0][0];
+    expect(submitted.trustLevel).toBe('research-agent');
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'submitted');
+  });
+});
