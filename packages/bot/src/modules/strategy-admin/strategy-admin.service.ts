@@ -66,6 +66,25 @@ export class StrategyAdminService {
     return !!top && typeof top.score === 'number' && top.score >= dedupThreshold();
   }
 
+  /** Source-level idempotency: has this paper been processed on any prior run? (ADR-0033) */
+  async hasSeen(sourceId: string): Promise<boolean> {
+    const row = await prisma.processedSource.findUnique({ where: { sourceId } });
+    return row !== null;
+  }
+
+  /** Record a terminal ingest outcome for a source. Upsert keeps firstSeenAt, refreshes lastStatus. */
+  async markProcessed(
+    sourceId: string,
+    source: string,
+    status: 'submitted' | 'deduped' | 'rejected',
+  ): Promise<void> {
+    await prisma.processedSource.upsert({
+      where: { sourceId },
+      create: { sourceId, source, lastStatus: status },
+      update: { lastStatus: status },
+    });
+  }
+
   async getPendingDrafts(): Promise<StrategyDraft[]> {
     const drafts = await prisma.strategyDraft.findMany({
       where: { status: 'pending-review' },

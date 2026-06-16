@@ -435,3 +435,25 @@ describe('StrategyAdminService.isDuplicate', () => {
     expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(false);
   });
 });
+
+describe('StrategyAdminService ledger', () => {
+  const svc = new StrategyAdminService({} as any, { search: jest.fn() } as any, {} as any);
+  beforeEach(() => jest.clearAllMocks());
+
+  it('hasSeen returns true when a row exists', async () => {
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue({ sourceId: 'PMID:1' });
+    expect(await svc.hasSeen('PMID:1')).toBe(true);
+  });
+  it('hasSeen returns false when absent', async () => {
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue(null);
+    expect(await svc.hasSeen('PMID:9')).toBe(false);
+  });
+  it('markProcessed upserts the ledger row', async () => {
+    await svc.markProcessed('PMID:1', 'pubmed', 'submitted');
+    expect(prisma.processedSource.upsert).toHaveBeenCalledWith({
+      where: { sourceId: 'PMID:1' },
+      create: { sourceId: 'PMID:1', source: 'pubmed', lastStatus: 'submitted' },
+      update: { lastStatus: 'submitted' },
+    });
+  });
+});
