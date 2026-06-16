@@ -20,7 +20,7 @@ export interface StrategyDraft {
   evidence: string;
   sourceText?: string;
   sourceUrl: string;
-  trustLevel: 'allowlisted' | 'community' | 'session-mined';
+  trustLevel: 'allowlisted' | 'community' | 'session-mined' | 'research-agent';
   status: 'draft' | 'pending-review' | 'published' | 'quarantined';
   negativeCount?: number;
 }
@@ -37,6 +37,32 @@ export class StrategyTrustGate {
       return {
         decision: 'queue',
         reason: 'Session-mined draft — requires human review',
+      };
+    }
+
+    // Research-agent drafts (ADR-0033): safety + faithfulness still run so a reviewer never
+    // sees something that failed them, but they can only gate-to-queue — never auto-publish,
+    // even from an allowlisted source. The human gate is mandatory for agent-discovered advice.
+    if (draft.trustLevel === 'research-agent') {
+      const safetyCheck = await this.safetyFilter(draft);
+      if (!safetyCheck) {
+        return {
+          decision: 'reject',
+          reason: 'Failed safety filter',
+        };
+      }
+
+      const faithfulness = await this.faithfulnessCheck(draft);
+      if (!faithfulness) {
+        return {
+          decision: 'reject',
+          reason: 'Technique not faithful to cited source',
+        };
+      }
+
+      return {
+        decision: 'queue',
+        reason: 'Research-agent draft — safe + faithful, queued for human review',
       };
     }
 

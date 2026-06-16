@@ -170,6 +170,45 @@ describe('StrategyTrustGate', () => {
     expect(gate.shouldQuarantine(0)).toBe(false);
   });
 
+  it('routes research-agent draft to queue even when allowlisted + safe + faithful (ADR-0033 override)', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText
+      .mockResolvedValueOnce({ text: 'safe' })
+      .mockResolvedValueOnce({ text: 'faithful' });
+
+    const result = await gate.evaluate({
+      id: '1',
+      title: 'PMR',
+      technique: 'Tense and release major muscle groups for 5 min',
+      source: 'PubMed',
+      evidence: 'peer-reviewed: RCT',
+      sourceText: 'progressive muscle relaxation reduced state anxiety',
+      sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345',
+      trustLevel: 'research-agent',
+      status: 'draft',
+    });
+
+    expect(result.decision).toBe('queue'); // NOT 'publish'
+  });
+
+  it('rejects a research-agent draft that fails safety (never reaches the reviewer)', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText.mockResolvedValueOnce({ text: 'unsafe' });
+
+    const result = await gate.evaluate({
+      id: '1',
+      title: 'X',
+      technique: 'Y',
+      source: 'PubMed',
+      evidence: 'peer-reviewed: RCT',
+      sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345',
+      trustLevel: 'research-agent',
+      status: 'draft',
+    });
+
+    expect(result.decision).toBe('reject');
+  });
+
   it('fails closed on provider error', async () => {
     const { generateText } = require('ai') as {
       generateText: jest.Mock;
