@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Wabi — design system tokens (Kintsugi)
+   Tailwind v4 CSS-first theme. Every value here generates
+   utilities automatically, e.g. bg-ink-0, text-bone-1,
+   text-copper, border-ink-3, font-display, rounded-md,
+   shadow-glow, ease-calm.
+   ============================================================ */
+@theme {
+  /* Surfaces — warm near-black */
+  --color-ink-0: #16130f;
+  --color-ink-1: #1f1b16;
+  --color-ink-2: #2a251e;
+  --color-ink-3: #38322a;
+  --color-ink-4: #4a4236;
+
+  /* Foreground — bone, never pure white */
+  --color-bone-0: #ece6dc;
+  --color-bone-1: #c9c1b2;
+  --color-bone-2: #a89f90;
+  --color-bone-3: #6f685c;
+
+  /* Accent — the gold seam */
+  --color-copper: #c08a4e;
+  --color-copper-bright: #e7c79c;
+  --color-copper-dim: #7e5234;
+
+  /* Sage — calm / growth */
+  --color-sage: #8a9a7b;
+  --color-sage-dim: #5e6b52;
+
+  /* Coaching states */
+  --color-success: #8a9a7b;
+  --color-warn: #c9a05c;
+  --color-alert: #b5564a;
+
+  /* Discord brand (kept for the connect button) */
+  --color-discord: #5865f2;
+  --color-discord-dim: #4752c4;
+
+  /* Type — wired to next/font variables set on <html> */
+  --font-display: var(--font-newsreader), Georgia, serif;
+  --font-sans: var(--font-hanken), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+
+  /* Radii — soft, never sharp */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* Elevation */
+  --shadow-float: 0 18px 40px -16px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 32px -6px rgba(192, 138, 78, 0.4);
+
+  /* Motion — calm, no bounce */
+  --ease-calm: cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background-color: var(--color-ink-0);
+  }
+  body {
+    background-color: var(--color-ink-0);
+    color: var(--color-bone-0);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: rgba(192, 138, 78, 0.32);
+  }
+  /* Wordmark cursor blink + brand orb breathe, available app-wide */
+  @keyframes wabi-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+  @keyframes wabi-breathe {
+    0%, 100% { transform: scale(1); opacity: 0.95; }
+    50% { transform: scale(1.06); opacity: 1; }
+  }
+}

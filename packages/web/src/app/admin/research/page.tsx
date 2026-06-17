@@ -72,6 +72,22 @@ const BOUND_LABELS: { key: keyof ResearchConfig; label: string }[] = [
   { key: 'tokenBudget', label: 'Token budget' },
 ];
 
+// Shared Kintsugi class vocabulary (styling only — no behaviour).
+const card = 'mb-4 rounded-lg border border-ink-3 bg-ink-1 p-6';
+const h2 = 'mb-4 font-display text-xl text-bone-0';
+const fieldCls =
+  'rounded-md border border-ink-3 bg-ink-2 px-3 py-2 text-sm text-bone-0 transition-colors duration-200 ease-calm focus:border-copper focus:outline-none disabled:cursor-not-allowed disabled:opacity-50';
+const btnPrimary =
+  'rounded-md bg-copper px-4 py-2 text-sm font-semibold text-ink-0 transition-colors duration-200 ease-calm hover:bg-copper-bright disabled:cursor-not-allowed disabled:opacity-50';
+const btnSecondary =
+  'rounded-md border border-ink-3 bg-ink-2 px-4 py-2 text-sm font-medium text-bone-1 transition-colors duration-200 ease-calm hover:border-ink-4 disabled:cursor-not-allowed disabled:opacity-50';
+const btnDanger =
+  'rounded-md border border-alert/60 px-3 py-1.5 text-xs font-medium text-alert transition-colors duration-200 ease-calm hover:bg-alert/10 disabled:cursor-not-allowed disabled:opacity-50';
+const checkboxCls = 'h-4 w-4 accent-copper';
+const errText = 'text-sm text-alert';
+const okText = 'text-sm text-sage';
+const metaLabel = 'font-mono text-[11px] uppercase tracking-[0.14em] text-bone-2';
+
 export default function ResearchAdminPage() {
   const [config, setConfig] = useState<ResearchConfig | null>(null);
   const [topics, setTopics] = useState<ResearchTopic[]>([]);
@@ -282,22 +298,28 @@ export default function ResearchAdminPage() {
     }
   };
 
-  if (loading) return <div>Loading...</div>;
+  if (loading)
+    return (
+      <div className="mx-auto max-w-4xl px-6 py-20 font-mono text-sm uppercase tracking-[0.14em] text-bone-2">
+        Loading…
+      </div>
+    );
 
   return (
-    <div style={{ maxWidth: 800, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }}>
-      <h1 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Research Admin</h1>
+    <div className="mx-auto max-w-4xl px-6 py-16">
+      <h1 className="mb-2 font-display text-3xl font-medium text-bone-0">Research</h1>
+      <p className="mb-8 text-sm text-bone-2">
+        Schedule, bounds, and topics for the literature-mining worker.
+      </p>
 
       {error && (
-        <p style={{ color: '#dc2626', marginBottom: '1rem' }}>
-          {error} — the research worker may be offline.
-        </p>
+        <p className={`mb-4 ${errText}`}>{error} — the research worker may be offline.</p>
       )}
 
-      <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginBottom: '1rem' }}>
-        <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Schedule</h2>
+      <section className={card}>
+        <h2 className={h2}>Schedule</h2>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.875rem', color: '#374151' }}>
+        <label className="mb-3 flex items-center gap-2 text-sm text-bone-1">
           <input
             type="checkbox"
             checked={scheduleEnabled}
@@ -306,11 +328,12 @@ export default function ResearchAdminPage() {
               setScheduleEnabled(e.target.checked);
             }}
             aria-label="Enable schedule"
+            className={checkboxCls}
           />
           Enable schedule
         </label>
 
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
           <select
             value={cadence}
             onChange={(e) => {
@@ -319,7 +342,7 @@ export default function ResearchAdminPage() {
             }}
             aria-label="Cadence"
             disabled={advanced}
-            style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+            className={fieldCls}
           >
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
@@ -335,7 +358,7 @@ export default function ResearchAdminPage() {
             }}
             aria-label="Time of day"
             disabled={advanced}
-            style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+            className={fieldCls}
           />
 
           {cadence === 'weekly' && !advanced && (
@@ -346,7 +369,7 @@ export default function ResearchAdminPage() {
                 setDayOfWeek(Number(e.target.value));
               }}
               aria-label="Day of week"
-              style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+              className={fieldCls}
             >
               {DOW_LABELS.map((d, i) => (
                 <option key={i} value={i}>{d}</option>
@@ -362,7 +385,7 @@ export default function ResearchAdminPage() {
                 setDayOfMonth(Number(e.target.value));
               }}
               aria-label="Day of month"
-              style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+              className={fieldCls}
             >
               {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
                 <option key={d} value={d}>{d}</option>
@@ -371,7 +394,7 @@ export default function ResearchAdminPage() {
           )}
         </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: '#6b7280' }}>
+        <label className="mb-2 flex items-center gap-2 text-[13px] text-bone-2">
           <input
             type="checkbox"
             checked={advanced}
@@ -383,6 +406,7 @@ export default function ResearchAdminPage() {
               setAdvanced(on);
             }}
             aria-label="Advanced raw cron"
+            className={checkboxCls}
           />
           Advanced (raw cron)
         </label>
@@ -397,81 +421,36 @@ export default function ResearchAdminPage() {
             }}
             placeholder="M H D M DOW (e.g. 0 3 * * *)"
             aria-label="Raw cron"
-            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.875rem', fontFamily: 'monospace', border: '1px solid #d1d5db', borderRadius: 6, marginBottom: '0.5rem' }}
+            className={`mb-2 w-full font-mono ${fieldCls}`}
           />
         ) : (
-          <p style={{ margin: '0 0 0.5rem', fontSize: '0.8125rem', color: '#6b7280', fontFamily: 'monospace' }}>
-            Cron: {presetCron}
-          </p>
+          <p className="mb-2 font-mono text-[13px] text-bone-2">Cron: {presetCron}</p>
         )}
 
-        {scheduleError && (
-          <p style={{ color: '#dc2626', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>{scheduleError}</p>
-        )}
-        {scheduleSaved && (
-          <p style={{ color: '#16a34a', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>Schedule saved.</p>
-        )}
+        {scheduleError && <p className={`mb-3 ${errText}`}>{scheduleError}</p>}
+        {scheduleSaved && <p className={`mb-3 ${okText}`}>Schedule saved.</p>}
 
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            onClick={saveSchedule}
-            disabled={savingSchedule}
-            style={{
-              padding: '0.4rem 0.9rem',
-              fontSize: '0.875rem',
-              border: '1px solid #2563eb',
-              borderRadius: 6,
-              background: '#2563eb',
-              color: '#fff',
-              cursor: savingSchedule ? 'not-allowed' : 'pointer',
-              opacity: savingSchedule ? 0.6 : 1,
-            }}
-          >
+        <div className="flex flex-wrap items-center gap-3">
+          <button onClick={saveSchedule} disabled={savingSchedule} className={btnPrimary}>
             {savingSchedule ? 'Saving…' : 'Save schedule'}
           </button>
 
-          <button
-            onClick={runNow}
-            disabled={running}
-            style={{
-              padding: '0.4rem 0.9rem',
-              fontSize: '0.875rem',
-              border: '1px solid #2563eb',
-              borderRadius: 6,
-              background: '#fff',
-              color: '#2563eb',
-              cursor: running ? 'not-allowed' : 'pointer',
-              opacity: running ? 0.6 : 1,
-            }}
-          >
+          <button onClick={runNow} disabled={running} className={btnSecondary}>
             {running ? 'Starting…' : 'Run now'}
           </button>
 
-          {runError && (
-            <span style={{ color: '#dc2626', fontSize: '0.875rem' }}>{runError}</span>
-          )}
+          {runError && <span className={errText}>{runError}</span>}
         </div>
       </section>
 
-      <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginBottom: '1rem' }}>
-        <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Bounds</h2>
+      <section className={card}>
+        <h2 className={h2}>Bounds</h2>
         {config ? (
           <>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr auto',
-                gap: '0.5rem 0.75rem',
-                alignItems: 'center',
-                marginBottom: '0.75rem',
-              }}
-            >
+            <div className="mb-4 grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-2">
               {BOUND_LABELS.map(({ key, label }) => (
-                <div key={key} style={{ display: 'contents' }}>
-                  <label
-                    htmlFor={`bound-${key}`}
-                    style={{ fontSize: '0.875rem', color: '#374151' }}
-                  >
+                <div key={key} className="contents">
+                  <label htmlFor={`bound-${key}`} className="text-sm text-bone-1">
                     {label}
                   </label>
                   <input
@@ -484,55 +463,28 @@ export default function ResearchAdminPage() {
                       setBounds((b) => ({ ...b, [key]: e.target.value }));
                     }}
                     aria-label={label}
-                    style={{
-                      width: 140,
-                      padding: '0.35rem 0.5rem',
-                      fontSize: '0.875rem',
-                      border: '1px solid #d1d5db',
-                      borderRadius: 6,
-                    }}
+                    className={`w-36 ${fieldCls}`}
                   />
                 </div>
               ))}
             </div>
 
-            {boundsError && (
-              <p style={{ color: '#dc2626', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>
-                {boundsError}
-              </p>
-            )}
-            {boundsSaved && (
-              <p style={{ color: '#16a34a', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>
-                Bounds saved.
-              </p>
-            )}
+            {boundsError && <p className={`mb-3 ${errText}`}>{boundsError}</p>}
+            {boundsSaved && <p className={`mb-3 ${okText}`}>Bounds saved.</p>}
 
-            <button
-              onClick={saveBounds}
-              disabled={savingBounds}
-              style={{
-                padding: '0.4rem 0.9rem',
-                fontSize: '0.875rem',
-                border: '1px solid #2563eb',
-                borderRadius: 6,
-                background: '#2563eb',
-                color: '#fff',
-                cursor: savingBounds ? 'not-allowed' : 'pointer',
-                opacity: savingBounds ? 0.6 : 1,
-              }}
-            >
+            <button onClick={saveBounds} disabled={savingBounds} className={btnPrimary}>
               {savingBounds ? 'Saving…' : 'Save bounds'}
             </button>
           </>
         ) : (
-          <p style={{ margin: 0, fontSize: '0.875rem', color: '#9ca3af' }}>No config loaded.</p>
+          <p className="text-sm text-bone-2">No config loaded.</p>
         )}
       </section>
 
-      <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem' }}>
-        <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Topics ({topics.length})</h2>
+      <section className={card}>
+        <h2 className={h2}>Topics ({topics.length})</h2>
 
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        <div className="mb-3 flex gap-2">
           <input
             type="text"
             value={newTopic}
@@ -542,82 +494,35 @@ export default function ResearchAdminPage() {
             }}
             placeholder="Add a topic…"
             aria-label="New topic"
-            style={{
-              flex: 1,
-              padding: '0.4rem 0.6rem',
-              fontSize: '0.875rem',
-              border: '1px solid #d1d5db',
-              borderRadius: 6,
-            }}
+            className={`flex-1 ${fieldCls}`}
           />
-          <button
-            onClick={addTopic}
-            disabled={busy || !newTopic.trim()}
-            style={{
-              padding: '0.4rem 0.9rem',
-              fontSize: '0.875rem',
-              border: '1px solid #2563eb',
-              borderRadius: 6,
-              background: '#2563eb',
-              color: '#fff',
-              cursor: busy || !newTopic.trim() ? 'not-allowed' : 'pointer',
-              opacity: busy || !newTopic.trim() ? 0.6 : 1,
-            }}
-          >
+          <button onClick={addTopic} disabled={busy || !newTopic.trim()} className={btnPrimary}>
             Add
           </button>
         </div>
 
-        {topicError && (
-          <p style={{ color: '#dc2626', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>{topicError}</p>
-        )}
+        {topicError && <p className={`mb-3 ${errText}`}>{topicError}</p>}
 
         {topics.length === 0 ? (
-          <p style={{ margin: 0, fontSize: '0.875rem', color: '#9ca3af' }}>No topics seeded.</p>
+          <p className="text-sm text-bone-2">No topics seeded.</p>
         ) : (
-          <ul style={{ margin: 0, padding: 0, listStyle: 'none', fontSize: '0.875rem' }}>
+          <ul className="text-sm">
             {topics.map((t) => (
               <li
                 key={t.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.35rem 0',
-                  borderBottom: '1px solid #f3f4f6',
-                }}
+                className="flex items-center gap-2 border-b border-ink-2 py-2 last:border-b-0"
               >
-                <span style={{ flex: 1, color: t.enabled ? '#374151' : '#9ca3af' }}>
+                <span className={`flex-1 ${t.enabled ? 'text-bone-1' : 'text-bone-3'}`}>
                   {t.text} {t.enabled ? '' : '(disabled)'}
                 </span>
                 <button
                   onClick={() => toggleTopic(t)}
                   disabled={busy}
-                  style={{
-                    padding: '0.25rem 0.6rem',
-                    fontSize: '0.8125rem',
-                    border: '1px solid #d1d5db',
-                    borderRadius: 6,
-                    background: '#fff',
-                    color: '#374151',
-                    cursor: busy ? 'not-allowed' : 'pointer',
-                  }}
+                  className="rounded-md border border-ink-3 bg-ink-2 px-3 py-1.5 text-xs font-medium text-bone-1 transition-colors duration-200 ease-calm hover:border-ink-4 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {t.enabled ? 'Disable' : 'Enable'}
                 </button>
-                <button
-                  onClick={() => removeTopic(t.id)}
-                  disabled={busy}
-                  style={{
-                    padding: '0.25rem 0.6rem',
-                    fontSize: '0.8125rem',
-                    border: '1px solid #fca5a5',
-                    borderRadius: 6,
-                    background: '#fff',
-                    color: '#dc2626',
-                    cursor: busy ? 'not-allowed' : 'pointer',
-                  }}
-                >
+                <button onClick={() => removeTopic(t.id)} disabled={busy} className={btnDanger}>
                   Remove
                 </button>
               </li>
@@ -626,58 +531,49 @@ export default function ResearchAdminPage() {
         )}
       </section>
 
-      <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginTop: '1rem' }}>
-        <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Recent runs</h2>
+      <section className={card}>
+        <h2 className={h2}>Recent runs</h2>
 
         {runs.length === 0 ? (
-          <p style={{ margin: 0, fontSize: '0.875rem', color: '#9ca3af' }}>No runs yet.</p>
+          <p className="text-sm text-bone-2">No runs yet.</p>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table
-              style={{
-                width: '100%',
-                borderCollapse: 'collapse',
-                fontSize: '0.8125rem',
-                color: '#374151',
-              }}
-            >
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px] text-bone-1">
               <thead>
-                <tr style={{ textAlign: 'left', color: '#6b7280' }}>
-                  <th style={{ padding: '0.35rem 0.5rem' }}>Trigger</th>
-                  <th style={{ padding: '0.35rem 0.5rem' }}>Status</th>
-                  <th style={{ padding: '0.35rem 0.5rem' }}>Started</th>
-                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Submitted</th>
-                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Deduped</th>
-                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Rejected</th>
-                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Errors</th>
-                  <th style={{ padding: '0.35rem 0.5rem' }}>Stop reason</th>
+                <tr className={`text-left ${metaLabel}`}>
+                  <th className="px-2 py-2 font-normal">Trigger</th>
+                  <th className="px-2 py-2 font-normal">Status</th>
+                  <th className="px-2 py-2 font-normal">Started</th>
+                  <th className="px-2 py-2 text-right font-normal">Submitted</th>
+                  <th className="px-2 py-2 text-right font-normal">Deduped</th>
+                  <th className="px-2 py-2 text-right font-normal">Rejected</th>
+                  <th className="px-2 py-2 text-right font-normal">Errors</th>
+                  <th className="px-2 py-2 font-normal">Stop reason</th>
                 </tr>
               </thead>
               <tbody>
                 {runs.map((run) => (
-                  <tr key={run.id} style={{ borderTop: '1px solid #f3f4f6' }}>
-                    <td style={{ padding: '0.35rem 0.5rem' }}>{run.trigger}</td>
+                  <tr key={run.id} className="border-t border-ink-2">
+                    <td className="px-2 py-2">{run.trigger}</td>
                     <td
-                      style={{
-                        padding: '0.35rem 0.5rem',
-                        color:
-                          run.status === 'failed'
-                            ? '#dc2626'
-                            : run.status === 'success'
-                              ? '#16a34a'
-                              : '#374151',
-                      }}
+                      className={`px-2 py-2 ${
+                        run.status === 'failed'
+                          ? 'text-alert'
+                          : run.status === 'success'
+                            ? 'text-sage'
+                            : 'text-bone-1'
+                      }`}
                     >
                       {run.status}
                     </td>
-                    <td style={{ padding: '0.35rem 0.5rem' }}>
+                    <td className="px-2 py-2">
                       {run.startedAt ? new Date(run.startedAt).toLocaleString() : '—'}
                     </td>
-                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.submitted}</td>
-                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.deduped}</td>
-                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.rejected}</td>
-                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.errors}</td>
-                    <td style={{ padding: '0.35rem 0.5rem', color: '#6b7280' }}>
+                    <td className="px-2 py-2 text-right">{run.submitted}</td>
+                    <td className="px-2 py-2 text-right">{run.deduped}</td>
+                    <td className="px-2 py-2 text-right">{run.rejected}</td>
+                    <td className="px-2 py-2 text-right">{run.errors}</td>
+                    <td className="px-2 py-2 text-bone-2">
                       {run.error ?? run.stopReason ?? '—'}
                     </td>
                   </tr>

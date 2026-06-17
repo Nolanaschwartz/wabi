@@ -21,53 +21,38 @@ export default function ConsentPage() {
   };
 
   return (
-    <div style={{ maxWidth: 640, margin: '4rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }}>
-      <h1 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Before we start</h1>
+    <div className="mx-auto max-w-2xl px-6 py-20">
+      <div className="mb-8 flex items-center gap-3">
+        <img src="/wabi-mark.svg" alt="" width={40} height={40} className="rounded-full" />
+        <h1 className="font-display text-3xl font-medium text-bone-0">Before we start</h1>
+      </div>
 
-      <div style={{ background: '#f5f5f5', padding: '1.5rem', borderRadius: 8, marginBottom: '1.5rem' }}>
-        <p style={{ margin: '0 0 1rem' }}>
-          <strong>
-            {/* TODO(LEGAL): Replace with final consent wording */}
-            PLACEHOLDER — Pending legal review.
-          </strong>
+      <div className="mb-8 rounded-lg border border-ink-3 bg-ink-1 p-6">
+        <p className="mb-4 font-mono text-[11px] uppercase tracking-[0.14em] text-warn">
+          {/* TODO(LEGAL): Replace with final consent wording */}
+          Placeholder — pending legal review.
         </p>
-        <p style={{ margin: '0 0 1rem', lineHeight: 1.6 }}>
+        <p className="mb-4 leading-relaxed text-bone-1">
           Wabi processes your messages through an AI provider to generate coaching responses.
           Your conversations are used to personalize your experience and may be stored for
           the duration of your account. We do not sell your data to third parties.
         </p>
-        <p style={{ margin: 0, lineHeight: 1.6 }}>
+        <p className="leading-relaxed text-bone-1">
           By accepting, you consent to this processing. You can revoke consent and request
           data deletion at any time in your account settings.
         </p>
       </div>
 
-      <div style={{ display: 'flex', gap: '1rem' }}>
+      <div className="flex gap-4">
         <button
           onClick={accept}
-          style={{
-            padding: '0.75rem 1.5rem',
-            background: '#2563eb',
-            color: 'white',
-            border: 'none',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontSize: '1rem',
-          }}
+          className="rounded-md bg-copper px-6 py-3 text-base font-semibold text-ink-0 transition-colors duration-200 ease-calm hover:bg-copper-bright"
         >
-          Accept &amp; Continue
+          Accept &amp; continue
         </button>
         <button
           onClick={decline}
-          style={{
-            padding: '0.75rem 1.5rem',
-            background: 'transparent',
-            color: '#dc2626',
-            border: '1px solid #dc2626',
-            borderRadius: 6,
-            cursor: 'pointer',
-            fontSize: '1rem',
-          }}
+          className="rounded-md border border-alert px-6 py-3 text-base font-medium text-alert transition-colors duration-200 ease-calm hover:bg-alert/10"
         >
           Decline
         </button>
