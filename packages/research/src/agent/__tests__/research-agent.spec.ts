@@ -75,6 +75,19 @@ describe('ResearchAgent', () => {
     expect(deps.extract).not.toHaveBeenCalled();
   });
 
+  it('checks the seen ledger with the PMID-prefixed key for a direct search hit', async () => {
+    // The bot's ProcessedSource ledger is keyed `PMID:<id>` (extract sets sourceId=`PMID:<id>`,
+    // which strategy-admin.markProcessed stores). A bare-PMID seen() query never matches that row,
+    // so the paper is re-submitted every run → duplicate pending-review StrategyDrafts.
+    const deps = baseDeps({
+      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue(['40299806']) } as any,
+    });
+    const agent = new ResearchAgent(deps, bounds);
+    await agent.run('topic');
+    expect(deps.seen).toHaveBeenCalledWith('PMID:40299806');
+    expect(deps.seen).not.toHaveBeenCalledWith('40299806');
+  });
+
   it('does not re-call seen for a paper already visited via discovery (in-memory set)', async () => {
     const deps = baseDeps({
       pubmed: { ...baseDeps().pubmed,
@@ -84,7 +97,9 @@ describe('ResearchAgent', () => {
     });
     const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 5, maxDraftsPerTopic: 5 });
     await agent.run('topic');
+    // The direct hit and its discovery-expanded self share one key, so the paper is checked once.
     expect((deps.seen as jest.Mock).mock.calls.filter((c) => c[0] === 'PMID:1')).toHaveLength(1);
+    expect(deps.seen).toHaveBeenCalledTimes(1);
   });
 
   it('drops in-run duplicates and keeps reading for a novel one', async () => {

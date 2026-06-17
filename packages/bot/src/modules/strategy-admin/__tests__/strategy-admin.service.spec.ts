@@ -479,6 +479,21 @@ describe('StrategyAdminService.ingestCandidate', () => {
     retrieval = { search: jest.fn() };
     svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any, {} as any);
     jest.spyOn(svc, 'markProcessed').mockResolvedValue();
+    // Default: source not yet in the ledger, so each test reaches the normal ingest path.
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue(null);
+  });
+
+  it('short-circuits as deduped when the source is already in the ledger, without re-evaluating or re-marking', async () => {
+    // Bot-side idempotency on the authoritative sourceId key (ProcessedSource.sourceId @id): a paper
+    // already processed on a prior run must never be re-evaluated or re-submitted, even if the worker
+    // failed to filter it. Would otherwise pass (search [] -> queue -> submitted).
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue({ sourceId: 'PMID:12345' });
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res.status).toBe('deduped');
+    expect(trustGate.evaluate).not.toHaveBeenCalled();
+    expect(svc.markProcessed).not.toHaveBeenCalled(); // preserve the original terminal lastStatus
   });
 
   it('returns deduped and records the ledger when a near-duplicate exists', async () => {
