@@ -46,6 +46,10 @@ export default function ResearchAdminPage() {
   const [newTopic, setNewTopic] = useState('');
   const [topicError, setTopicError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [bounds, setBounds] = useState<Record<string, string>>({});
+  const [boundsError, setBoundsError] = useState<string | null>(null);
+  const [boundsSaved, setBoundsSaved] = useState(false);
+  const [savingBounds, setSavingBounds] = useState(false);
 
   const loadTopics = async () => {
     const r = await fetch('/api/admin/research/config');
@@ -53,6 +57,39 @@ export default function ResearchAdminPage() {
     const data: ConfigResponse = await r.json();
     setConfig(data.config ?? null);
     setTopics(Array.isArray(data.topics) ? data.topics : []);
+    if (data.config) {
+      setBounds(
+        Object.fromEntries(BOUND_LABELS.map(({ key }) => [key, String(data.config![key])])),
+      );
+    }
+  };
+
+  const saveBounds = async () => {
+    if (savingBounds) return;
+    setBoundsError(null);
+    setBoundsSaved(false);
+    setSavingBounds(true);
+    try {
+      const payload: Record<string, number> = {};
+      for (const { key } of BOUND_LABELS) payload[key] = Number(bounds[key]);
+      const r = await fetch('/api/admin/research/bounds', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        const msg =
+          (body && (body.message || body.error)) || `Failed to save bounds (${r.status})`;
+        throw new Error(Array.isArray(msg) ? msg.join('; ') : String(msg));
+      }
+      await loadTopics();
+      setBoundsSaved(true);
+    } catch (e) {
+      setBoundsError(e instanceof Error ? e.message : 'Failed to save bounds');
+    } finally {
+      setSavingBounds(false);
+    }
   };
 
   useEffect(() => {
@@ -142,13 +179,74 @@ export default function ResearchAdminPage() {
       <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Bounds</h2>
         {config ? (
-          <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.875rem', color: '#374151' }}>
-            {BOUND_LABELS.map(({ key, label }) => (
-              <li key={key}>
-                {label}: {String(config[key])}
-              </li>
-            ))}
-          </ul>
+          <>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr auto',
+                gap: '0.5rem 0.75rem',
+                alignItems: 'center',
+                marginBottom: '0.75rem',
+              }}
+            >
+              {BOUND_LABELS.map(({ key, label }) => (
+                <div key={key} style={{ display: 'contents' }}>
+                  <label
+                    htmlFor={`bound-${key}`}
+                    style={{ fontSize: '0.875rem', color: '#374151' }}
+                  >
+                    {label}
+                  </label>
+                  <input
+                    id={`bound-${key}`}
+                    type="number"
+                    min={1}
+                    value={bounds[key] ?? ''}
+                    onChange={(e) => {
+                      setBoundsSaved(false);
+                      setBounds((b) => ({ ...b, [key]: e.target.value }));
+                    }}
+                    aria-label={label}
+                    style={{
+                      width: 140,
+                      padding: '0.35rem 0.5rem',
+                      fontSize: '0.875rem',
+                      border: '1px solid #d1d5db',
+                      borderRadius: 6,
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {boundsError && (
+              <p style={{ color: '#dc2626', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>
+                {boundsError}
+              </p>
+            )}
+            {boundsSaved && (
+              <p style={{ color: '#16a34a', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>
+                Bounds saved.
+              </p>
+            )}
+
+            <button
+              onClick={saveBounds}
+              disabled={savingBounds}
+              style={{
+                padding: '0.4rem 0.9rem',
+                fontSize: '0.875rem',
+                border: '1px solid #2563eb',
+                borderRadius: 6,
+                background: '#2563eb',
+                color: '#fff',
+                cursor: savingBounds ? 'not-allowed' : 'pointer',
+                opacity: savingBounds ? 0.6 : 1,
+              }}
+            >
+              {savingBounds ? 'Saving…' : 'Save bounds'}
+            </button>
+          </>
         ) : (
           <p style={{ margin: 0, fontSize: '0.875rem', color: '#9ca3af' }}>No config loaded.</p>
         )}
