@@ -70,4 +70,31 @@ describe('StrategyRetrievalService', () => {
     await service.search('test query');
     expect(mockSearch).toHaveBeenCalled();
   });
+
+  it('embeds against the OpenAI-compatible /v1/embeddings path and upserts the vector', async () => {
+    // The embedding server is OpenAI-compatible: the path is /v1/embeddings and the response is
+    // { data: [{ embedding: [...] }] }. Hitting the Ollama-native /api/embeddings 404s, which made
+    // embed() return [] and every approve/upsert silently fail (0 points in Qdrant).
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ embedding: new Array(768).fill(0.1) }] }),
+      text: async () => '',
+    });
+    (global as any).fetch = fetchMock;
+
+    const mockUpsert = jest.fn().mockResolvedValue(true);
+    (service as any).qdrant.upsert = mockUpsert;
+
+    await expect(service.upsert('strat_1', 'title: technique', 'evidence')).resolves.toBe(true);
+
+    const calledUrl = fetchMock.mock.calls[0][0] as string;
+    expect(calledUrl).toBe('http://localhost:8081/v1/embeddings');
+    expect(mockUpsert).toHaveBeenCalledWith(
+      'wabi_strategies',
+      expect.objectContaining({
+        points: [expect.objectContaining({ id: 'strat_1', vector: expect.any(Array) })],
+      }),
+    );
+  });
 });

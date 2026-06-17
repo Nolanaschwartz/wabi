@@ -116,8 +116,11 @@ export class StrategyRetrievalService {
     // Resolve the embedding provider lazily on every call — never cache env-derived config in a
     // field (the bot starts before inference env vars are populated; see CLAUDE.md).
     const config = getProvider('embedding');
+    // OpenAI-compatible embeddings path. The base URL carries no /v1 (see provider.ts), so we append
+    // /v1/embeddings here. The Ollama-native /api/embeddings 404s on this server, which made embed()
+    // return [] and every approve/upsert silently fail (ADR-0012; 0 points reached Qdrant).
     const data = await safeFetch<{ data?: { embedding?: number[] }[] }>(
-      `${config.baseUrl}/api/embeddings`,
+      `${config.baseUrl}/v1/embeddings`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
