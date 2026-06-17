@@ -2,6 +2,7 @@ import { trace, context, type Tracer } from '@opentelemetry/api';
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { TraceIdRatioBasedSampler, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { LangfuseSpanProcessor, type ShouldExportSpan } from '@langfuse/otel';
 import { setLangfuseTracerProvider } from '@langfuse/tracing';
 import { LangfuseClient } from '@langfuse/client';
@@ -85,6 +86,9 @@ export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): Langf
       ? [new LangfuseSpanProcessor({ shouldExportSpan, exporter, baseUrl })]
       : [];
     const provider = new NodeTracerProvider({
+      // Stamp service.name on the Resource so traces are attributed to 'wabi-bot'/'wabi-research'
+      // instead of OTEL's `unknown_service:node` default.
+      resource: resourceFromAttributes({ 'service.name': serviceName }),
       sampler: new TraceIdRatioBasedSampler(sampleRate),
       spanProcessors,
     });

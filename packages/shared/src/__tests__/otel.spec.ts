@@ -125,6 +125,29 @@ describe('createLangfuseTracing', () => {
     expect(exporter.getFinishedSpans()).toEqual([]); // processor not attached → no export
   });
 
+  it('stamps the OTEL resource service.name with the serviceName so traces are attributed (not unknown_service:node)', async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-test';
+    process.env.LANGFUSE_SECRET_KEY = 'sk-lf-test';
+    process.env.LANGFUSE_HOST = 'http://localhost:3999';
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+    const exporter = new InMemorySpanExporter();
+    const tracing = createLangfuseTracing({
+      serviceName: 'wabi-bot',
+      sampleRate: 1,
+      exporter,
+      shouldExportSpan: () => true,
+    });
+
+    tracing.tracer.startSpan('turn').end();
+    await tracing.forceFlush();
+
+    const [span] = exporter.getFinishedSpans();
+    expect(span.resource.attributes['service.name']).toBe('wabi-bot');
+    await tracing.shutdown(200);
+  });
+
   it('resolveLangfuseBaseUrl prefers self-hosted LANGFUSE_HOST, falls back to LANGFUSE_BASE_URL, else undefined', () => {
     delete process.env.LANGFUSE_HOST;
     delete process.env.LANGFUSE_BASE_URL;
