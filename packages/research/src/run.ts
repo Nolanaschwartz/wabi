@@ -36,11 +36,11 @@ export interface RunDeps {
   log?: Logger;
 }
 
-export interface RunResult { submitted: number; deduped: number; errors: number; collected: number; stopReason: string }
+export interface RunResult { submitted: number; deduped: number; rejected: number; errors: number; collected: number; stopReason: string }
 
 /** Pure run core: iterate topics under the run budget, submit collected candidates, tally outcomes. */
 export async function runResearch(deps: RunDeps): Promise<RunResult> {
-  const result: RunResult = { submitted: 0, deduped: 0, errors: 0, collected: 0, stopReason: 'exhausted' };
+  const result: RunResult = { submitted: 0, deduped: 0, rejected: 0, errors: 0, collected: 0, stopReason: 'exhausted' };
   const log = deps.log ?? noopLogger;
   const topics = deps.topics.slice(0, deps.bounds.maxTopicsPerRun);
   const now = deps.now ?? (() => Date.now());
@@ -57,6 +57,7 @@ export async function runResearch(deps: RunDeps): Promise<RunResult> {
       const outcome = await deps.submit(candidate);
       if (outcome === 'submitted') result.submitted++;
       else if (outcome === 'deduped') result.deduped++;
+      else if (outcome === 'rejected') result.rejected++;
       else result.errors++;
       log.info('submit', { title: candidate.title, outcome });
     }

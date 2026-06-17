@@ -21,6 +21,12 @@ describe('BotClient', () => {
     expect(await client.submit(candidate)).toBe('submitted');
   });
 
+  it('submit maps a 201 whose body says rejected → rejected (gate reject, no draft persisted)', async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ({ status: 'rejected' }) });
+    const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
+    expect(await client.submit(candidate)).toBe('rejected');
+  });
+
   it('submit maps 409 → deduped', async () => {
     const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({ status: 'deduped' }) });
     const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });

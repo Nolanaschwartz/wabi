@@ -228,4 +228,44 @@ describe('StrategyTrustGate', () => {
 
     expect(result.decision).toBe('reject');
   });
+
+  it('requests enough output budget for a reasoning model (small cap returns empty -> wrongly rejects)', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText
+      .mockResolvedValueOnce({ text: 'safe' })
+      .mockResolvedValueOnce({ text: 'faithful' });
+
+    await gate.evaluate({
+      id: '1', title: 'X', technique: 'Y', source: 'PubMed', evidence: 'peer-reviewed: RCT',
+      sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345', trustLevel: 'research-agent', status: 'draft',
+    });
+
+    expect(generateText.mock.calls[0][0].maxOutputTokens).toBeGreaterThanOrEqual(1000);
+  });
+
+  it('accepts a clean answer with trailing text ("safe.") via startsWith, not strict equality', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText
+      .mockResolvedValueOnce({ text: 'safe.' })
+      .mockResolvedValueOnce({ text: 'faithful\n' });
+
+    const result = await gate.evaluate({
+      id: '1', title: 'X', technique: 'Y', source: 'PubMed', evidence: 'peer-reviewed: RCT',
+      sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345', trustLevel: 'research-agent', status: 'draft',
+    });
+
+    expect(result.decision).toBe('queue');
+  });
+
+  it('fails closed (reject) on EMPTY output — a reasoning model starved by the cap', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText.mockResolvedValueOnce({ text: '' });
+
+    const result = await gate.evaluate({
+      id: '1', title: 'X', technique: 'Y', source: 'PubMed', evidence: 'peer-reviewed: RCT',
+      sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345', trustLevel: 'research-agent', status: 'draft',
+    });
+
+    expect(result.decision).toBe('reject');
+  });
 });
