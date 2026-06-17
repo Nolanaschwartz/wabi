@@ -27,6 +27,26 @@ interface ConfigResponse {
   topics: ResearchTopic[];
 }
 
+type Cadence = 'daily' | 'weekly' | 'monthly';
+
+const DOW_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * Client-side preset → cron builder, mirroring the server's cron-compile rules (the server's
+ * cron-compile is the authoritative validation gate; this is only a convenience). `time` is "HH:MM".
+ * Daily → "M H * * *"; Weekly → "M H * * D"; Monthly → "M H D * *".
+ */
+function buildCron(cadence: Cadence, time: string, dayOfWeek: number, dayOfMonth: number): string {
+  const [hh, mm] = time.split(':');
+  const h = Number(hh);
+  const m = Number(mm);
+  if (cadence === 'daily') return `${m} ${h} * * *`;
+  if (cadence === 'weekly') return `${m} ${h} * * ${dayOfWeek}`;
+  return `${m} ${h} ${dayOfMonth} * *`;
+}
+
 const BOUND_LABELS: { key: keyof ResearchConfig; label: string }[] = [
   { key: 'maxTopicsPerRun', label: 'Max topics per run' },
   { key: 'maxPapersPerTopic', label: 'Max papers per topic' },
@@ -51,6 +71,49 @@ export default function ResearchAdminPage() {
   const [boundsSaved, setBoundsSaved] = useState(false);
   const [savingBounds, setSavingBounds] = useState(false);
 
+  // Schedule panel state.
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [cadence, setCadence] = useState<Cadence>('daily');
+  const [time, setTime] = useState('03:00');
+  const [dayOfWeek, setDayOfWeek] = useState(1); // Monday
+  const [dayOfMonth, setDayOfMonth] = useState(1);
+  const [advanced, setAdvanced] = useState(false);
+  const [rawCron, setRawCron] = useState('');
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleSaved, setScheduleSaved] = useState(false);
+  const [savingSchedule, setSavingSchedule] = useState(false);
+
+  const presetCron = buildCron(cadence, time, dayOfWeek, dayOfMonth);
+  const effectiveCron = advanced ? rawCron.trim() : presetCron;
+
+  const saveSchedule = async () => {
+    if (savingSchedule) return;
+    setScheduleError(null);
+    setScheduleSaved(false);
+    setSavingSchedule(true);
+    try {
+      // An enabled schedule needs a cron; a disabled one persists null (keep cadence settings in UI).
+      const cron = scheduleEnabled ? effectiveCron : null;
+      const r = await fetch('/api/admin/research/schedule', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cron, enabled: scheduleEnabled }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        const msg =
+          (body && (body.message || body.error)) || `Failed to save schedule (${r.status})`;
+        throw new Error(Array.isArray(msg) ? msg.join('; ') : String(msg));
+      }
+      await loadTopics();
+      setScheduleSaved(true);
+    } catch (e) {
+      setScheduleError(e instanceof Error ? e.message : 'Failed to save schedule');
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
   const loadTopics = async () => {
     const r = await fetch('/api/admin/research/config');
     if (!r.ok) throw new Error(`Failed to load research config (${r.status})`);
@@ -61,6 +124,13 @@ export default function ResearchAdminPage() {
       setBounds(
         Object.fromEntries(BOUND_LABELS.map(({ key }) => [key, String(data.config![key])])),
       );
+      setScheduleEnabled(data.config.scheduleEnabled);
+      if (data.config.scheduleCron) {
+        // Persisted cron is the source of truth; surface it in the Advanced field so a reload shows
+        // exactly what is scheduled even if it was not built from a preset.
+        setAdvanced(true);
+        setRawCron(data.config.scheduleCron);
+      }
     }
   };
 
@@ -171,9 +241,138 @@ export default function ResearchAdminPage() {
 
       <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginBottom: '1rem' }}>
         <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Schedule</h2>
-        <p style={{ margin: 0, fontSize: '0.875rem', color: '#6b7280' }}>
-          Enabled: {config?.scheduleEnabled ? 'yes' : 'no'} | Cron: {config?.scheduleCron ?? '(none)'}
-        </p>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontSize: '0.875rem', color: '#374151' }}>
+          <input
+            type="checkbox"
+            checked={scheduleEnabled}
+            onChange={(e) => {
+              setScheduleSaved(false);
+              setScheduleEnabled(e.target.checked);
+            }}
+            aria-label="Enable schedule"
+          />
+          Enable schedule
+        </label>
+
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+          <select
+            value={cadence}
+            onChange={(e) => {
+              setScheduleSaved(false);
+              setCadence(e.target.value as Cadence);
+            }}
+            aria-label="Cadence"
+            disabled={advanced}
+            style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+          >
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+
+          <input
+            type="time"
+            value={time}
+            onChange={(e) => {
+              setScheduleSaved(false);
+              setTime(e.target.value);
+            }}
+            aria-label="Time of day"
+            disabled={advanced}
+            style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+          />
+
+          {cadence === 'weekly' && !advanced && (
+            <select
+              value={dayOfWeek}
+              onChange={(e) => {
+                setScheduleSaved(false);
+                setDayOfWeek(Number(e.target.value));
+              }}
+              aria-label="Day of week"
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+            >
+              {DOW_LABELS.map((d, i) => (
+                <option key={i} value={i}>{d}</option>
+              ))}
+            </select>
+          )}
+
+          {cadence === 'monthly' && !advanced && (
+            <select
+              value={dayOfMonth}
+              onChange={(e) => {
+                setScheduleSaved(false);
+                setDayOfMonth(Number(e.target.value));
+              }}
+              aria-label="Day of month"
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.875rem', border: '1px solid #d1d5db', borderRadius: 6 }}
+            >
+              {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.8125rem', color: '#6b7280' }}>
+          <input
+            type="checkbox"
+            checked={advanced}
+            onChange={(e) => {
+              setScheduleSaved(false);
+              const on = e.target.checked;
+              // Switching to Advanced prefills the raw field with the current preset so the operator edits from a known-good cron.
+              if (on && rawCron.trim() === '') setRawCron(presetCron);
+              setAdvanced(on);
+            }}
+            aria-label="Advanced raw cron"
+          />
+          Advanced (raw cron)
+        </label>
+
+        {advanced ? (
+          <input
+            type="text"
+            value={rawCron}
+            onChange={(e) => {
+              setScheduleSaved(false);
+              setRawCron(e.target.value);
+            }}
+            placeholder="M H D M DOW (e.g. 0 3 * * *)"
+            aria-label="Raw cron"
+            style={{ width: '100%', padding: '0.4rem 0.6rem', fontSize: '0.875rem', fontFamily: 'monospace', border: '1px solid #d1d5db', borderRadius: 6, marginBottom: '0.5rem' }}
+          />
+        ) : (
+          <p style={{ margin: '0 0 0.5rem', fontSize: '0.8125rem', color: '#6b7280', fontFamily: 'monospace' }}>
+            Cron: {presetCron}
+          </p>
+        )}
+
+        {scheduleError && (
+          <p style={{ color: '#dc2626', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>{scheduleError}</p>
+        )}
+        {scheduleSaved && (
+          <p style={{ color: '#16a34a', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>Schedule saved.</p>
+        )}
+
+        <button
+          onClick={saveSchedule}
+          disabled={savingSchedule}
+          style={{
+            padding: '0.4rem 0.9rem',
+            fontSize: '0.875rem',
+            border: '1px solid #2563eb',
+            borderRadius: 6,
+            background: '#2563eb',
+            color: '#fff',
+            cursor: savingSchedule ? 'not-allowed' : 'pointer',
+            opacity: savingSchedule ? 0.6 : 1,
+          }}
+        >
+          {savingSchedule ? 'Saving…' : 'Save schedule'}
+        </button>
       </section>
 
       <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginBottom: '1rem' }}>
