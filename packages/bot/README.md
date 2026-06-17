@@ -29,7 +29,7 @@ if the classifier can't run, coaching does not proceed.
 
 `src/modules/<feature>/` is a NestJS module per feature, each owning its `.module.ts`,
 services, and `__tests__/`. They are wired in `src/app.module.ts`. `src/lib/` holds
-cross-module helpers (sentry, setup-link). `src/main.ts` is the bootstrap.
+cross-module helpers (sentry, setup-link, json-logger, safe-fetch, usage, timezone-util, command-contexts). `src/main.ts` is the bootstrap.
 
 Modules, grouped by role:
 

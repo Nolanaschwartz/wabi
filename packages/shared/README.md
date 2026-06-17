@@ -13,7 +13,7 @@ Built with `tsc` to `dist/`; consumers import the compiled output.
 - **`provider.ts`** — `getProvider(role)`, the per-role swappable inference resolver (ADR-0009).
   It **re-reads `process.env` on every call by design** so that config resolved late during
   the bot's bootstrap is honoured. Never cache its result in a field or top-level const.
-  Roles include `coach` / `classifier` / `embedding` (and the research worker's
+  Roles include `coach` / `classifier` / `embedding` / `router` (and the research worker's
   `research` / `research-triage`).
 - **`access.ts`** — the access resolver: `hasActiveAccess = (now < trialEndsAt) OR
   stripeStatus ∈ {active, trialing}` (ADR-0011). The source of truth for entitlement,
