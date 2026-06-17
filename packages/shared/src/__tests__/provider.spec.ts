@@ -18,4 +18,15 @@ describe('getProvider research roles', () => {
     const cfg = getProvider('research-triage');
     expect(cfg.baseUrl).toBe('http://classify.local/v1');
   });
+
+  it('falls back research to the COACH env when RESEARCH_* is unset (local setup ergonomics)', () => {
+    delete process.env.RESEARCH_BASE_URL;
+    delete process.env.RESEARCH_MODEL;
+    delete process.env.RESEARCH_API_KEY;
+    process.env.COACH_BASE_URL = 'http://coach.local/v1';
+    process.env.COACH_MODEL = 'coach-model';
+    process.env.COACH_API_KEY = 'ck';
+    const cfg = getProvider('research');
+    expect(cfg).toEqual({ baseUrl: 'http://coach.local/v1', model: 'coach-model', apiKey: 'ck' });
+  });
 });

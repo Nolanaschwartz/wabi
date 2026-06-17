@@ -18,26 +18,10 @@ import { PubMedTool } from '../src/sources/pubmed';
 import { MedrxivTool } from '../src/sources/medrxiv';
 import { loadBounds } from '../src/config';
 import { defaultLogger } from '../src/util/logger';
+import { loadDotenv } from '../src/util/load-env';
+import { getProvider } from '@wabi/shared';
 
-const ROOT_ENV = join(__dirname, '../../../.env');
 const FIX = join(__dirname, '../src/sources/__tests__/fixtures');
-
-/** Minimal .env loader (no dotenv dep). Does not override vars already in process.env. */
-function loadEnv(path: string): void {
-  let raw = '';
-  try {
-    raw = readFileSync(path, 'utf8');
-  } catch {
-    console.error(`[harness] could not read ${path}`);
-    return;
-  }
-  for (const line of raw.split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (!m) continue;
-    const [, k, v] = m;
-    if (process.env[k] === undefined) process.env[k] = v.replace(/^["']|["']$/g, '');
-  }
-}
 
 const read = (name: string): string => readFileSync(join(FIX, name), 'utf8');
 
@@ -71,24 +55,12 @@ function fixtureFetch(): typeof fetch {
 }
 
 async function main(): Promise<void> {
-  loadEnv(ROOT_ENV);
+  console.error(`[harness] env loaded from ${loadDotenv() ?? '(none found)'}`);
 
-  // The `research` role (extract) has NO fallback in getProvider — unset RESEARCH_* => OpenAI + empty
-  // key => 401 (blind spot #2). For this local test, point it at the classifier tier if unset.
-  const defaulted: string[] = [];
-  for (const [r, c] of [
-    ['RESEARCH_BASE_URL', 'CLASSIFIER_BASE_URL'],
-    ['RESEARCH_MODEL', 'CLASSIFIER_MODEL'],
-    ['RESEARCH_API_KEY', 'CLASSIFIER_API_KEY'],
-  ] as const) {
-    if (process.env[r] === undefined && process.env[c] !== undefined) {
-      process.env[r] = process.env[c];
-      defaulted.push(r);
-    }
-  }
-  if (defaulted.length) {
-    console.warn(`[harness] ${defaulted.join(', ')} unset in .env -> using CLASSIFIER_* for this run (see blind spot #2)`);
-  }
+  // No manual provider wiring: getProvider falls research -> COACH and research-triage -> CLASSIFIER
+  // when RESEARCH_* is unset, so this exercises the same resolution the real worker uses.
+  const research = getProvider('research');
+  const triage = getProvider('research-triage');
 
   const topic = process.argv[2] || 'anxiety';
   const bounds = loadBounds();
@@ -97,8 +69,8 @@ async function main(): Promise<void> {
   const pubmed = new PubMedTool({ fetchFn, minIntervalMs: 0 });
   const medrxiv = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-06') });
 
-  console.log(`[harness] topic="${topic}"  research=${process.env.RESEARCH_BASE_URL} (${process.env.RESEARCH_MODEL})`);
-  console.log(`[harness] triage=${process.env.RESEARCH_TRIAGE_BASE_URL || process.env.CLASSIFIER_BASE_URL} (${process.env.RESEARCH_TRIAGE_MODEL || process.env.CLASSIFIER_MODEL})`);
+  console.log(`[harness] topic="${topic}"  research=${research.baseUrl} (${research.model})`);
+  console.log(`[harness] triage=${triage.baseUrl} (${triage.model})`);
 
   // Show every step by default for the harness; override with RESEARCH_LOG_LEVEL.
   if (process.env.RESEARCH_LOG_LEVEL === undefined) process.env.RESEARCH_LOG_LEVEL = 'debug';
