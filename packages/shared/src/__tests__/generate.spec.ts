@@ -39,6 +39,29 @@ describe('generate', () => {
     expect(r.latencyMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('forwards the telemetry option to the AI SDK as experimental_telemetry (routes spans to the tracer)', async () => {
+    generateText.mockResolvedValue({ text: 'ok', usage: { totalTokens: 1 } });
+    const tracer = { __isolated: true } as any;
+    await generate('coach', {
+      prompt: 'p',
+      maxOutputTokens: 100,
+      telemetry: { isEnabled: true, tracer, functionId: 'coach', recordInputs: true, recordOutputs: true },
+    });
+    expect(generateText.mock.calls[0][0].experimental_telemetry).toEqual({
+      isEnabled: true,
+      tracer,
+      functionId: 'coach',
+      recordInputs: true,
+      recordOutputs: true,
+    });
+  });
+
+  it('passes no experimental_telemetry when the caller omits telemetry (above-gate default)', async () => {
+    generateText.mockResolvedValue({ text: 'ok', usage: { totalTokens: 1 } });
+    await generate('classifier', { prompt: 'p', maxOutputTokens: 100 });
+    expect(generateText.mock.calls[0][0].experimental_telemetry).toBeUndefined();
+  });
+
   it('normalises usage: only reported fields present, absent never coerced to zero', async () => {
     generateText.mockResolvedValue({ text: 'x', usage: { totalTokens: 50 } });
     const r = await generate('research', { prompt: 'p', maxOutputTokens: 100 });

@@ -10,6 +10,7 @@ import { setLangfuseTracerProvider } from '@langfuse/tracing';
 export { startActiveObservation, startObservation, getActiveTraceId } from '@langfuse/tracing';
 export { isDefaultExportSpan } from '@langfuse/otel';
 export type { ShouldExportSpan } from '@langfuse/otel';
+export type { Tracer } from '@opentelemetry/api';
 
 /**
  * Content-agnostic Langfuse OpenTelemetry tracing bootstrap (ADR-0038).

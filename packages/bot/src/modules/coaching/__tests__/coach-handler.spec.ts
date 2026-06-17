@@ -2,8 +2,13 @@ import { CoachHandler, type DmTurnContext } from '../coach-handler';
 import { CoachService } from '../coach.service';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
 import { LangfuseTracer } from '../../langfuse/langfuse-tracer.service';
+import { OtelTracingService } from '../../langfuse/otel-tracing.service';
 import { MemoryStoreService } from '../../memory/memory-store.service';
 import { HabitEngagementService } from '../../habit-engagement/habit-engagement.service';
+
+// A sentinel for the isolated Langfuse tracer; the handler must hand THIS into the coach generation's
+// telemetry so the AI-SDK auto-generation routes to the isolated provider (never Sentry's global one).
+const ISOLATED_TRACER = { __isolated: true } as any;
 
 // buildCoachPrompt and rankByRecency are real (pure) — the handler's job is to gather + order, and
 // these prove the wiring reaches the model with recency-ordered read-back.
@@ -12,7 +17,8 @@ describe('CoachHandler', () => {
   let handler: CoachHandler;
   let coach: { generateDetailed: jest.Mock };
   let sessionBuffer: { append: jest.Mock };
-  let langfuseTracer: { span: jest.Mock; score: jest.Mock };
+  let langfuseTracer: { span: jest.Mock; score: jest.Mock; traceObservation: jest.Mock; latchCrisis: jest.Mock };
+  let otelTracing: { tracer: unknown };
   let memoryStore: { search: jest.Mock; deriveAndStore: jest.Mock };
   let habitEngagement: { record: jest.Mock };
 
@@ -37,7 +43,8 @@ describe('CoachHandler', () => {
       }),
     };
     sessionBuffer = { append: jest.fn().mockResolvedValue(undefined) };
-    langfuseTracer = { span: jest.fn(), score: jest.fn() };
+    langfuseTracer = { span: jest.fn(), score: jest.fn(), traceObservation: jest.fn(), latchCrisis: jest.fn() };
+    otelTracing = { tracer: ISOLATED_TRACER };
     memoryStore = {
       search: jest.fn().mockResolvedValue([]),
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
@@ -49,6 +56,7 @@ describe('CoachHandler', () => {
       langfuseTracer as unknown as LangfuseTracer,
       memoryStore as unknown as MemoryStoreService,
       habitEngagement as unknown as HabitEngagementService,
+      otelTracing as unknown as OtelTracingService,
     );
   });
 
@@ -60,32 +68,36 @@ describe('CoachHandler', () => {
     expect(coach.generateDetailed).toHaveBeenCalledWith(
       expect.stringContaining('compassionate DM companion'),
       expect.stringContaining('i keep tilting in ranked'),
+      expect.objectContaining({ isEnabled: true, functionId: 'coach' }),
     );
     expect(ctx.message.reply).toHaveBeenCalledWith('That sounds rough. Hang in there.');
   });
 
-  it('records the model id and token usage from the generation on the coach span', async () => {
+  it('instruments the coach generation with telemetry routed to the isolated tracer', async () => {
+    // Model/usage/latency + prompt+reply are captured by the AI SDK's auto-generation (recordInputs/
+    // Outputs), routed to the isolated Langfuse tracer — replacing the old manual coach span.
     await handler.handle(baseCtx());
 
-    expect(langfuseTracer.span).toHaveBeenCalledWith(
+    expect(coach.generateDetailed).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
       expect.objectContaining({
-        span: 'coach',
-        model: 'test-coach',
-        usage: { inputTokens: 12, outputTokens: 34 },
+        isEnabled: true,
+        tracer: ISOLATED_TRACER,
+        recordInputs: true,
+        recordOutputs: true,
+        functionId: 'coach',
       }),
     );
   });
 
-  it('records the model id with usage absent when the provider omits token counts', async () => {
-    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
-
+  it('never emits the coach content through a manual tracer span (it is the AI-SDK generation)', async () => {
     await handler.handle(baseCtx());
 
-    const coachSpan = langfuseTracer.span.mock.calls
+    const manualCoachSpan = langfuseTracer.traceObservation.mock.calls
       .map((c) => c[0] as any)
-      .find((p) => p.span === 'coach');
-    expect(coachSpan.model).toBe('test-coach');
-    expect(coachSpan.usage).toBeUndefined();
+      .find((p) => p.name === 'coach');
+    expect(manualCoachSpan).toBeUndefined();
   });
 
   it('emits a memory span with recall counts/similarities/ids and no memory text', async () => {
@@ -96,7 +108,7 @@ describe('CoachHandler', () => {
 
     await handler.handle(baseCtx());
 
-    const memory = langfuseTracer.span.mock.calls.map((c) => c[0] as any).find((p) => p.span === 'memory');
+    const memory = langfuseTracer.traceObservation.mock.calls.map((c) => c[0] as any).find((p) => p.name === 'memory');
     expect(memory).toBeDefined();
     expect(memory.metadata.count).toBe(2);
     expect(memory.metadata.ids).toEqual(['m1', 'm2']);
@@ -115,7 +127,7 @@ describe('CoachHandler', () => {
 
     await handler.handle(baseCtx());
 
-    const memory = langfuseTracer.span.mock.calls.map((c) => c[0] as any).find((p) => p.span === 'memory');
+    const memory = langfuseTracer.traceObservation.mock.calls.map((c) => c[0] as any).find((p) => p.name === 'memory');
     expect(memory.input).not.toBe('');
     expect(memory.output).toContain('plays Valorant nightly');
     // Metadata still present alongside the verbatim text.
@@ -130,6 +142,7 @@ describe('CoachHandler', () => {
       new LangfuseTracer(),
       memoryStore as unknown as MemoryStoreService,
       habitEngagement as unknown as HabitEngagementService,
+      otelTracing as unknown as OtelTracingService,
     );
     const ctx = baseCtx();
 
@@ -206,17 +219,18 @@ describe('CoachHandler', () => {
     expect(ctx.message.reply).toHaveBeenCalledWith('That sounds rough. Hang in there.');
   });
 
-  it('still emits the coach generation span (model + usage) when the coach returns empty', async () => {
-    // The empty/refused generation still burned tokens — cost monitoring must see the GENERATION span
-    // for exactly the failure turns operators want to inspect.
+  it('still instruments the coach generation when the coach returns empty (cost visibility on failures)', async () => {
+    // The empty/refused generation still burned tokens — the AI-SDK auto-generation runs regardless,
+    // so the failure turn is still captured for cost monitoring. Telemetry is passed on every coach call.
     coach.generateDetailed.mockResolvedValue({ text: '', model: 'test-coach', usage: { inputTokens: 9, outputTokens: 0 } });
 
     await handler.handle(baseCtx());
 
-    const coachSpan = langfuseTracer.span.mock.calls.map((c) => c[0] as any).find((p) => p.span === 'coach');
-    expect(coachSpan).toBeDefined();
-    expect(coachSpan.model).toBe('test-coach');
-    expect(coachSpan.usage).toEqual({ inputTokens: 9, outputTokens: 0 });
+    expect(coach.generateDetailed).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ isEnabled: true, tracer: ISOLATED_TRACER, functionId: 'coach' }),
+    );
   });
 
   it('still replies when memory recall fails (degrades to no memories, hot-path isolation)', async () => {

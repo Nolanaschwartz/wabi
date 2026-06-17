@@ -5,6 +5,8 @@ import { buildCoachPrompt } from './coach-prompt';
 import { splitMessage } from './message-splitter';
 import { SessionBufferService, type SessionContext } from '../session-buffer/session-buffer.service';
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
+import { OtelTracingService } from '../langfuse/otel-tracing.service';
+import { startActiveObservation } from '@wabi/shared/otel';
 import { MemoryStoreService } from '../memory/memory-store.service';
 import { rankByRecency } from '../memory/memory-ranker';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
@@ -46,6 +48,7 @@ export class CoachHandler implements Spoke {
     private readonly langfuseTracer: LangfuseTracer,
     private readonly memoryStore: MemoryStoreService,
     private readonly habitEngagement: HabitEngagementService,
+    private readonly otelTracing: OtelTracingService,
   ) {}
 
   readonly intent = 'coach';
@@ -93,9 +96,9 @@ export class CoachHandler implements Spoke {
     // similarities cross. Outside production the call site includes the query + recalled facts so a
     // local trace shows exactly what was recalled.
     const fullFidelity = this.langfuseTracer.localFullFidelity;
-    this.langfuseTracer.span({
-      traceId,
-      span: 'memory',
+    this.langfuseTracer.traceObservation({
+      name: 'memory',
+      kind: 'span',
       input: fullFidelity ? batch : '',
       output: fullFidelity ? JSON.stringify(memories.map((m) => m.content)) : '',
       latencyMs: memoryLatency,
@@ -115,23 +118,23 @@ export class CoachHandler implements Spoke {
       inAftermath,
     });
 
+    // Wrap the generation in a thin manual `coach` parent so the AI SDK's auto-generation span nests
+    // under it (name-based eval queries still find `coach`), and route that auto-generation to the
+    // isolated Langfuse tracer. This call is strictly BELOW the crisis gate, the one place
+    // auto-instrumentation is safe (ADR-0038); it captures model/usage/latency + prompt+reply
+    // (recordInputs/Outputs) as sanctioned eval retention (ADR-0024). Replaces the old manual coach span.
     const coachStart = Date.now();
-    const generation = await this.coach.generateDetailed(system, prompt);
+    const generation = await startActiveObservation('coach', async () =>
+      this.coach.generateDetailed(system, prompt, {
+        isEnabled: true,
+        tracer: this.otelTracing.tracer,
+        recordInputs: true,
+        recordOutputs: true,
+        functionId: 'coach',
+      }),
+    );
     const coachLatency = Date.now() - coachStart;
     const reply = generation.text;
-
-    // Cost/identity signal: the model that produced the reply and its token usage (absent when the
-    // provider doesn't report it). Emitted for BOTH outcomes — an empty/refused generation still burned
-    // tokens, and that failure turn is exactly the one cost monitoring must be able to inspect.
-    this.langfuseTracer.span({
-      traceId,
-      span: 'coach',
-      input: prompt,
-      output: reply,
-      latencyMs: coachLatency,
-      model: generation.model,
-      usage: generation.usage,
-    });
 
     if (!reply) {
       this.logger.warn('coach returned empty, sending fallback', { userId, latencyMs: coachLatency });

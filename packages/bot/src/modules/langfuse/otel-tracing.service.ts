@@ -1,5 +1,5 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
-import { createLangfuseTracing, type LangfuseTracing } from '@wabi/shared/otel';
+import { createLangfuseTracing, type LangfuseTracing, type Tracer } from '@wabi/shared/otel';
 import { JsonLogger } from '../../lib/json-logger';
 import { LangfuseTracer } from './langfuse-tracer.service';
 
@@ -45,6 +45,13 @@ export class OtelTracingService implements OnApplicationShutdown {
       sampleRate: resolveSampleRate(),
       shouldExportSpan: this.langfuseTracer.shouldExportSpan,
     });
+  }
+
+  // The isolated provider's tracer, handed to the below-gate coach `generate` call as the AI SDK's
+  // experimental_telemetry.tracer so its auto-generation span routes here and never to Sentry's global
+  // provider (ADR-0038).
+  get tracer(): Tracer {
+    return this.tracing.tracer;
   }
 
   async onApplicationShutdown(): Promise<void> {

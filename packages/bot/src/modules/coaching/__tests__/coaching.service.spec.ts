@@ -203,6 +203,7 @@ describe('CoachingService', () => {
       langfuseTracer,
       memoryStore,
       habitEngagement,
+      { tracer: {} } as any,
     );
     // Journal handler is mocked, but the router is REAL — so a confident inline journal verdict really
     // routes here (proved below). Most tests drive the coach path (intent defaults to coach/0).
@@ -439,6 +440,7 @@ describe('CoachingService', () => {
     expect(coach.generateDetailed).toHaveBeenCalledWith(
       expect.stringContaining('compassionate DM companion'),
       expect.stringContaining('Tilts in ranked'),
+      expect.objectContaining({ isEnabled: true, functionId: 'coach' }),
     );
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
