@@ -24,12 +24,48 @@ jest.mock('@wabi/shared', () => ({
 
 import { ResearchRunService, RESEARCH_RUN_QUEUE } from '../research-run.service';
 import type { SchedulerService } from '../../scheduler/scheduler.service';
+import type { ResearchConfigService } from '../../config-service/research-config.service';
+import type { ResearchRunnerService, RunnerResult } from '../research-runner.service';
 
 function makeScheduler() {
   return {
     work: jest.fn().mockResolvedValue(undefined),
     send: jest.fn().mockResolvedValue(undefined),
   } as unknown as jest.Mocked<Pick<SchedulerService, 'work' | 'send'>> & SchedulerService;
+}
+
+/** A zero-count runner result — the default when a test doesn't care about the summary mapping. */
+const ZERO_RESULT: RunnerResult = {
+  submitted: 0, deduped: 0, rejected: 0, errors: 0, collected: 0,
+  stopReason: 'exhausted', tokensUsed: 0, topicsRun: 0,
+};
+
+function makeConfig(): jest.Mocked<Pick<ResearchConfigService, 'getEnabledTopics' | 'getConfig'>> & ResearchConfigService {
+  return {
+    getEnabledTopics: jest.fn().mockResolvedValue([]),
+    getConfig: jest.fn().mockResolvedValue({ config: null, topics: [] }),
+  } as unknown as jest.Mocked<Pick<ResearchConfigService, 'getEnabledTopics' | 'getConfig'>> & ResearchConfigService;
+}
+
+function makeRunner(result: RunnerResult = ZERO_RESULT): jest.Mocked<Pick<ResearchRunnerService, 'execute'>> & ResearchRunnerService {
+  return {
+    execute: jest.fn().mockResolvedValue(result),
+  } as unknown as jest.Mocked<Pick<ResearchRunnerService, 'execute'>> & ResearchRunnerService;
+}
+
+/** Default bounds the config singleton would yield (schema defaults). */
+const DEFAULT_BOUNDS = {
+  maxTopicsPerRun: 5, maxPapersPerTopic: 8, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
+  maxDraftsPerRun: 10, agentTimeoutMs: 90_000, runTimeoutMs: 600_000, tokenBudget: 200_000,
+};
+
+/** Build the 3-arg service the new slice expects (scheduler, config, runner). */
+function makeService(
+  scheduler = makeScheduler(),
+  config = makeConfig(),
+  runner = makeRunner(),
+) {
+  return new ResearchRunService(scheduler, config, runner);
 }
 
 describe('ResearchRunService', () => {
@@ -51,7 +87,7 @@ describe('ResearchRunService', () => {
   describe('onModuleInit — consumer registration', () => {
     it('registers the research-run consumer as a singleton queue', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
 
       await svc.onModuleInit();
 
@@ -63,31 +99,98 @@ describe('ResearchRunService', () => {
     });
   });
 
-  describe('handleJob — heartbeat', () => {
-    it('a scheduled firing (no runId) creates a running row with trigger=scheduled and finalizes to success with zero counts', async () => {
+  describe('handleJob — real run', () => {
+    it('a scheduled firing (no runId) creates a running row, runs, and finalizes to success with the REAL summary counts', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const config = makeConfig();
+      const runner = makeRunner({
+        submitted: 4, deduped: 2, rejected: 1, errors: 0, collected: 7,
+        stopReason: 'maxDraftsPerRun', tokensUsed: 5_000, topicsRun: 3,
+      });
+      const svc = makeService(scheduler, config, runner);
 
       await svc.handleJob({ trigger: 'scheduled' });
 
+      // running row created first…
       expect(prismaMock.researchRun.create).toHaveBeenCalledWith({
         data: { trigger: 'scheduled', status: 'running' },
       });
-      // Finalized to success with zero counts and a finishedAt.
+      // …then finalized to success with the runner's REAL counts.
       expect(prismaMock.researchRun.update).toHaveBeenCalledTimes(1);
       const updateArg = prismaMock.researchRun.update.mock.calls[0][0];
       expect(updateArg.where).toEqual({ id: 'run-new' });
       expect(updateArg.data.status).toBe('success');
       expect(updateArg.data.finishedAt).toBeInstanceOf(Date);
-      expect(updateArg.data.submitted).toBe(0);
-      expect(updateArg.data.deduped).toBe(0);
-      expect(updateArg.data.rejected).toBe(0);
+      expect(updateArg.data.submitted).toBe(4);
+      expect(updateArg.data.deduped).toBe(2);
+      expect(updateArg.data.rejected).toBe(1);
       expect(updateArg.data.errors).toBe(0);
+      expect(updateArg.data.collected).toBe(7);
+      expect(updateArg.data.tokensUsed).toBe(5_000);
+      expect(updateArg.data.topicsRun).toBe(3);
+      expect(updateArg.data.stopReason).toBe('maxDraftsPerRun');
+    });
+
+    it('loads enabled topics + bounds from the DATABASE and drives the runner with them (not env/SEED_TOPICS)', async () => {
+      const scheduler = makeScheduler();
+      const config = makeConfig();
+      config.getEnabledTopics.mockResolvedValue([{ text: 'stress' }, { text: 'sleep' }]);
+      // Config singleton carries the eight bounds columns (non-default values to prove they drive the run).
+      prismaMock.researchConfig.findUnique.mockResolvedValue({
+        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
+        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
+      });
+      const runner = makeRunner();
+      const svc = makeService(scheduler, config, runner);
+
+      await svc.handleJob({ trigger: 'scheduled' });
+
+      expect(config.getEnabledTopics).toHaveBeenCalled();
+      expect(runner.execute).toHaveBeenCalledTimes(1);
+      const arg = runner.execute.mock.calls[0][0];
+      expect(arg.topics).toEqual(['stress', 'sleep']);
+      expect(arg.bounds).toEqual({
+        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
+        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
+      });
+    });
+
+    it('falls back to the schema-default bounds when the config singleton is missing (degraded read)', async () => {
+      const scheduler = makeScheduler();
+      const config = makeConfig();
+      prismaMock.researchConfig.findUnique.mockResolvedValue(null);
+      const runner = makeRunner();
+      const svc = makeService(scheduler, config, runner);
+
+      await svc.handleJob({ trigger: 'scheduled' });
+
+      const arg = runner.execute.mock.calls[0][0];
+      expect(arg.bounds).toEqual(DEFAULT_BOUNDS);
+    });
+
+    it('running-row lifecycle: the row is created running BEFORE the runner executes', async () => {
+      const calls: string[] = [];
+      const scheduler = makeScheduler();
+      const config = makeConfig();
+      const runner = makeRunner();
+      prismaMock.researchRun.create.mockImplementation(({ data }: any) => {
+        calls.push('create');
+        return Promise.resolve({ id: 'run-new', ...data });
+      });
+      runner.execute.mockImplementation(async () => { calls.push('execute'); return ZERO_RESULT; });
+      prismaMock.researchRun.update.mockImplementation(({ where, data }: any) => {
+        calls.push('finalize');
+        return Promise.resolve({ id: where.id, ...data });
+      });
+      const svc = makeService(scheduler, config, runner);
+
+      await svc.handleJob({ trigger: 'scheduled' });
+
+      expect(calls).toEqual(['create', 'execute', 'finalize']);
     });
 
     it('defaults the trigger to scheduled when the payload omits it', async () => {
-      const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService();
 
       await svc.handleJob({});
 
@@ -97,8 +200,7 @@ describe('ResearchRunService', () => {
     });
 
     it('finalizes an EXISTING row (manual path) when the payload carries a runId — does not create a second row', async () => {
-      const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService();
 
       await svc.handleJob({ runId: 'run-manual-1', trigger: 'manual' });
 
@@ -109,15 +211,54 @@ describe('ResearchRunService', () => {
       expect(updateArg.data.status).toBe('success');
     });
 
-    it('single-flight: a scheduled firing while a running row exists collapses (no second running row)', async () => {
+    it('failure path: a runner throw finalizes the row to failed with the error captured (single-flight released)', async () => {
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
-      prismaMock.researchRun.findFirst.mockResolvedValue({ id: 'run-active', status: 'running' });
+      const config = makeConfig();
+      const runner = makeRunner();
+      runner.execute.mockRejectedValue(new Error('search exploded'));
+      const svc = makeService(scheduler, config, runner);
 
       await svc.handleJob({ trigger: 'scheduled' });
 
-      // The DB guard sees an active run → no new row is created and nothing is finalized.
+      expect(prismaMock.researchRun.update).toHaveBeenCalledTimes(1);
+      const updateArg = prismaMock.researchRun.update.mock.calls[0][0];
+      expect(updateArg.where).toEqual({ id: 'run-new' });
+      expect(updateArg.data.status).toBe('failed');
+      expect(updateArg.data.finishedAt).toBeInstanceOf(Date);
+      expect(updateArg.data.error).toEqual(expect.stringContaining('search exploded'));
+      errSpy.mockRestore();
+    });
+
+    it('failure path: a runner throw on the MANUAL path finalizes the existing row to failed', async () => {
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const scheduler = makeScheduler();
+      const config = makeConfig();
+      const runner = makeRunner();
+      runner.execute.mockRejectedValue(new Error('boom'));
+      const svc = makeService(scheduler, config, runner);
+
+      await svc.handleJob({ runId: 'run-manual-x', trigger: 'manual' });
+
       expect(prismaMock.researchRun.create).not.toHaveBeenCalled();
+      const updateArg = prismaMock.researchRun.update.mock.calls[0][0];
+      expect(updateArg.where).toEqual({ id: 'run-manual-x' });
+      expect(updateArg.data.status).toBe('failed');
+      errSpy.mockRestore();
+    });
+
+    it('single-flight: a scheduled firing while a running row exists collapses (no run, no second row)', async () => {
+      const scheduler = makeScheduler();
+      const config = makeConfig();
+      const runner = makeRunner();
+      prismaMock.researchRun.findFirst.mockResolvedValue({ id: 'run-active', status: 'running' });
+      const svc = makeService(scheduler, config, runner);
+
+      await svc.handleJob({ trigger: 'scheduled' });
+
+      // The DB guard sees an active run → no new row, no run executed, nothing finalized.
+      expect(prismaMock.researchRun.create).not.toHaveBeenCalled();
+      expect(runner.execute).not.toHaveBeenCalled();
       expect(prismaMock.researchRun.update).not.toHaveBeenCalled();
     });
   });
@@ -125,7 +266,7 @@ describe('ResearchRunService', () => {
   describe('triggerManualRun', () => {
     it('creates a running row with trigger=manual, enqueues with its runId, and returns the id', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.create.mockResolvedValue({ id: 'run-42', trigger: 'manual', status: 'running' });
 
       const result = await svc.triggerManualRun();
@@ -142,7 +283,7 @@ describe('ResearchRunService', () => {
 
     it('single-flight: collapses to the existing running run id when one is already active (no second row, no enqueue)', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.findFirst.mockResolvedValue({ id: 'run-active', status: 'running' });
 
       const result = await svc.triggerManualRun();
@@ -155,7 +296,7 @@ describe('ResearchRunService', () => {
     it('fails gracefully when degraded (no DB row created) — returns a clear no-op result instead of throwing', async () => {
       const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.create.mockRejectedValue(new Error('db down'));
 
       await expect(svc.triggerManualRun()).resolves.toEqual({ runId: null });
@@ -166,7 +307,7 @@ describe('ResearchRunService', () => {
     it('finalizes the created row to failed when enqueue throws AFTER row creation — releases single-flight (Fix 1)', async () => {
       const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.create.mockResolvedValue({
         id: 'run-orphan',
         trigger: 'manual',
@@ -192,7 +333,7 @@ describe('ResearchRunService', () => {
     it('does NOT attempt a failed-finalize when create itself throws (degraded DB, no row to release)', async () => {
       const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.create.mockRejectedValue(new Error('db down'));
 
       await expect(svc.triggerManualRun()).resolves.toEqual({ runId: null });
@@ -205,7 +346,7 @@ describe('ResearchRunService', () => {
   describe('single-flight staleness (Fix 2)', () => {
     it('a running row older than runTimeoutMs does NOT block a new manual run', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       const stale = {
         id: 'run-stale',
         status: 'running',
@@ -228,7 +369,7 @@ describe('ResearchRunService', () => {
 
     it('a running row within the timeout window still blocks (collapses) as before', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.findFirst.mockResolvedValue({
         id: 'run-active',
         status: 'running',
@@ -244,7 +385,7 @@ describe('ResearchRunService', () => {
 
     it('a stale running row does NOT block a scheduled firing (handleJob proceeds to create a new row)', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.findFirst.mockResolvedValue({
         id: 'run-stale',
         status: 'running',
@@ -261,7 +402,7 @@ describe('ResearchRunService', () => {
     it('falls back to the default threshold (does not throw) when reading runTimeoutMs fails', async () => {
       const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchConfig.findUnique.mockRejectedValue(new Error('config read failed'));
       // A row old enough to be stale under the default 600000ms fallback.
       prismaMock.researchRun.findFirst.mockResolvedValue({
@@ -285,7 +426,7 @@ describe('ResearchRunService', () => {
   describe('listRuns', () => {
     it('returns recent rows ordered by startedAt desc with the limit applied', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       const rows = [{ id: 'r2' }, { id: 'r1' }];
       prismaMock.researchRun.findMany.mockResolvedValue(rows);
 
@@ -300,7 +441,7 @@ describe('ResearchRunService', () => {
 
     it('defaults to 20 and clamps an oversized limit to a sane max', async () => {
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.findMany.mockResolvedValue([]);
 
       await svc.listRuns();
@@ -316,7 +457,7 @@ describe('ResearchRunService', () => {
     it('fails gracefully when degraded — returns an empty list instead of throwing', async () => {
       const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
       const scheduler = makeScheduler();
-      const svc = new ResearchRunService(scheduler);
+      const svc = makeService(scheduler);
       prismaMock.researchRun.findMany.mockRejectedValue(new Error('db down'));
 
       await expect(svc.listRuns()).resolves.toEqual([]);

@@ -1,6 +1,9 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { SchedulerService } from '../scheduler/scheduler.service';
+import { ResearchConfigService } from '../config-service/research-config.service';
+import { ResearchRunnerService } from './research-runner.service';
+import { Bounds } from '../types';
 
 /** The pg-boss queue the worker schedules (slice 04) AND consumes (this slice). */
 export const RESEARCH_RUN_QUEUE = 'research-run';
@@ -30,12 +33,34 @@ const CONFIG_SINGLETON_ID = 'singleton';
 const DEFAULT_RUN_TIMEOUT_MS = 600_000;
 
 /**
+ * Schema-default bounds (mirrors `ResearchConfig`'s `@default`s). Used when the config singleton
+ * can't be read — the run must still proceed with sane bounds rather than crash, since the row read
+ * is the worker's source of truth but the run is non-critical and degrades, never throws.
+ */
+const DEFAULT_BOUNDS: Bounds = {
+  maxTopicsPerRun: 5,
+  maxPapersPerTopic: 8,
+  maxDiscoverySteps: 2,
+  maxDraftsPerTopic: 3,
+  maxDraftsPerRun: 10,
+  agentTimeoutMs: 90_000,
+  runTimeoutMs: 600_000,
+  tokenBudget: 200_000,
+};
+
+/** The eight bounds columns on the ResearchConfig singleton. */
+type ConfigBounds = Partial<Record<keyof Bounds, number>>;
+
+/**
  * Owns the `research-run` queue's consumer and the ResearchRun lifecycle (issue 05, ADR-0034).
  *
- * THIS SLICE the handler body is a HEARTBEAT, not a real run: it inserts a `running` ResearchRun row
- * carrying the firing trigger, then immediately finalizes it to `success` with ZERO counts. Slice 06
- * replaces the body with the real run loop. The lifecycle + single-flight + history surface built
- * here are what slice 06 hangs the real work on.
+ * The handler runs the REAL research loop (slice 06): it inserts a `running` ResearchRun row carrying
+ * the firing trigger, loads the enabled topics + the eight bounds from the DATABASE (the source of
+ * truth — not env, not SEED_TOPICS), delegates the search→gate→extract→dedup→submit work to
+ * {@link ResearchRunnerService} (which wraps the pure `runResearch` core and POSTs every candidate
+ * through the bot's trust gate), then finalizes the row with the real summary counts + stop reason.
+ * A failure anywhere finalizes the row to `failed` with the error captured, which also releases
+ * single-flight.
  *
  * Single-flight uses BOTH guards the issue calls for:
  *   (a) the pg-boss singleton queue — `work(..., { policy: 'singleton' })` keeps one job active.
@@ -48,11 +73,15 @@ const DEFAULT_RUN_TIMEOUT_MS = 600_000;
  */
 @Injectable()
 export class ResearchRunService implements OnModuleInit {
-  constructor(private readonly scheduler: SchedulerService) {}
+  constructor(
+    private readonly scheduler: SchedulerService,
+    private readonly config: ResearchConfigService,
+    private readonly runner: ResearchRunnerService,
+  ) {}
 
   /**
    * Register the singleton consumer on boot. The pg-boss singleton policy is the primary
-   * single-flight guard; the bound handler is the heartbeat for this slice. No-op when degraded
+   * single-flight guard; the bound handler runs the real research loop. No-op when degraded
    * (SchedulerService.work is a no-op without a pg-boss client).
    */
   async onModuleInit(): Promise<void> {
@@ -61,7 +90,7 @@ export class ResearchRunService implements OnModuleInit {
     });
   }
 
-  /** pg-boss delivers a batch of jobs; run the heartbeat for each. */
+  /** pg-boss delivers a batch of jobs; run the real research loop for each. */
   private async onJobs(jobs: unknown[]): Promise<void> {
     for (const job of jobs) {
       const data = (job as { data?: RunJobPayload })?.data ?? (job as RunJobPayload) ?? {};
@@ -70,14 +99,17 @@ export class ResearchRunService implements OnModuleInit {
   }
 
   /**
-   * The heartbeat handler. Resolves the firing trigger (default 'scheduled'); enforces the DB
-   * single-flight guard; creates-or-reuses the `running` row; then finalizes it to `success` with
-   * zero counts.
+   * The real-run handler. Resolves the firing trigger (default 'scheduled'); enforces the DB
+   * single-flight guard; creates-or-reuses the `running` row; runs the research loop; then finalizes
+   * the row with the real summary.
    *
    * - When the payload carries a `runId` (manual path), the `running` row already exists — finalize
    *   it rather than creating a second one.
    * - Otherwise (scheduled firing) create the row here, unless a `running` row already exists, in
    *   which case collapse (do nothing) — the DB secondary guard.
+   *
+   * On ANY failure during the run the row is finalized to `failed` with a short error message, which
+   * also releases single-flight. Research is non-critical (ADR-0034) — this never crashes the worker.
    */
   async handleJob(payload: RunJobPayload): Promise<void> {
     const trigger: RunTrigger = payload.trigger ?? 'scheduled';
@@ -94,21 +126,82 @@ export class ResearchRunService implements OnModuleInit {
       runId = (created as { id: string }).id;
     }
 
-    // Heartbeat: finalize immediately to success with zero counts. Slice 06 fills these in.
-    await prisma.researchRun.update({
-      where: { id: runId },
-      data: {
-        status: 'success',
-        finishedAt: new Date(),
-        submitted: 0,
-        deduped: 0,
-        rejected: 0,
-        errors: 0,
-        collected: 0,
-        tokensUsed: 0,
-        topicsRun: 0,
-      },
-    });
+    try {
+      // The DB is the source of truth: enabled topics + the eight bounds drive the run (NOT env,
+      // NOT SEED_TOPICS, NOT loadBounds()).
+      const [topics, bounds] = await Promise.all([this.loadTopics(), this.loadBounds()]);
+
+      const result = await this.runner.execute({ topics, bounds });
+
+      await prisma.researchRun.update({
+        where: { id: runId },
+        data: {
+          status: 'success',
+          finishedAt: new Date(),
+          submitted: result.submitted,
+          deduped: result.deduped,
+          rejected: result.rejected,
+          errors: result.errors,
+          collected: result.collected,
+          tokensUsed: result.tokensUsed,
+          topicsRun: result.topicsRun,
+          stopReason: result.stopReason,
+        },
+      });
+    } catch (err) {
+      // Fail-closed for the run, fail-open for the worker: finalize to `failed` (releasing
+      // single-flight) and swallow — a research run blowing up must never take the process down.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[research] run failed; finalizing row to failed', err);
+      await prisma.researchRun
+        .update({
+          where: { id: runId },
+          data: { status: 'failed', finishedAt: new Date(), error: message.slice(0, 500) },
+        })
+        .catch((finalizeErr) =>
+          console.error('[research] failed to finalize failed run row', finalizeErr),
+        );
+    }
+  }
+
+  /** Enabled topic texts from the DB (the source of truth). Empty list ⇒ the run does nothing. */
+  private async loadTopics(): Promise<string[]> {
+    const rows = (await this.config.getEnabledTopics()) as Array<{ text?: string }>;
+    return rows.map((r) => r.text).filter((t): t is string => typeof t === 'string' && t.length > 0);
+  }
+
+  /**
+   * The eight run bounds from the ResearchConfig singleton, mapped into the {@link Bounds} shape the
+   * core expects. Falls back to the schema defaults when the singleton can't be read — the run must
+   * degrade, never throw.
+   */
+  private async loadBounds(): Promise<Bounds> {
+    let config: ConfigBounds | null = null;
+    try {
+      config = (await prisma.researchConfig.findUnique({
+        where: { id: CONFIG_SINGLETON_ID },
+      })) as ConfigBounds | null;
+    } catch (err) {
+      console.error('[research] reading bounds failed; using schema defaults', err);
+    }
+    if (!config) return DEFAULT_BOUNDS;
+
+    const pick = (key: keyof Bounds): number => {
+      const value = config?.[key];
+      return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? value
+        : DEFAULT_BOUNDS[key];
+    };
+    return {
+      maxTopicsPerRun: pick('maxTopicsPerRun'),
+      maxPapersPerTopic: pick('maxPapersPerTopic'),
+      maxDiscoverySteps: pick('maxDiscoverySteps'),
+      maxDraftsPerTopic: pick('maxDraftsPerTopic'),
+      maxDraftsPerRun: pick('maxDraftsPerRun'),
+      agentTimeoutMs: pick('agentTimeoutMs'),
+      runTimeoutMs: pick('runTimeoutMs'),
+      tokenBudget: pick('tokenBudget'),
+    };
   }
 
   /**

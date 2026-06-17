@@ -5,6 +5,7 @@ import { AdminGuard } from './admin/admin.guard';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { ResearchScheduleService } from './schedule-service/research-schedule.service';
 import { ResearchRunService } from './run-service/research-run.service';
+import { ResearchRunnerService } from './run-service/research-runner.service';
 
 /**
  * The research worker's feature module (ADR-0034). Owns config persistence, the admin HTTP surface,
@@ -20,7 +21,15 @@ import { ResearchRunService } from './run-service/research-run.service';
 @Module({
   imports: [SchedulerModule],
   controllers: [ResearchAdminController],
-  providers: [ResearchConfigService, AdminGuard, ResearchRunService, ResearchScheduleService],
+  providers: [
+    ResearchConfigService,
+    AdminGuard,
+    // The runner takes an optional injectable-deps bag (a plain interface, no Nest token), so it is
+    // constructed via a factory with production defaults rather than Nest's reflective resolution.
+    { provide: ResearchRunnerService, useFactory: () => new ResearchRunnerService() },
+    ResearchRunService,
+    ResearchScheduleService,
+  ],
   exports: [ResearchConfigService, ResearchScheduleService, ResearchRunService],
 })
 export class ResearchModule {}
