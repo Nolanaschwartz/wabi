@@ -8,10 +8,14 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
 import { AdminGuard } from './admin.guard';
-import { ResearchConfigService } from '../config-service/research-config.service';
+import {
+  ResearchBounds,
+  ResearchConfigService,
+} from '../config-service/research-config.service';
 
 /**
  * Admin HTTP surface for the research worker (ADR-0034). All routes are behind the timing-safe
@@ -26,6 +30,16 @@ export class ResearchAdminController {
   @Get('config')
   async getConfig() {
     return this.config.getConfig();
+  }
+
+  /**
+   * Tune the eight run bounds. The service range-validates server-side; an out-of-range value
+   * (e.g. a zero token budget) surfaces a BadRequestException → 400. Returns the updated config.
+   */
+  @Put('bounds')
+  @HttpCode(HttpStatus.OK)
+  async updateBounds(@Body() body: ResearchBounds) {
+    return this.config.updateBounds(body);
   }
 
   /** Add a seed topic. Duplicate `text` → 409 (service throws ConflictException). */

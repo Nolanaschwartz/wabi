@@ -5,6 +5,7 @@ const prismaMock = {
   researchConfig: {
     upsert: jest.fn(),
     findUnique: jest.fn(),
+    update: jest.fn(),
   },
   researchTopic: {
     count: jest.fn(),
@@ -160,6 +161,92 @@ describe('ResearchConfigService', () => {
       prismaMock.researchTopic.update.mockRejectedValue(p2002);
 
       await expect(service.updateTopic('t1', { text: 'dup' })).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('updateBounds', () => {
+    const validBounds = {
+      maxTopicsPerRun: 5,
+      maxPapersPerTopic: 8,
+      maxDiscoverySteps: 2,
+      maxDraftsPerTopic: 3,
+      maxDraftsPerRun: 10,
+      agentTimeoutMs: 90000,
+      runTimeoutMs: 600000,
+      tokenBudget: 200000,
+    };
+
+    it('persists a fully-valid bounds payload to the singleton', async () => {
+      const updated = { id: 'singleton', ...validBounds };
+      prismaMock.researchConfig.update.mockResolvedValue(updated);
+
+      const result = await service.updateBounds(validBounds);
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: validBounds,
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it('rejects a zero tokenBudget (operator cannot silently save a budget that produces nothing)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(service.updateBounds({ ...validBounds, tokenBudget: 0 })).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a zero count field', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, maxTopicsPerRun: 0 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a negative count field', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, maxDraftsPerRun: -1 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects an out-of-band timeout (below the floor)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, agentTimeoutMs: 100 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects an out-of-band timeout (above the ceiling)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, runTimeoutMs: 999_999_999 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-integer field', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, maxPapersPerTopic: 2.5 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
+    it('names the offending field in the rejection message', async () => {
+      await expect(service.updateBounds({ ...validBounds, tokenBudget: 0 })).rejects.toThrow(
+        /tokenBudget/,
+      );
     });
   });
 

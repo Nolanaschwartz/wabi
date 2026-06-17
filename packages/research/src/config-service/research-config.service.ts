@@ -1,6 +1,37 @@
-import { ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { SEED_TOPICS } from '../seed-topics';
+
+/** The eight tunable research-run bounds (columns on the ResearchConfig singleton). */
+export interface ResearchBounds {
+  maxTopicsPerRun: number;
+  maxPapersPerTopic: number;
+  maxDiscoverySteps: number;
+  maxDraftsPerTopic: number;
+  maxDraftsPerRun: number;
+  agentTimeoutMs: number;
+  runTimeoutMs: number;
+  tokenBudget: number;
+}
+
+/**
+ * Inclusive valid ranges for each bound. All must be positive integers. Chosen so the schema
+ * defaults (5/8/2/3/10, 90_000ms, 600_000ms, 200_000 tokens) sit comfortably inside, while a zero
+ * budget or a degenerate timeout is rejected before it can silently produce nothing (issue 03).
+ * - counts: 1..100 (small positives — a run searching >100 topics/papers per step is a config error)
+ * - *_Ms timeouts: 1_000..3_600_000 (1s floor avoids instant cut-offs; 1h ceiling caps a runaway run)
+ * - tokenBudget: 1_000..10_000_000 (1k floor guarantees a run can do real work; 10M caps spend)
+ */
+const BOUND_RANGES: Record<keyof ResearchBounds, { min: number; max: number }> = {
+  maxTopicsPerRun: { min: 1, max: 100 },
+  maxPapersPerTopic: { min: 1, max: 100 },
+  maxDiscoverySteps: { min: 1, max: 100 },
+  maxDraftsPerTopic: { min: 1, max: 100 },
+  maxDraftsPerRun: { min: 1, max: 100 },
+  agentTimeoutMs: { min: 1_000, max: 3_600_000 },
+  runTimeoutMs: { min: 1_000, max: 3_600_000 },
+  tokenBudget: { min: 1_000, max: 10_000_000 },
+};
 
 /** True for the Prisma unique-constraint violation we translate into a 409. */
 function isUniqueViolation(err: unknown): boolean {
@@ -97,6 +128,33 @@ export class ResearchConfigService implements OnModuleInit {
       }
       throw err;
     }
+  }
+
+  /**
+   * Tunes the eight run bounds on the singleton. Server-side range validation is the gate: every
+   * field must be a positive integer inside its BOUND_RANGES band, so an operator can never silently
+   * save a zero budget (or a degenerate timeout/count) that produces nothing (issue 03, ADR-0034).
+   * Validates ALL fields and reports every offender; rejects with BadRequestException before any write.
+   */
+  async updateBounds(bounds: ResearchBounds): Promise<unknown> {
+    const offenders: string[] = [];
+    const data: Partial<ResearchBounds> = {};
+
+    for (const key of Object.keys(BOUND_RANGES) as (keyof ResearchBounds)[]) {
+      const { min, max } = BOUND_RANGES[key];
+      const value = bounds[key];
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+        offenders.push(`${key} must be an integer in [${min}, ${max}] (got ${String(value)})`);
+      } else {
+        data[key] = value;
+      }
+    }
+
+    if (offenders.length > 0) {
+      throw new BadRequestException({ status: 'invalid-bounds', message: offenders.join('; ') });
+    }
+
+    return prisma.researchConfig.update({ where: { id: SINGLETON_ID }, data });
   }
 
   /** Removes a topic outright. */

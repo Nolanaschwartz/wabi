@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ResearchAdminController } from '../research-admin.controller';
 import { ResearchConfigService } from '../../config-service/research-config.service';
 
@@ -37,6 +37,36 @@ describe('ResearchAdminController', () => {
 
     await expect(controller.updateTopic('t1', { enabled: false })).resolves.toEqual(updated);
     expect(service.updateTopic).toHaveBeenCalledWith('t1', { enabled: false });
+  });
+
+  it('PUT bounds delegates to updateBounds and returns the updated config', async () => {
+    const bounds = {
+      maxTopicsPerRun: 5,
+      maxPapersPerTopic: 8,
+      maxDiscoverySteps: 2,
+      maxDraftsPerTopic: 3,
+      maxDraftsPerRun: 10,
+      agentTimeoutMs: 90000,
+      runTimeoutMs: 600000,
+      tokenBudget: 200000,
+    };
+    const updated = { id: 'singleton', ...bounds };
+    const service = { updateBounds: jest.fn().mockResolvedValue(updated) } as unknown as ResearchConfigService;
+    const controller = new ResearchAdminController(service);
+
+    await expect(controller.updateBounds(bounds)).resolves.toEqual(updated);
+    expect(service.updateBounds).toHaveBeenCalledWith(bounds);
+  });
+
+  it('PUT bounds surfaces a BadRequestException for an invalid payload (→ 400)', async () => {
+    const service = {
+      updateBounds: jest.fn().mockRejectedValue(new BadRequestException('tokenBudget out of range')),
+    } as unknown as ResearchConfigService;
+    const controller = new ResearchAdminController(service);
+
+    await expect(controller.updateBounds({ tokenBudget: 0 } as any)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 
   it('DELETE topics/:id delegates to deleteTopic', async () => {
