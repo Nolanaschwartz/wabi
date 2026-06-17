@@ -14,6 +14,8 @@ import { ResearchAgent } from '../src/agent/research-agent';
 import { relevanceGate } from '../src/agent/relevance-gate';
 import { extract } from '../src/agent/extract';
 import { isDuplicateInRun } from '../src/agent/dedup';
+import { Source } from '../src/sources/source';
+import { SourceKind } from '../src/types';
 import { PubMedTool } from '../src/sources/pubmed';
 import { MedrxivTool } from '../src/sources/medrxiv';
 import { loadBounds } from '../src/config';
@@ -74,8 +76,10 @@ async function main(): Promise<void> {
 
   // Show every step by default for the harness; override with RESEARCH_LOG_LEVEL.
   if (process.env.RESEARCH_LOG_LEVEL === undefined) process.env.RESEARCH_LOG_LEVEL = 'debug';
+  // pubmed + medrxiv only (same source set this harness has always exercised); ADR-0036 Source map.
+  const sources = new Map<SourceKind, Source>([['pubmed', pubmed], ['medrxiv', medrxiv]]);
   const agent = new ResearchAgent(
-    { pubmed, medrxiv, seen: async () => false, gate: relevanceGate, extract, dedup: isDuplicateInRun },
+    { sources, seen: async () => false, gate: relevanceGate, extract, dedup: isDuplicateInRun },
     bounds,
     defaultLogger(),
   );

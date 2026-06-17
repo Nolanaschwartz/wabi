@@ -5,6 +5,43 @@ function num(name: string, fallback: number): number {
   return v === undefined ? fallback : Number(v);
 }
 
+export type SourceKindName = 'pubmed' | 'medrxiv' | 'psyarxiv';
+
+/** Tunable knobs shared by the windowed preprint sources (medRxiv, PsyArXiv). */
+export interface SourceConfig {
+  windowDays: number;      // recency window scanned
+  maxRecords: number;      // per-window scan cap
+  minTermFraction: number; // fraction of query content-terms a record must match (>2-term queries)
+  maxPdfBytes: number;     // full-text PDF download cap
+  maxTextChars: number;    // extracted full-text char cap
+}
+
+/** One source knob with a 3-tier fallback: per-source `RESEARCH_<KIND>_<KEY>` overrides shared
+ * `RESEARCH_<KEY>` overrides the built-in default. Empty/invalid values fall through to the next
+ * tier (so `FOO=` doesn't silently mean 0). Resolved lazily per call — never frozen at import. */
+function sourceNum(kind: SourceKindName, key: string, fallback: number): number {
+  const raw = process.env[`RESEARCH_${kind.toUpperCase()}_${key}`] ?? process.env[`RESEARCH_${key}`];
+  const n = Number(raw);
+  return raw !== undefined && raw !== '' && Number.isFinite(n) ? n : fallback;
+}
+
+/** Windowed preprint-source tuning, resolved lazily per run. */
+export function loadSourceConfig(kind: 'medrxiv' | 'psyarxiv'): SourceConfig {
+  return {
+    windowDays: sourceNum(kind, 'WINDOW_DAYS', 60),
+    maxRecords: sourceNum(kind, 'MAX_RECORDS', 1500),
+    minTermFraction: sourceNum(kind, 'MIN_TERM_FRACTION', 0.5),
+    maxPdfBytes: sourceNum(kind, 'MAX_PDF_BYTES', 20_000_000),
+    maxTextChars: sourceNum(kind, 'MAX_TEXT_CHARS', 50_000),
+  };
+}
+
+/** Full-text char cap for any source (PubMed has no window/PDF knobs, just this). Shares the same
+ * `RESEARCH_MAX_TEXT_CHARS` fallback as the preprint sources. */
+export function sourceMaxTextChars(kind: SourceKindName): number {
+  return sourceNum(kind, 'MAX_TEXT_CHARS', 50_000);
+}
+
 /** Conservative, configurable bounds (spec §Bounds & budget). Resolved lazily per run. */
 export function loadBounds(): Bounds {
   return {

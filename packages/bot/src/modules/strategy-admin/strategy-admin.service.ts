@@ -118,6 +118,13 @@ export class StrategyAdminService {
   async ingestCandidate(
     c: IngestCandidate,
   ): Promise<{ status: 'submitted' | 'deduped' | 'rejected'; draftId?: string }> {
+    // Bot-side idempotency on the authoritative sourceId key (ADR-0033). The worker's seen() check is
+    // an optimization, not a guarantee — if it ever misses (e.g. a key-format mismatch), this hard
+    // gate still prevents a duplicate draft. No re-mark: the ledger already holds the terminal status.
+    if (await this.hasSeen(c.sourceId)) {
+      return { status: 'deduped' };
+    }
+
     if (await this.isDuplicate(c.title, c.technique)) {
       await this.markProcessed(c.sourceId, c.sourceKind, 'deduped');
       return { status: 'deduped' };

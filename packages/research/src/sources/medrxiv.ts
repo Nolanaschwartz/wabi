@@ -1,6 +1,10 @@
 import { RateLimiter } from '../util/rate-limiter';
-import { Paper } from '../types';
+import { Paper, SourceKind } from '../types';
+import { Source } from './source';
 import { Logger, noopLogger } from '../util/logger';
+import { contentTerms, minMatch, scoreRecord } from './term-match';
+import { fetchAndParsePdf } from './pdf';
+import { loadSourceConfig } from '../config';
 
 const BASE = 'https://api.medrxiv.org/details/medrxiv';
 const PAGE = 100; // medRxiv details endpoint returns 100 records per cursor page.
@@ -11,40 +15,42 @@ export interface MedrxivDeps {
   windowDays?: number;       // how far back to scan (default 60)
   maxRecords?: number;       // cap on records pulled per window (default 1500, env-tunable)
   minTermFraction?: number;  // fraction of query content-terms a record must contain (default 0.5)
+  maxPdfBytes?: number;      // full-text PDF size cap (default 20MB, env-tunable)
+  maxTextChars?: number;     // extracted full-text char cap (default 50k, env-tunable)
+  parsePdf?: (buf: Uint8Array) => Promise<string>; // injectable for tests; default = unpdf
   now?: () => Date;          // injectable clock for tests
   log?: Logger;
 }
 
-// Dropped from queries before matching: too generic to carry topical meaning. Short tokens (<3 chars)
-// are dropped too. What remains are the content terms a medRxiv record is scored against.
-const STOPWORDS = new Set([
-  'and', 'for', 'the', 'with', 'from', 'into', 'that', 'this', 'your', 'their', 'after', 'during',
-  'using', 'based', 'study', 'among', 'between', 'effect', 'effects',
-]);
+interface MedrxivRecord { doi: string; title: string; abstract: string; date: string; version?: string }
 
-interface MedrxivRecord { doi: string; title: string; abstract: string; date: string }
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export class MedrxivTool {
+export class MedrxivTool implements Source {
+  readonly kind: SourceKind = 'medrxiv';
   private readonly fetchFn: typeof fetch;
   private readonly limiter: RateLimiter;
   private readonly windowDays: number;
   private readonly maxRecords: number;
   private readonly minTermFraction: number;
+  private readonly maxPdfBytes: number;
+  private readonly maxTextChars: number;
+  private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
   private readonly now: () => Date;
   private readonly log: Logger;
   // Cache the fetched window so every topic in a run filters the SAME records without re-paginating.
   private cache: { key: string; records: MedrxivRecord[] } | null = null;
 
   constructor(deps: MedrxivDeps = {}) {
+    // Env-derived defaults come from config.ts (shared RESEARCH_* with RESEARCH_MEDRXIV_* overrides),
+    // resolved lazily here (constructed per-run after ConfigModule loads), never frozen at import.
+    const cfg = loadSourceConfig('medrxiv');
     this.fetchFn = deps.fetchFn ?? fetch;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 1000);
-    this.windowDays = deps.windowDays ?? 60;
-    this.maxRecords = deps.maxRecords ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_RECORDS) || 1500);
-    this.minTermFraction = deps.minTermFraction ?? (Number(process.env.RESEARCH_MEDRXIV_MIN_TERM_FRACTION) || 0.5);
+    this.windowDays = deps.windowDays ?? cfg.windowDays;
+    this.maxRecords = deps.maxRecords ?? cfg.maxRecords;
+    this.minTermFraction = deps.minTermFraction ?? cfg.minTermFraction;
+    this.maxPdfBytes = deps.maxPdfBytes ?? cfg.maxPdfBytes;
+    this.maxTextChars = deps.maxTextChars ?? cfg.maxTextChars;
+    this.parsePdf = deps.parsePdf;
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? noopLogger;
   }
@@ -85,7 +91,12 @@ export class MedrxivTool {
 
       let added = 0;
       for (const r of recs) {
-        if (r?.doi && !byDoi.has(r.doi)) { byDoi.set(r.doi, r); added++; }
+        if (!r?.doi) continue;
+        const existing = byDoi.get(r.doi);
+        // medRxiv emits one row per version (ascending); keep the HIGHEST so search() presents — and
+        // fullText() fetches — the current version, not a superseded one. New dois count as progress.
+        if (!existing) { byDoi.set(r.doi, r); added++; }
+        else if (Number(r.version ?? 0) > Number(existing.version ?? 0)) byDoi.set(r.doi, r);
       }
 
       if (recs.length < PAGE) break;          // last (or only) page
@@ -105,14 +116,6 @@ export class MedrxivTool {
     return records;
   }
 
-  /** Content terms of a query: lowercase tokens of length ≥3 that aren't stopwords. Falls back to
-   * the raw tokens if everything was filtered out (e.g. a query of only short/stop words). */
-  private contentTerms(query: string): string[] {
-    const raw = query.toLowerCase().split(/\W+/).filter(Boolean);
-    const terms = raw.filter((t) => t.length >= 3 && !STOPWORDS.has(t));
-    return terms.length ? terms : raw;
-  }
-
   /** Keep preprints that contain ENOUGH of the query's content terms (not all of them), ranked by how
    * many match. Strict all-terms-AND made multi-word gaming topics match ~nothing on a clinical
    * corpus; this trades a little precision for recall, and the downstream relevance gate + human
@@ -122,21 +125,14 @@ export class MedrxivTool {
     const from = new Date(to.getTime() - this.windowDays * 86_400_000);
     const records = await this.windowRecords(this.fmt(from), this.fmt(to));
 
-    const terms = this.contentTerms(query);
+    const terms = contentTerms(query);
     // ≤2 terms: require all (a 1–2 word query is already specific). More: require a fraction, min 2.
-    const minMatch = terms.length <= 2 ? terms.length : Math.max(2, Math.ceil(terms.length * this.minTermFraction));
+    const need = minMatch(terms.length, this.minTermFraction);
     // Whole-word match (not substring): "term" must not count inside "determine", and gibberish must
-    // not accidentally match. \W tokenization above already split hyphens etc.
-    const patterns = terms.map((t) => new RegExp(`\\b${escapeRegExp(t)}\\b`));
-
+    // not accidentally match. \W tokenization in contentTerms already split hyphens etc.
     const scored = records
-      .map((r) => {
-        const hay = `${r.title} ${r.abstract}`.toLowerCase();
-        let score = 0;
-        for (const re of patterns) if (re.test(hay)) score++;
-        return { r, score };
-      })
-      .filter((x) => x.score >= minMatch)
+      .map((r) => ({ r, score: scoreRecord(`${r.title} ${r.abstract}`, terms) }))
+      .filter((x) => x.score >= need)
       .sort((a, b) => b.score - a.score);
 
     return scored
@@ -152,8 +148,25 @@ export class MedrxivTool {
       }));
   }
 
-  /** v1: medRxiv full-text JATS fetch is deferred; the agent reads the abstract from search(). */
-  async fullText(_sourceId: string): Promise<string | null> {
-    return null;
+  /** Preprint list endpoints already return complete papers, so hydrate is the identity (ADR-0036). */
+  async hydrate(paper: Paper): Promise<Paper> {
+    return paper;
+  }
+
+  /** Full text from medRxiv's open-access PDF: `<doi>v<version>.full.pdf`. The version comes from the
+   * window cache primed by search(); when the doi wasn't in the window (or carried no version) we fall
+   * back to `v1`. Fail-safe: any HTTP/oversize/parse failure → null, and the agent reads the abstract. */
+  async fullText(paper: Paper): Promise<string | null> {
+    const doi = paper.sourceId.replace(/^doi:/, '');
+    const version = this.cache?.records.find((r) => r.doi === doi)?.version ?? '1';
+    const url = `https://www.medrxiv.org/content/${doi}v${version}.full.pdf`;
+    return fetchAndParsePdf(url, {
+      fetchFn: this.fetchFn,
+      schedule: (fn) => this.limiter.schedule(fn),
+      maxPdfBytes: this.maxPdfBytes,
+      maxTextChars: this.maxTextChars,
+      parsePdf: this.parsePdf,
+      log: this.log,
+    });
   }
 }

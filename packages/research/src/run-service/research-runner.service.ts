@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { Bounds, Candidate } from '../types';
+import { Bounds, Candidate, SourceKind } from '../types';
 import { runResearch as defaultRunResearch, RunDeps, RunResult } from '../run';
 import { BotClient, SubmitOutcome } from '../bot-client';
+import { Source } from '../sources/source';
 import { PubMedTool } from '../sources/pubmed';
 import { MedrxivTool } from '../sources/medrxiv';
+import { PsyArxivTool } from '../sources/psyarxiv';
 import { relevanceGate } from '../agent/relevance-gate';
 import { extract } from '../agent/extract';
 import { isDuplicateInRun } from '../agent/dedup';
@@ -110,8 +112,13 @@ export class ResearchRunnerService {
  */
 function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   const client = new BotClient({ baseUrl: strategyApiUrl(), secret: process.env.ADMIN_API_SECRET || '' });
-  const pubmed = new PubMedTool({ apiKey: process.env.NCBI_API_KEY });
-  const medrxiv = new MedrxivTool({ log });
+  // Insertion order is the agent's search/queue order (ADR-0036). OSF_TOKEN/NCBI_API_KEY read lazily
+  // here (per-run, after ConfigModule loads), never frozen at import.
+  const sources = new Map<SourceKind, Source>([
+    ['pubmed', new PubMedTool({ apiKey: process.env.NCBI_API_KEY })],
+    ['medrxiv', new MedrxivTool({ log })],
+    ['psyarxiv', new PsyArxivTool({ token: process.env.OSF_TOKEN, log })],
+  ]);
 
   let tokensUsed = 0;
   let topicsRun = 0;
@@ -120,7 +127,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     submit: (c) => client.submit(c),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { pubmed, medrxiv, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
+        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
         bounds,
         log,
       );
