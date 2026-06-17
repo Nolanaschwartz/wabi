@@ -87,6 +87,37 @@ describe('Billing routes', () => {
       );
     });
 
+    it('recreates the customer and retries when the stored customer was deleted', async () => {
+      validateRequest.mockResolvedValue({ user: { id: 'u1' }, session: {} as any });
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u1',
+        discordId: '123',
+        stripeCustomerId: 'cus_deleted',
+      });
+
+      const missing = Object.assign(new Error("No such customer: 'cus_deleted'"), {
+        code: 'resource_missing',
+        param: 'customer',
+      });
+      mockStripe.checkout.sessions.create
+        .mockRejectedValueOnce(missing)
+        .mockResolvedValueOnce({ url: 'https://checkout.stripe.com/retry' });
+      mockStripe.customers.create.mockResolvedValue({ id: 'cus_fresh' });
+
+      const res = await checkoutPost({} as any);
+      const data = await res.json();
+
+      expect(data.url).toBe('https://checkout.stripe.com/retry');
+      expect(mockStripe.customers.create).toHaveBeenCalled();
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { stripeCustomerId: 'cus_fresh' } }),
+      );
+      expect(mockStripe.checkout.sessions.create).toHaveBeenCalledTimes(2);
+      expect(mockStripe.checkout.sessions.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({ customer: 'cus_fresh' }),
+      );
+    });
+
     it('returns 502 (not an opaque throw) when Stripe fails', async () => {
       validateRequest.mockResolvedValue({ user: { id: 'u1' }, session: {} as any });
       prisma.user.findUnique.mockResolvedValue({
