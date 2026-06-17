@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import MoodChart from './MoodChart';
+import AccountDataPanel from './AccountDataPanel';
 import type { MoodDayPoint } from '@/lib/mood-series';
 
 interface BillingState {
@@ -87,7 +88,7 @@ function BillingPanel({ billing }: { billing: BillingState }) {
 }
 
 export default function DashboardView({ user, moods, moodSeries, playtimes, streak, billing }: DashboardViewProps) {
-  const [activeTab, setActiveTab] = useState<'mood' | 'playtime' | 'streak'>('mood');
+  const [activeTab, setActiveTab] = useState<'mood' | 'playtime' | 'streak' | 'account'>('mood');
   const [moodWindow, setMoodWindow] = useState<7 | 30>(7);
 
   // Both windows derive from the single 30-day series the server already sent —
@@ -152,6 +153,7 @@ export default function DashboardView({ user, moods, moodSeries, playtimes, stre
               {tab('mood', 'Mood history')}
               {tab('playtime', 'Playtime')}
               {tab('streak', 'Streak')}
+              {tab('account', 'Account & data')}
             </nav>
           </div>
 
@@ -210,6 +212,8 @@ export default function DashboardView({ user, moods, moodSeries, playtimes, stre
                 <p className="mt-2 text-bone-2">day streak — gently held</p>
               </div>
             )}
+
+            {activeTab === 'account' && <AccountDataPanel />}
           </div>
         </div>
       </div>
