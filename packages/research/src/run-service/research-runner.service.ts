@@ -11,7 +11,7 @@ import { ResearchAgent } from '../agent/research-agent';
 import { Logger, noopLogger } from '../util/logger';
 
 /** The runner's verdict for a single run: the pure {@link RunResult} counts plus the two totals the
- * core tracks OUTSIDE its result (`tokensUsed`, `topicsRun`), exactly as the retired `main()` did. */
+ * core tracks OUTSIDE its result (`tokensUsed`, `topicsRun`). */
 export interface RunnerResult extends RunResult {
   tokensUsed: number;
   topicsRun: number;
@@ -25,10 +25,9 @@ export interface RunnerInput {
 }
 
 /**
- * The seams that make the runner unit-testable without real network/LLM. Defaults wire the SAME
- * production stack the retired CLI `main()` used (PubMed/medRxiv tools, relevance gate, extract,
- * in-run dedup, BotClient submit). A test injects fakes (or jest.mocks the module) so no spec ever
- * touches PubMed/medRxiv/the bot.
+ * The seams that make the runner unit-testable without real network/LLM. Defaults wire the production
+ * stack (PubMed/medRxiv tools, relevance gate, extract, in-run dedup, BotClient submit). A test
+ * injects fakes (or jest.mocks the module) so no spec ever touches PubMed/medRxiv/the bot.
  */
 export interface RunnerDeps {
   /** The pure run core. Injected so a unit test can supply a fake that returns known counts. */
@@ -104,10 +103,10 @@ export class ResearchRunnerService {
 }
 
 /**
- * Default production wiring — the exact stack the retired `main()` assembled. A fresh
- * {@link ResearchAgent} per topic (so its token tally is per-topic), accumulating `tokensUsed`
- * across topics and counting `topicsRun`, with BotClient pointed at the lazily-resolved
- * STRATEGY_API_URL seam and `ADMIN_API_SECRET`/`NCBI_API_KEY` read at call time.
+ * Default production wiring: PubMed/medRxiv tools → relevance gate → extract → in-run dedup →
+ * BotClient submit. A fresh {@link ResearchAgent} per topic (so its token tally is per-topic),
+ * accumulating `tokensUsed` across topics and counting `topicsRun`, with BotClient pointed at the
+ * lazily-resolved STRATEGY_API_URL seam and `ADMIN_API_SECRET`/`NCBI_API_KEY` read at call time.
  */
 function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   const client = new BotClient({ baseUrl: strategyApiUrl(), secret: process.env.ADMIN_API_SECRET || '' });

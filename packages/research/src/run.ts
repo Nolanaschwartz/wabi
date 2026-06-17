@@ -18,10 +18,9 @@ export interface RunResult { submitted: number; deduped: number; rejected: numbe
 /**
  * Pure run core: iterate topics under the run budget, submit collected candidates, tally outcomes.
  *
- * This is the heart the worker wraps — {@link import('./run-service/research-runner.service')} builds
- * the production `runAgent`/`submit` deps and drives this loop, then {@link ResearchRunService}
- * persists the result. The retired CLI `main()` (ts-node entrypoint) is gone: the Nest worker is the
- * only runner now (ADR-0034), and it loads env via ConfigModule rather than a hand-rolled dotenv.
+ * This is the heart the worker wraps — {@link ResearchRunnerService} builds the production
+ * `runAgent`/`submit` deps and drives this loop, then {@link ResearchRunService} persists the
+ * result. The Nest worker is the only runner (ADR-0034).
  */
 export async function runResearch(deps: RunDeps): Promise<RunResult> {
   const result: RunResult = { submitted: 0, deduped: 0, rejected: 0, errors: 0, collected: 0, stopReason: 'exhausted' };

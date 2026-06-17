@@ -2,9 +2,10 @@ import { readFileSync, existsSync } from 'fs';
 import { dirname, join, parse } from 'path';
 
 /**
- * Load the root `.env` into process.env for the standalone worker. The bot gets its env via Nest's
- * ConfigModule; this process has no such loader, so without this every LLM call resolves to the
- * OpenAI default + empty key -> 401 -> silent failure (gate fails open, extract returns null,
+ * Load the root `.env` for standalone/script callers (e.g. the llm-fixture-run harness) that run
+ * outside the NestJS bootstrap. The Nest worker loads env via ConfigModule; this utility is for
+ * scripts and tests that have no such loader — without it every LLM call resolves to the OpenAI
+ * default + empty key -> 401 -> silent failure (gate fails open, extract returns null,
  * tokens=0 everywhere). Zero-dep, and it never overrides a var already set in the environment.
  *
  * Resolution: WABI_ENV_FILE if set, else walk up from startDir (default cwd) to the first `.env`.
