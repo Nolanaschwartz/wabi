@@ -27,6 +27,20 @@ interface ConfigResponse {
   topics: ResearchTopic[];
 }
 
+interface ResearchRun {
+  id: string;
+  trigger: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  submitted: number;
+  deduped: number;
+  rejected: number;
+  errors: number;
+  stopReason: string | null;
+  error: string | null;
+}
+
 type Cadence = 'daily' | 'weekly' | 'monthly';
 
 const DOW_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -83,6 +97,11 @@ export default function ResearchAdminPage() {
   const [scheduleSaved, setScheduleSaved] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
 
+  // Recent-runs panel + Run-now state.
+  const [runs, setRuns] = useState<ResearchRun[]>([]);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+
   const presetCron = buildCron(cadence, time, dayOfWeek, dayOfMonth);
   const effectiveCron = advanced ? rawCron.trim() : presetCron;
 
@@ -134,6 +153,38 @@ export default function ResearchAdminPage() {
     }
   };
 
+  const loadRuns = async () => {
+    const r = await fetch('/api/admin/research/runs?limit=20');
+    if (!r.ok) throw new Error(`Failed to load runs (${r.status})`);
+    const data = await r.json();
+    setRuns(Array.isArray(data) ? data : []);
+  };
+
+  // "Run now": enqueue a manual run, then re-fetch the runs list so the new (or collapsed) run shows.
+  const runNow = async () => {
+    if (running) return;
+    setRunError(null);
+    setRunning(true);
+    try {
+      const r = await fetch('/api/admin/research/run', { method: 'POST' });
+      if (!r.ok) {
+        const body = await r.json().catch(() => null);
+        const msg = (body && (body.message || body.error)) || `Failed to start run (${r.status})`;
+        throw new Error(Array.isArray(msg) ? msg.join('; ') : String(msg));
+      }
+      const body = await r.json().catch(() => null);
+      // A degraded worker returns { runId: null } — surface that rather than silently doing nothing.
+      if (body && body.runId === null) {
+        setRunError('Run could not be started — the worker may be offline.');
+      }
+      await loadRuns();
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : 'Failed to start run');
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const saveBounds = async () => {
     if (savingBounds) return;
     setBoundsError(null);
@@ -166,6 +217,10 @@ export default function ResearchAdminPage() {
     loadTopics()
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'))
       .finally(() => setLoading(false));
+    // Run history loads independently so a runs failure never blocks the config screen.
+    loadRuns().catch((e) =>
+      setRunError(e instanceof Error ? e.message : 'Failed to load runs'),
+    );
   }, []);
 
   const addTopic = async () => {
@@ -357,22 +412,45 @@ export default function ResearchAdminPage() {
           <p style={{ color: '#16a34a', margin: '0 0 0.75rem', fontSize: '0.875rem' }}>Schedule saved.</p>
         )}
 
-        <button
-          onClick={saveSchedule}
-          disabled={savingSchedule}
-          style={{
-            padding: '0.4rem 0.9rem',
-            fontSize: '0.875rem',
-            border: '1px solid #2563eb',
-            borderRadius: 6,
-            background: '#2563eb',
-            color: '#fff',
-            cursor: savingSchedule ? 'not-allowed' : 'pointer',
-            opacity: savingSchedule ? 0.6 : 1,
-          }}
-        >
-          {savingSchedule ? 'Saving…' : 'Save schedule'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={saveSchedule}
+            disabled={savingSchedule}
+            style={{
+              padding: '0.4rem 0.9rem',
+              fontSize: '0.875rem',
+              border: '1px solid #2563eb',
+              borderRadius: 6,
+              background: '#2563eb',
+              color: '#fff',
+              cursor: savingSchedule ? 'not-allowed' : 'pointer',
+              opacity: savingSchedule ? 0.6 : 1,
+            }}
+          >
+            {savingSchedule ? 'Saving…' : 'Save schedule'}
+          </button>
+
+          <button
+            onClick={runNow}
+            disabled={running}
+            style={{
+              padding: '0.4rem 0.9rem',
+              fontSize: '0.875rem',
+              border: '1px solid #2563eb',
+              borderRadius: 6,
+              background: '#fff',
+              color: '#2563eb',
+              cursor: running ? 'not-allowed' : 'pointer',
+              opacity: running ? 0.6 : 1,
+            }}
+          >
+            {running ? 'Starting…' : 'Run now'}
+          </button>
+
+          {runError && (
+            <span style={{ color: '#dc2626', fontSize: '0.875rem' }}>{runError}</span>
+          )}
+        </div>
       </section>
 
       <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginBottom: '1rem' }}>
@@ -545,6 +623,68 @@ export default function ResearchAdminPage() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '1rem', marginTop: '1rem' }}>
+        <h2 style={{ fontSize: '1.125rem', margin: '0 0 0.75rem' }}>Recent runs</h2>
+
+        {runs.length === 0 ? (
+          <p style={{ margin: 0, fontSize: '0.875rem', color: '#9ca3af' }}>No runs yet.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table
+              style={{
+                width: '100%',
+                borderCollapse: 'collapse',
+                fontSize: '0.8125rem',
+                color: '#374151',
+              }}
+            >
+              <thead>
+                <tr style={{ textAlign: 'left', color: '#6b7280' }}>
+                  <th style={{ padding: '0.35rem 0.5rem' }}>Trigger</th>
+                  <th style={{ padding: '0.35rem 0.5rem' }}>Status</th>
+                  <th style={{ padding: '0.35rem 0.5rem' }}>Started</th>
+                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Submitted</th>
+                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Deduped</th>
+                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Rejected</th>
+                  <th style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>Errors</th>
+                  <th style={{ padding: '0.35rem 0.5rem' }}>Stop reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((run) => (
+                  <tr key={run.id} style={{ borderTop: '1px solid #f3f4f6' }}>
+                    <td style={{ padding: '0.35rem 0.5rem' }}>{run.trigger}</td>
+                    <td
+                      style={{
+                        padding: '0.35rem 0.5rem',
+                        color:
+                          run.status === 'failed'
+                            ? '#dc2626'
+                            : run.status === 'success'
+                              ? '#16a34a'
+                              : '#374151',
+                      }}
+                    >
+                      {run.status}
+                    </td>
+                    <td style={{ padding: '0.35rem 0.5rem' }}>
+                      {run.startedAt ? new Date(run.startedAt).toLocaleString() : '—'}
+                    </td>
+                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.submitted}</td>
+                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.deduped}</td>
+                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.rejected}</td>
+                    <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right' }}>{run.errors}</td>
+                    <td style={{ padding: '0.35rem 0.5rem', color: '#6b7280' }}>
+                      {run.error ?? run.stopReason ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </div>
