@@ -2,22 +2,38 @@ import { RateLimiter } from '../util/rate-limiter';
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 const BIOC = 'https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json';
+const EUROPEPMC = 'https://www.ebi.ac.uk/europepmc/webservices/rest';
 
 export interface PubMedDeps {
   fetchFn?: typeof fetch;
   apiKey?: string;
   minIntervalMs?: number; // default 350ms (~3/s keyless)
+  maxTextChars?: number;  // full-text char cap (default 50k; env RESEARCH_PUBMED_MAX_TEXT_CHARS)
+}
+
+/** Strip XML tags to plain text. The LLM extractor tolerates residual markup, so this is a cheap
+ * tag-strip + entity-decode + whitespace-collapse, not a real parser. */
+function stripXml(xml: string): string {
+  return xml
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export class PubMedTool {
   private readonly fetchFn: typeof fetch;
   private readonly apiKey?: string;
   private readonly limiter: RateLimiter;
+  private readonly maxTextChars: number;
 
   constructor(deps: PubMedDeps = {}) {
     this.fetchFn = deps.fetchFn ?? fetch;
     this.apiKey = deps.apiKey;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 350);
+    // Env read in the constructor (instantiated per-run after ConfigModule loads), never at import.
+    this.maxTextChars = deps.maxTextChars ?? (Number(process.env.RESEARCH_PUBMED_MAX_TEXT_CHARS) || 50_000);
   }
 
   private key(): string {
@@ -64,15 +80,31 @@ export class PubMedTool {
     return data.linksets?.[0]?.linksetdbs?.[0]?.links ?? [];
   }
 
-  /** PMC open-access full text via BioC JSON, or null when the paper isn't OA. */
+  /** Open-access full text, truncated to maxTextChars. BioC JSON is primary; when it yields nothing
+   * and a PMCID is known, fall back to Europe PMC's OA full-text XML. Non-OA (no PMCID) → null. Every
+   * path is fail-safe → null, so the caller reads the abstract instead. No paywalled scraping. */
   async fullText(pmid: string): Promise<string | null> {
-    const sumUrl = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${pmid}${this.key()}`;
-    const sum = await this.getJson<{ result?: Record<string, { articleids?: { idtype: string; value: string }[] }> }>(sumUrl);
-    const rawPmcId = sum.result?.[pmid]?.articleids?.find((a) => a.idtype === 'pmc')?.value;
-    if (!rawPmcId) return null;
-    // The BioC endpoint requires the "PMC"-prefixed id (e.g. PMC8314311). Stripping the prefix
-    // returns "[Error] : No result can be found" — verified against the live NCBI API.
-    const pmcId = rawPmcId.startsWith('PMC') ? rawPmcId : `PMC${rawPmcId}`;
+    const pmcId = await this.pmcId(pmid);
+    if (!pmcId) return null; // not open-access
+    const body = (await this.biocFullText(pmcId)) ?? (await this.europePmcFullText(pmcId));
+    return body ? body.slice(0, this.maxTextChars) : null;
+  }
+
+  /** The PMC-prefixed id (e.g. PMC8314311) for an OA paper, or null. Both the BioC and Europe PMC
+   * endpoints require the "PMC" prefix — stripping it returns an error from the live APIs. */
+  private async pmcId(pmid: string): Promise<string | null> {
+    try {
+      const url = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${pmid}${this.key()}`;
+      const sum = await this.getJson<{ result?: Record<string, { articleids?: { idtype: string; value: string }[] }> }>(url);
+      const raw = sum.result?.[pmid]?.articleids?.find((a) => a.idtype === 'pmc')?.value;
+      if (!raw) return null;
+      return raw.startsWith('PMC') ? raw : `PMC${raw}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private async biocFullText(pmcId: string): Promise<string | null> {
     try {
       // BioC returns a TOP-LEVEL ARRAY: [{ ..., documents: [{ passages: [{ text }] }] }].
       type BioCCollection = { documents?: { passages?: { text?: string }[] }[] };
@@ -85,7 +117,17 @@ export class PubMedTool {
         .trim();
       return text.length > 0 ? text : null;
     } catch {
-      return null; // not OA / not yet in BioC / transient — caller falls back to the abstract
+      return null; // not yet in BioC / transient — try Europe PMC next
+    }
+  }
+
+  private async europePmcFullText(pmcId: string): Promise<string | null> {
+    try {
+      const xml = await this.getText(`${EUROPEPMC}/${pmcId}/fullTextXML`);
+      const text = stripXml(xml);
+      return text.length > 0 ? text : null;
+    } catch {
+      return null; // not OA in Europe PMC / transient — caller falls back to the abstract
     }
   }
 }

@@ -70,6 +70,60 @@ describe('PubMedTool', () => {
     expect(fetchFn.mock.calls[1][0]).toContain('/BioC_json/PMC8314311/unicode');
   });
 
+  it('fullText falls back to Europe PMC OA full text when BioC yields nothing', async () => {
+    const fetchFn = jest
+      .fn()
+      // esummary -> PMCID known
+      .mockReturnValueOnce(jsonResponse({ result: { '111': { uid: '111', articleids: [{ idtype: 'pmc', value: 'PMC8314311' }] } } }))
+      // BioC -> empty collection (no passages) => biocText null, so the fallback fires
+      .mockReturnValueOnce(jsonResponse([{ documents: [] }]))
+      // Europe PMC fullTextXML
+      .mockReturnValueOnce(textResponse('<article><body><sec><p>Mindfulness reduced rumination.</p></sec></body></article>'));
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+
+    const text = await tool.fullText('111');
+
+    expect(text).toBe('Mindfulness reduced rumination.');
+    expect(fetchFn.mock.calls[2][0]).toContain('/europepmc/webservices/rest/PMC8314311/fullTextXML');
+  });
+
+  it('fullText does NOT call Europe PMC when BioC already returned text', async () => {
+    const fetchFn = jest
+      .fn()
+      .mockReturnValueOnce(jsonResponse({ result: { '111': { uid: '111', articleids: [{ idtype: 'pmc', value: 'PMC8314311' }] } } }))
+      .mockReturnValueOnce(jsonResponse([{ documents: [{ passages: [{ text: 'BioC body present.' }] }] }]));
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+
+    expect(await tool.fullText('111')).toBe('BioC body present.');
+    expect(fetchFn).toHaveBeenCalledTimes(2); // no Europe PMC fetch
+  });
+
+  it('fullText strips XML tags and truncates the result to maxTextChars', async () => {
+    const longBody = '<p>' + 'word '.repeat(1000) + '</p>';
+    const fetchFn = jest
+      .fn()
+      .mockReturnValueOnce(jsonResponse({ result: { '111': { uid: '111', articleids: [{ idtype: 'pmc', value: 'PMC8314311' }] } } }))
+      .mockReturnValueOnce(jsonResponse([{ documents: [] }]))
+      .mockReturnValueOnce(textResponse(longBody));
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0, maxTextChars: 50 });
+
+    const text = await tool.fullText('111');
+
+    expect(text).toHaveLength(50);
+    expect(text).not.toContain('<');
+  });
+
+  it('fullText fails safe to null when both BioC and Europe PMC fail', async () => {
+    const fetchFn = jest
+      .fn()
+      .mockReturnValueOnce(jsonResponse({ result: { '111': { uid: '111', articleids: [{ idtype: 'pmc', value: 'PMC8314311' }] } } }))
+      .mockReturnValueOnce(jsonResponse([{ documents: [] }])) // BioC empty
+      .mockReturnValueOnce(Promise.resolve({ ok: false, status: 404, text: async () => '', json: async () => ({}) })); // Europe PMC 404
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+
+    expect(await tool.fullText('111')).toBeNull();
+  });
+
   it('fullText returns null when the BioC body is a non-JSON error (not yet in BioC)', async () => {
     // Very recent OA papers return a non-JSON "[Error]" body with HTTP 200 — json() throws → null.
     const fetchFn = jest

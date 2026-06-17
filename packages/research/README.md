@@ -80,7 +80,8 @@ Reads the canonical root `.env`. Relevant vars:
   `RESEARCH_TRIAGE_*` (role `research-triage`, falls back to `CLASSIFIER_*`) for the gate.
 - **Strategy ingest** — `STRATEGY_API_URL` (the configurable seam; falls back to `BOT_BASE_URL`,
   default `http://localhost:3001`) and `ADMIN_API_SECRET`.
-- **Sources** — `NCBI_API_KEY` (PubMed), `RESEARCH_MEDRXIV_MAX_RECORDS` (default 1500),
+- **Sources** — `NCBI_API_KEY` (PubMed), `RESEARCH_PUBMED_MAX_TEXT_CHARS` (default 50000, caps
+  BioC/Europe PMC full text), `RESEARCH_MEDRXIV_MAX_RECORDS` (default 1500),
   `RESEARCH_MEDRXIV_MIN_TERM_FRACTION` (default 0.5), `RESEARCH_MEDRXIV_MAX_PDF_BYTES` (default 20MB)
   and `RESEARCH_MEDRXIV_MAX_TEXT_CHARS` (default 50000) for full-text PDF extraction; PsyArXiv (OSF API v2): `OSF_TOKEN` (optional,
   raises the anonymous rate limit), `RESEARCH_PSYARXIV_WINDOW_DAYS` (default 60),
