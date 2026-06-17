@@ -20,7 +20,7 @@ export interface MoodDayPoint {
 }
 
 /** Format a Date as the `YYYY-MM-DD` calendar day it falls on in `timeZone`. */
-function localDateString(date: Date, timeZone: string): string {
+export function localDateString(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
     year: 'numeric',
@@ -75,4 +75,50 @@ export function buildMoodSeries(
   }
 
   return series;
+}
+
+/**
+ * Build a daily-average grid for one specific calendar month.
+ *
+ * Same local-day bucketing and rounding as {@link buildMoodSeries}, but anchored
+ * to an arbitrary `year`/`month` rather than the last N days ending today — this
+ * is what the dashboard's mood calendar paints, including months navigated to via
+ * the API. Pure and deterministic: no clock, no I/O.
+ *
+ * @param moods    Rows to bucket (only `rating` and `createdAt` are read).
+ * @param timezone IANA timezone for day boundaries; empty/unset is treated as UTC.
+ * @param year     Four-digit calendar year of the target month.
+ * @param month    Month number, 1 (January) – 12 (December).
+ * @returns        One slot per day of that month, oldest first, `avg` null for empty days.
+ */
+export function buildMonthGrid(
+  moods: ReadonlyArray<MoodEntry>,
+  timezone: string,
+  year: number,
+  month: number,
+): MoodDayPoint[] {
+  const tz = timezone || 'UTC';
+
+  // Day 0 of the *next* month is the last day of this month — gives 28/29/30/31.
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+  // Sum ratings per local day, exactly as buildMoodSeries does.
+  const sums = new Map<string, { total: number; count: number }>();
+  for (const { rating, createdAt } of moods) {
+    const key = localDateString(createdAt, tz);
+    const slot = sums.get(key) ?? { total: 0, count: 0 };
+    slot.total += rating;
+    slot.count += 1;
+    sums.set(key, slot);
+  }
+
+  const grid: MoodDayPoint[] = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const slot = sums.get(date);
+    const avg = slot ? Math.round((slot.total / slot.count) * 10) / 10 : null;
+    grid.push({ date, avg });
+  }
+
+  return grid;
 }

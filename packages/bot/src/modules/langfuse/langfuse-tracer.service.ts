@@ -1,5 +1,5 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
-import { safeFetch } from '../../lib/safe-fetch';
+import { LangfuseIngest } from '@wabi/shared/langfuse';
 import { JsonLogger } from '../../lib/json-logger';
 import { TracePayloadBuilder, SpanName } from './trace-payload-builder';
 
@@ -36,9 +36,6 @@ function flushTimeoutMs(): number {
   return Number.isNaN(parsed) || parsed <= 0 ? 5000 : parsed;
 }
 
-// Backstop on the awaited in-flight set: if Langfuse hangs under burst traffic, untracked POSTs still
-// fire-and-forget, we just stop retaining their (content-bearing) bodies for the shutdown flush.
-const MAX_INFLIGHT = 1000;
 // Backstop on the crisis latch set so it cannot grow unbounded across the process lifetime.
 const MAX_CRISIS_TURNS = 10000;
 
@@ -46,23 +43,20 @@ const MAX_CRISIS_TURNS = 10000;
 export class LangfuseTracer implements OnApplicationShutdown {
   private readonly logger = new JsonLogger(LangfuseTracer.name);
   private readonly builder = new TracePayloadBuilder();
-  // In-flight ingestion promises. The tracer is fire-and-forget, so without this the last turns
-  // before a SIGTERM/redeploy would be orphaned mid-POST. onApplicationShutdown awaits these.
-  private readonly inflight = new Set<Promise<unknown>>();
+  // The shared, content-AGNOSTIC transport kernel (ADR-0037). It owns enablement, per-traceId
+  // sampling, the in-flight POST set + cap, and the flush deadline race. The bot keeps the Wellbeing
+  // policy on top: span vocabulary, the crisis latch, and content redaction (ADR-0013/0024).
+  private readonly ingest = new LangfuseIngest({ warn: (m) => this.logger.warn(m) });
   // TraceIds latched as crisis: once any span of a turn is flagged crisis, EVERY later span/score for
   // that turn is suppressed centrally — a new call site that forgets isCrisis can't leak crisis content
   // (ADR-0021/0024). The per-span isCrisis flag and the builder's drop are belt-and-suspenders on top.
   private readonly crisisTurns = new Set<string>();
 
-  // Evaluated per-call, NOT cached in the constructor: the tracer can be constructed before
-  // ConfigModule populates process.env, which froze `enabled` to false and silently disabled
-  // tracing forever (same load-order trap as @wabi/shared getProvider).
+  // Evaluated per-call by the kernel, NOT cached: the tracer can be constructed before ConfigModule
+  // populates process.env, which froze `enabled` to false and silently disabled tracing forever
+  // (same load-order trap as @wabi/shared getProvider).
   private get enabled(): boolean {
-    return !!(
-      process.env.LANGFUSE_HOST &&
-      process.env.LANGFUSE_PUBLIC_KEY &&
-      process.env.LANGFUSE_SECRET_KEY
-    );
+    return this.ingest.enabled;
   }
 
   // Local-dev full fidelity: outside production, redaction is relaxed so traces carry crisis content
@@ -96,7 +90,7 @@ export class LangfuseTracer implements OnApplicationShutdown {
       input: params.input,
       output: params.output,
       enabled: this.enabled,
-      sampled: this.builder.shouldSample(params.traceId, sampleRate()),
+      sampled: this.ingest.shouldSample(params.traceId, sampleRate()),
       isCrisis: params.isCrisis,
       latencyMs: params.latencyMs,
       confidence: params.confidence,
@@ -109,7 +103,7 @@ export class LangfuseTracer implements OnApplicationShutdown {
     });
     if (!envelope) return;
 
-    this.post('span', { batch: envelope.batch });
+    this.ingest.post('span', { batch: envelope.batch });
   }
 
   score(
@@ -128,7 +122,7 @@ export class LangfuseTracer implements OnApplicationShutdown {
     // content-free so there is no privacy/volume reason to drop it. The content-free parent trace is
     // upserted alongside so the score is never orphaned on a turn whose content spans were sampled out.
     const timestamp = new Date().toISOString();
-    this.post('score-create', {
+    this.ingest.post('score-create', {
       batch: [
         {
           id: crypto.randomUUID(),
@@ -156,61 +150,10 @@ export class LangfuseTracer implements OnApplicationShutdown {
     this.crisisTurns.add(traceId);
   }
 
-  // Langfuse ingestion API: POST /api/public/ingestion with HTTP Basic auth (public:secret) and a
-  // batch envelope. All failures are swallowed and logged — tracing must never break the hot path
-  // (ADR-0021).
-  private post(label: string, envelope: { batch: unknown[] }): void {
-    try {
-      const host = process.env.LANGFUSE_HOST;
-      const publicKey = process.env.LANGFUSE_PUBLIC_KEY;
-      const secretKey = process.env.LANGFUSE_SECRET_KEY;
-      if (!host || !publicKey || !secretKey) return;
-
-      const auth = Buffer.from(`${publicKey}:${secretKey}`).toString('base64');
-
-      const pending = safeFetch(
-        `${host}/api/public/ingestion`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Basic ${auth}`,
-          },
-          body: JSON.stringify(envelope),
-        },
-        (status, body) => {
-          this.logger.warn(`Langfuse ingest ${label} -> HTTP ${status}: ${body}`);
-        },
-      ).catch((err) => this.logger.warn(`Langfuse ingest ${label} failed: ${err}`));
-
-      // Track until settled so shutdown can flush it; the .catch above already swallows errors. Capped
-      // so a hung Langfuse under burst traffic can't retain unbounded content-bearing bodies — over the
-      // cap the POST still fires fire-and-forget, it's just not awaited at shutdown.
-      if (this.inflight.size < MAX_INFLIGHT) {
-        this.inflight.add(pending);
-        void pending.finally(() => this.inflight.delete(pending));
-      }
-    } catch (err) {
-      this.logger.warn(`Langfuse ingest ${label} threw: ${err}`);
-    }
-  }
-
   // Flush in-flight ingestion before the process exits so the last turns before a redeploy/SIGTERM
-  // are not lost. Failure-isolated: a flush error is swallowed and must never block shutdown
-  // (ADR-0021). No-op when nothing is in flight (e.g. disabled tracer).
+  // are not lost. Delegates to the kernel, which races the deadline and swallows failures so a flush
+  // error can never block shutdown (ADR-0021). No-op when nothing is in flight (e.g. disabled tracer).
   async onApplicationShutdown(): Promise<void> {
-    if (this.inflight.size === 0) return;
-    try {
-      const settled = Promise.allSettled([...this.inflight]);
-      // Race against a deadline: a Langfuse that accepts but never responds must not block exit.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, flushTimeoutMs());
-      });
-      await Promise.race([settled.then(() => undefined), deadline]);
-      if (timer) clearTimeout(timer);
-    } catch (err) {
-      this.logger.warn(`Langfuse flush on shutdown failed: ${err}`);
-    }
+    await this.ingest.flush(flushTimeoutMs());
   }
 }

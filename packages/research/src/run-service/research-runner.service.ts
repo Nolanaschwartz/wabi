@@ -10,6 +10,7 @@ import { relevanceGate } from '../agent/relevance-gate';
 import { extract } from '../agent/extract';
 import { isDuplicateInRun } from '../agent/dedup';
 import { ResearchAgent } from '../agent/research-agent';
+import { ResearchTracer } from '../agent/research-tracer';
 import { Logger, noopLogger } from '../util/logger';
 
 /** The runner's verdict for a single run: the pure {@link RunResult} counts plus the two totals the
@@ -52,6 +53,9 @@ interface BuiltAgent {
   submit: (candidate: Candidate) => Promise<SubmitOutcome>;
   tokens: () => number;
   topicsRun: () => number;
+  /** Optional: flush any in-flight Langfuse ingestion once the run is done so the last spans aren't
+   * lost when the worker is short-lived. Absent on the test seam (which traces nothing). */
+  flushTracing?: () => Promise<void>;
 }
 
 /**
@@ -90,17 +94,26 @@ export class ResearchRunnerService {
 
   /** Perform one run over the given topics+bounds; map the core's result onto a {@link RunnerResult}. */
   async execute(input: RunnerInput): Promise<RunnerResult> {
-    const { runAgent, submit, tokens, topicsRun } = this.buildAgent(input.bounds, this.log);
+    const built = this.buildAgent(input.bounds, this.log);
+    const { runAgent, submit, tokens, topicsRun } = built;
 
-    const result = await this.runFn({
-      topics: input.topics,
-      bounds: input.bounds,
-      log: this.log,
-      submit,
-      runAgent,
-    });
+    try {
+      const result = await this.runFn({
+        topics: input.topics,
+        bounds: input.bounds,
+        log: this.log,
+        submit,
+        runAgent,
+      });
 
-    return { ...result, tokensUsed: tokens(), topicsRun: topicsRun() };
+      return { ...result, tokensUsed: tokens(), topicsRun: topicsRun() };
+    } finally {
+      // Flush in-flight tracing whether the run succeeded or threw. Best-effort and isolated — a flush
+      // error must never mask the run's real result/error (ADR-0021). No-op when tracing is disabled.
+      if (built.flushTracing) {
+        await built.flushTracing().catch((err) => this.log.debug('tracer flush failed', { err: (err as Error)?.message ?? String(err) }));
+      }
+    }
   }
 }
 
@@ -120,6 +133,13 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     ['psyarxiv', new PsyArxivTool({ token: process.env.OSF_TOKEN, log })],
   ]);
 
+  // One tracer + one runId for the whole run (every topic's agent hangs under the same parent trace).
+  // The tracer is a CLEAN no-op when Langfuse env is absent — `enabled` is re-read per call inside the
+  // shared kernel, so this never depends on import-time env (CLAUDE.md lazy-config rule). Tracing is
+  // additive: it never alters the run's counts and never throws out of a span (ADR-0021).
+  const tracer = new ResearchTracer(log);
+  const runId = crypto.randomUUID();
+
   let tokensUsed = 0;
   let topicsRun = 0;
 
@@ -130,6 +150,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
         { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
         bounds,
         log,
+        { tracer, runId },
       );
       const out = await agent.run(topic);
       topicsRun++;
@@ -138,5 +159,6 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     },
     tokens: () => tokensUsed,
     topicsRun: () => topicsRun,
+    flushTracing: () => tracer.onApplicationShutdown(),
   };
 }

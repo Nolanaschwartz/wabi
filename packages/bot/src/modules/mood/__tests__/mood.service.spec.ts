@@ -8,6 +8,8 @@ jest.mock('@wabi/shared', () => ({
       findMany: jest.fn(),
     },
   },
+  ratingToEmoji: (rating: number) =>
+    ({ 1: '😞', 2: '😔', 3: '😐', 4: '🙂', 5: '😊' })[rating] ?? '😐',
 }));
 
 // MoodService is now a plain persist + read service: crisis screening of the note and consent-gated

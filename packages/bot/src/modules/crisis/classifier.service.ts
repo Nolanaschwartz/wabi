@@ -1,7 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider, type ProviderConfig } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { JsonLogger } from '../../lib/json-logger';
 
 export type ClassifierResult = 'safe' | 'crisis';
@@ -48,21 +46,16 @@ const MAX_CONTEXT_USER_MESSAGES = 5;
 @Injectable()
 export class ClassifierService {
   private readonly logger = new JsonLogger(ClassifierService.name);
-  private config: ProviderConfig;
-
-  constructor() {
-    this.config = getProvider('classifier');
-  }
 
   async classify(message: string, context?: ClassifierContext): Promise<ClassifierResult> {
     try {
-      const openai = createOpenAI({
-        baseURL: this.config.baseUrl as string,
-        apiKey: this.config.apiKey,
-      });
-
-      const { text } = await generateText({
-        model: openai(this.config.model),
+      // generate owns the MECHANISM (lazy provider resolution, the ai client, the call) — ADR-0037 —
+      // so the load-order foot-gun that froze this to OpenAI defaults can't recur. The classifier keeps
+      // only its role, prompt, cap, and fail policy. It THROWS only on a transport error; an empty
+      // reasoning-model result comes back as empty `text` and is handled by the fail-closed branch
+      // below, NOT here. retryOnEmpty is deliberately OFF: the safety path fails closed instantly with
+      // no added latency.
+      const { text } = await generate('classifier', {
         system: CLASSIFIER_SYSTEM_PROMPT,
         prompt: this.buildPrompt(message, context),
         temperature: 0,
@@ -70,24 +63,25 @@ export class ClassifierService {
       });
 
       const verdict = (text ?? '').trim().toLowerCase();
-      // Fail safe: only an explicit, unambiguous "safe" is treated as safe. Empty output (reasoning
+      // Fail closed: only an explicit, unambiguous "safe" is treated as safe. Empty output (a reasoning
       // model returned nothing) or anything unparseable falls through to crisis rather than silently
-      // letting a real crisis past.
+      // letting a real crisis past. This branch is what preserves fail-closed for empty `text` WITHOUT
+      // depending on the transport-error path (ADR-0021).
       if (verdict.includes('safe') && !verdict.includes('crisis')) {
         return 'safe';
       }
       if (!verdict.includes('crisis')) {
         this.logger.warn(
-          `Classifier returned unparseable verdict ${JSON.stringify(text)}; failing safe to crisis`,
+          `Classifier returned empty/unparseable verdict ${JSON.stringify(text)}; failing closed to crisis`,
         );
       }
       return 'crisis';
     } catch (err) {
-      // This silent fail-to-crisis was previously invisible: a misconfigured endpoint (e.g. the
-      // provider-config load-order bug) made every call throw -> a crisis alert on every message,
-      // with nothing logged. Always log so the failure mode is diagnosable.
+      // generate throws on transport error (a misconfigured endpoint, the network). That used to be an
+      // invisible fail-to-crisis — a crisis alert on every message, nothing logged. Always log so the
+      // failure mode stays diagnosable, then fail closed to crisis.
       this.logger.error(
-        `Classifier call failed (${this.config.baseUrl} / ${this.config.model}); failing safe to crisis`,
+        `Classifier call failed; failing closed to crisis`,
         err instanceof Error ? err.stack : String(err),
       );
       return 'crisis';
