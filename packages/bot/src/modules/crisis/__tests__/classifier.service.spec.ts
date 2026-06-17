@@ -36,6 +36,29 @@ describe('ClassifierService', () => {
     expect(result).toBe('crisis');
   });
 
+  // The verdict contract is unchanged (still 'safe'|'crisis'); model + token usage are reported
+  // out-of-band through an optional sink so a tracer can attribute the manual `classify` span without
+  // the classifier knowing about tracing. Model/usage are not personal data.
+  it('reports model + usage to the optional telemetry sink on a successful call', async () => {
+    generate.mockResolvedValue({ text: 'safe', usage: { inputTokens: 12, outputTokens: 1 }, model: 'qwopus', latencyMs: 1 });
+    const onTelemetry = jest.fn();
+
+    await service.classify('hi', undefined, onTelemetry);
+
+    expect(onTelemetry).toHaveBeenCalledWith({ model: 'qwopus', usage: { inputTokens: 12, outputTokens: 1 } });
+  });
+
+  it('does NOT call the telemetry sink when the call throws (no model to report)', async () => {
+    jest.spyOn((service as any).logger, 'error').mockImplementation(() => {});
+    generate.mockRejectedValue(new Error('network error'));
+    const onTelemetry = jest.fn();
+
+    const result = await service.classify('anything', undefined, onTelemetry);
+
+    expect(result).toBe('crisis');
+    expect(onTelemetry).not.toHaveBeenCalled();
+  });
+
   it('defaults to crisis when generate throws (transport failure, fail-closed & logged)', async () => {
     const errSpy = jest.spyOn((service as any).logger, 'error').mockImplementation(() => {});
     generate.mockRejectedValue(new Error('network error'));

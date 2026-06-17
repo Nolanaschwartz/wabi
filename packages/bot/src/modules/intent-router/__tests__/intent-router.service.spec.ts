@@ -46,6 +46,33 @@ describe('IntentRouterService', () => {
     expect(result).toEqual({ intent: 'journal', confidence: 0.82 });
   });
 
+  // The verdict return is unchanged; model + usage are reported out-of-band through an optional sink so
+  // the hub can stamp them on the manual `intent` span without polluting IntentResult.
+  it('reports model + usage to the optional telemetry sink on a successful route', async () => {
+    generate.mockResolvedValue({
+      text: '{"intent":"coach","confidence":0.5}',
+      usage: { inputTokens: 30, outputTokens: 4 },
+      model: 'qwopus',
+      latencyMs: 1,
+    });
+    const onTelemetry = jest.fn();
+
+    await service.route('whatever', CATALOGUE, undefined, onTelemetry);
+
+    expect(onTelemetry).toHaveBeenCalledWith({ model: 'qwopus', usage: { inputTokens: 30, outputTokens: 4 } });
+  });
+
+  it('does NOT call the telemetry sink when the route call throws (fail-soft, no model)', async () => {
+    jest.spyOn((service as any).logger, 'warn').mockImplementation(() => {});
+    generate.mockRejectedValue(new Error('boom'));
+    const onTelemetry = jest.fn();
+
+    const result = await service.route('whatever', CATALOGUE, undefined, onTelemetry);
+
+    expect(result).toEqual({ intent: 'coach', confidence: 0 });
+    expect(onTelemetry).not.toHaveBeenCalled();
+  });
+
   it('parses the journal tool sub-intent when the model asks for a prompt (give_prompt)', async () => {
     generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.9,"tool":"give_prompt"}'));
 

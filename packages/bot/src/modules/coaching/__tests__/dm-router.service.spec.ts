@@ -108,6 +108,27 @@ describe('DmRouterService', () => {
       expect(decision.isCapture).toBe(true);
     });
 
+    // The router reports its model + token usage out-of-band (4th sink arg); prepare surfaces it on the
+    // decision so the hub can stamp the manual `intent` span. A capture resume skips the LLM → no telemetry.
+    it('surfaces the router call telemetry (model + usage) on the decision', async () => {
+      intentRouter.route.mockImplementation(async (_b: string, _c: unknown, _ctx: unknown, onTelemetry?: (t: unknown) => void) => {
+        onTelemetry?.({ model: 'qwopus', usage: { inputTokens: 30, outputTokens: 4 } });
+        return coach(0.9);
+      });
+
+      const decision = await router.prepare('123', 'hi', {});
+
+      expect(decision.verdictTelemetry).toEqual({ model: 'qwopus', usage: { inputTokens: 30, outputTokens: 4 } });
+    });
+
+    it('carries no verdict telemetry on a capture resume (the intent LLM is skipped)', async () => {
+      spokeSession.active.mockResolvedValue('journal');
+
+      const decision = await router.prepare('123', 'hi', {});
+
+      expect(decision.verdictTelemetry).toBeUndefined();
+    });
+
     it('routes the intent and plans coach for a coach verdict', async () => {
       intentRouter.route.mockResolvedValue(coach(0.9));
 
@@ -118,6 +139,7 @@ describe('DmRouterService', () => {
         'how do i stop tilting',
         expect.arrayContaining([expect.objectContaining({ intent: 'journal', tools: expect.any(Array) })]),
         { recentTurns: undefined },
+        expect.any(Function), // out-of-band telemetry sink
       );
       expect(decision.plan).toEqual({ kind: 'invoke', intent: 'coach', tool: 'coach' });
       expect(decision.access).toBe('active');

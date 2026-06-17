@@ -15,6 +15,7 @@ import { DmRouterService } from './dm-router.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
 import { startActiveObservation, getActiveTraceId } from '@wabi/shared/otel';
+import type { GenerationCallTelemetry } from '@wabi/shared/generate';
 
 // Resolve a promise while recording how long it took, so each parallel op can report its own span
 // latency. Failure handling stays with the caller (e.g. strategy search catches before measure).
@@ -125,8 +126,15 @@ export class CoachingService {
       // floor; routing is downstream of it.)
       // Time each parallel op independently so its span records its own latency — an operator can
       // then see whether classification, retrieval, or routing was the slow part of the turn.
+      // Capture the classifier LLM's model/usage out-of-band (the verdict stays its only return) so the
+      // `classify` span can be attributed; the router's equivalent rides on the routing decision.
+      let classifyTelemetry: GenerationCallTelemetry | undefined;
       const [classifyResult, strategyResult, decisionResult] = await Promise.all([
-        measure(this.classifier.classify(batch, classifierContext)),
+        measure(
+          this.classifier.classify(batch, classifierContext, (t) => {
+            classifyTelemetry = t;
+          }),
+        ),
         measure(this.strategyRetrieval.search(batch).catch(() => [])),
         measure(this.dmRouter.prepare(userId, batch, { recentTurns: session?.turns })),
       ]);
@@ -166,6 +174,8 @@ export class CoachingService {
           output: 'crisis',
           kind: 'generation',
           latencyMs: classifyResult.latencyMs,
+          model: classifyTelemetry?.model,
+          usage: classifyTelemetry?.usage,
         });
         // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
         // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
@@ -183,6 +193,8 @@ export class CoachingService {
         output: 'safe',
         kind: 'generation',
         latencyMs: classifyResult.latencyMs,
+        model: classifyTelemetry?.model,
+        usage: classifyTelemetry?.usage,
       });
 
       // Record the router's verdict on every safe turn so the dispatch threshold (θ) can be tuned
@@ -194,6 +206,8 @@ export class CoachingService {
         kind: 'generation',
         confidence: decision.verdict.confidence,
         latencyMs: decisionResult.latencyMs,
+        model: decision.verdictTelemetry?.model,
+        usage: decision.verdictTelemetry?.usage,
       });
 
       // Which evidence-based strategies fed the coach prompt — counts/scores/ids only, never the

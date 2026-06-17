@@ -5,6 +5,7 @@ import { TiltDmHandler } from '../tilt/tilt-dm.handler';
 import { MoodDmHandler } from '../mood/mood-dm.handler';
 import { SpokeSessionService } from '../spoke-session/spoke-session.service';
 import type { Spoke, AccessTier } from './spoke';
+import type { GenerationCallTelemetry } from '@wabi/shared/generate';
 import {
   IntentRouterService,
   type IntentResult,
@@ -50,6 +51,12 @@ export interface RoutingDecision {
   verdict: IntentResult;
   access: AccessTier;
   isCapture: boolean;
+  /**
+   * Model + token usage of the intent-router LLM call that produced `verdict`, for the `intent` trace
+   * span. Absent on a capture resume — that path returns a synthetic verdict and skips the LLM, so there
+   * is no model to attribute.
+   */
+  verdictTelemetry?: GenerationCallTelemetry;
 }
 
 /**
@@ -115,7 +122,11 @@ export class DmRouterService {
       };
     }
 
-    const verdict = await this.intentRouter.route(batch, this.catalogue, context);
+    // Capture the router call's model/usage out-of-band so the verdict stays its only return value.
+    let verdictTelemetry: GenerationCallTelemetry | undefined;
+    const verdict = await this.intentRouter.route(batch, this.catalogue, context, (t) => {
+      verdictTelemetry = t;
+    });
 
     // A confident, non-coach verdict for a registered spoke routes to that spoke's tool — the router's
     // chosen tool when the spoke exposes it, else the spoke's safe default (e.g. journal → give_prompt,
@@ -132,6 +143,7 @@ export class DmRouterService {
         verdict,
         access: this.toolAccess(spoke, tool),
         isCapture: false,
+        verdictTelemetry,
       };
     }
 
@@ -142,6 +154,7 @@ export class DmRouterService {
       verdict,
       access: this.toolAccess(coach, coach.defaultTool),
       isCapture: false,
+      verdictTelemetry,
     };
   }
 

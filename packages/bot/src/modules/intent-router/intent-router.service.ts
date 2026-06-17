@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { generate } from '@wabi/shared/generate';
+import { generate, type GenerationCallTelemetry } from '@wabi/shared/generate';
 import { JsonLogger } from '../../lib/json-logger';
 
 /** Wellness-verb intents the router can dispatch to. `coach` is the catch-all / fallback. */
@@ -64,16 +64,26 @@ export class IntentRouterService {
     batch: string,
     catalogue: SpokeCatalogue,
     context?: IntentContext,
+    onTelemetry?: (telemetry: GenerationCallTelemetry) => void,
   ): Promise<IntentResult> {
     try {
       // generate owns the mechanism and THROWS only on a transport error; empty output comes back as
       // an empty `text` that flows through parse's unparseable branch to the same fail-soft verdict.
-      const { text } = await generate('router', {
+      const { text, model, usage } = await generate('router', {
         system: this.buildSystemPrompt(catalogue),
         prompt: this.buildPrompt(batch, context),
         temperature: 0,
         maxOutputTokens: ROUTER_MAX_OUTPUT_TOKENS,
       });
+
+      // Report telemetry for the completed call so the hub can stamp model/usage on the manual `intent`
+      // span. Out-of-band (a sink) so the verdict return stays the router's only contract. Guarded —
+      // observability must never perturb the fail-soft policy.
+      try {
+        onTelemetry?.({ model, usage });
+      } catch {
+        /* swallow: tracing never affects routing */
+      }
 
       return this.parse(text, catalogue);
     } catch (err) {

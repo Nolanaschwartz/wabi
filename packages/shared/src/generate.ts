@@ -82,6 +82,17 @@ export interface GenerateResult {
   latencyMs: number;
 }
 
+/**
+ * A single completed LLM call's telemetry — the resolved model id and its token usage. Reported
+ * OUT-OF-BAND (via an optional sink) by the safety/router seams whose primary return is a verdict, so
+ * a tracer can stamp model/usage on the manual generation span WITHOUT those seams depending on the
+ * tracing module. Model id and token counts are operational metadata, not personal data.
+ */
+export interface GenerationCallTelemetry {
+  model: string;
+  usage?: GenerateUsage;
+}
+
 type RawUsage = { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
 
 /** Sum the per-attempt counts, then drop any field no attempt reported (so absent != 0). */
