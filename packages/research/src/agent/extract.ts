@@ -1,6 +1,4 @@
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { extractMaxTokens } from '../config';
 import { Paper, Candidate } from '../types';
 
@@ -26,14 +24,13 @@ export interface ExtractResult { candidate: Candidate | null; tokens: number }
  * audience-neutral (no game-specific framing — that's coaching-time work) and the sourceText must be
  * a VERBATIM quote, validated here as an actual substring so faithfulnessCheck can't be gamed. */
 export async function extract(paper: Paper, body: string): Promise<ExtractResult> {
-  const cfg = getProvider('research');
-  const openai = createOpenAI({ baseURL: cfg.baseUrl, apiKey: cfg.apiKey });
-
   let text = '';
   let tokens = 0;
   try {
-    const out = await generateText({
-      model: openai(cfg.model),
+    // generate owns the mechanism (lazy provider resolution, the client, the call); extract keeps its
+    // role, its cap, and its fail policy. No retry-on-empty here — a starved/empty result just maps to
+    // null below, same as before. The verbatim-substring + JSON checks stay this module's job.
+    const out = await generate('research', {
       prompt:
         `From the source below, extract ONE transferable, actionable coping/wellbeing technique, ` +
         `or return exactly "null" if there is no clean, safe, self-contained technique.\n` +

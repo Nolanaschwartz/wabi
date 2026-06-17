@@ -4,7 +4,11 @@
     "declaration": true, "sourceMap": true, "strict": true, "esModuleInterop": true,
     "skipLibCheck": true, "forceConsistentCasingInFileNames": true,
     "experimentalDecorators": true, "emitDecoratorMetadata": true,
-    "outDir": "dist", "rootDir": "src"
+    "outDir": "dist", "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      "@wabi/shared/generate": ["node_modules/@wabi/shared/dist/generate"]
+    }
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]
