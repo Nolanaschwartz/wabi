@@ -23,7 +23,10 @@ overrides everything.
     crisis follow-up, check-ins, session-mining/research crons, Strategy demote
   - Must be **always-on** (persistent gateway + worker) — never serverless (ADR-0020)
 - **`web`** — Next.js 15 App Router: landing, Discord OAuth (+ consent + trial + `User`
-  creation), Stripe checkout, dashboard, `/admin/drafts` Strategy review. lucia sessions.
+  creation), Stripe checkout, dashboard, `/admin/strategies` Strategy review. lucia sessions.
+- **`research`** — NestJS service (:3002, ADR-0034). Always-on; mines PubMed/medRxiv for
+  evidence-based techniques and submits `StrategyDraft`s to the bot's `strategy-admin` API
+  for human review (ADR-0012); never writes the DB directly.
 - **`shared`** — plain TypeScript: types, constants, the access resolver.
 
 ### Self-hosted data stores (ADR-0009)
@@ -54,8 +57,9 @@ overrides everything.
                          Railway project (private networking)
   ┌──────────────────────────────────────────────────────────────────┐
   │                                                                    │
-  │   web (Next.js) ── public HTTPS                                    │
-  │   bot (NestJS)  ── public: POST /webhook/stripe only              │
+  │   web (Next.js)      ── public HTTPS                              │
+  │   bot (NestJS)       ── public: POST /webhook/stripe only         │
+  │   research (NestJS)  ── internal :3002; → bot strategy-admin API  │
   │     │                                                              │
   │     ├── Postgres   (private)        ── pg-boss jobs live here     │
   │     ├── Redis      (private, no persistence)                      │
@@ -182,4 +186,12 @@ delete · 0005 paid-only + safety carveout · 0006 layered crisis detection ·
 web-first onboarding · **0016** ephemeral buffer + session-end memory · **0017**
 self-hosted embeddings · **0018** durable pg-boss jobs · **0019** NestJS backend ·
 **0020** deployment/ops (Railway) · **0021** graceful degradation + safety floor ·
-**0022** observability + liveness · **0025** hybrid graph+vector memory (neo4j)
+**0022** observability + liveness · **0023** served-region scope + crisis resource
+coverage · **0024** eval content retention in Langfuse · **0025** hybrid graph+vector
+memory (neo4j) · **0026** inner-state log commands not access-gated · **0027**
+engagement is the unit behind streak/xp/wellness · **0028** free-text inner-state
+crosses crisis screening · **0029** free-text inner-state feeds derived memory through
+the screening gate · **0030** coaching safety floor stays in one service · **0031**
+screened-record write is transport-agnostic · **0032** spokes are uniform modules
+exposing tools · **0033** research strategy ingestion always queues · **0034** research
+worker topology · **0035** scheduled jobs declared in one registry

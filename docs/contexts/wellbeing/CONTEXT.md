@@ -31,10 +31,8 @@ A written reflection by the person in response to a prompt, optionally annotated
 _Avoid_: note, diary post
 
 **Screened-record write**:
-The single path every person-initiated free-text **Inner-state record** (a Mood note, a Tilt trigger, a Journal Entry) crosses on its way to storage — ephemeral reply, **Crisis Screening**, persist, consent-gated **Memory** derivation, then the first-use consent prompt — so the privacy choreography is identical regardless of which command surfaced the words (ADR-0028 calls it the "shared screened-record path"; ADR-0029 routes derived Memory through it). The "did this write carry minable free text" condition is decided **once** and gates both derivation and the consent prompt together. A structured-only log (a rating-only Mood) crosses it but derives no Memory; **Playtime** never enters it (no free-text field). Owned by one deep module, `InnerStateLogger`.
+The single path every person-initiated free-text **Inner-state record** (a Mood note, a Tilt trigger, a Journal Entry) crosses on its way to storage — ephemeral reply, **Crisis Screening**, persist, consent-gated **Memory** derivation, then the first-use consent prompt — so the privacy choreography is identical regardless of which command surfaced the words (ADR-0028/0029). The "did this write carry minable free text" condition is decided **once** and gates both derivation and the consent prompt together. A structured-only log (a rating-only Mood) crosses it but derives no Memory; **Playtime** never enters it (no free-text field). Owned by one deep module, `InnerStateLogger`. The write is **transport-agnostic** (ADR-0031): the module owns the persist → derive → consent tail and returns a renderable outcome, while **Crisis Screening** is carried in as a proof token (not re-run) — so the DM surface reuses the **Crisis Classifier** verdict that already screened the turn, and the slash surface screens inline. The "a write cannot skip screening" guarantee is upheld by the type (the tail is uncallable without the proof).
 _Avoid_: log helper, write wrapper, screened path (when precision matters)
-
-The write is **transport-agnostic** (ADR-0031): the module owns the persist → derive → consent tail and returns a renderable outcome, while **Crisis Screening** happens at the surface and is carried in as a proof token rather than re-run — so the DM surface reuses the **Crisis Classifier** verdict that already screened the turn, and the slash surface screens inline. The "a write cannot skip screening" guarantee is upheld by the type (the tail is uncallable without the proof), not by the module always re-screening.
 
 ### Coaching
 
@@ -43,11 +41,11 @@ Wabi's conversational support persona. It reflects, encourages, and suggests hab
 _Avoid_: therapist, counselor, therapy, treatment, clinician
 
 **Spoke**:
-A capability area a DM turn can be routed to — **journal**, **mood**, **tilt**, or the **AI Coach** itself (the universal fallback). A uniform deep module (ADR-0032): it exposes a set of **Tools**, handles a fresh turn via `invoke`, resumes a two-turn capture via `resume`, and either *handles* the turn or *falls through* to coaching. The hub (the DM router) owns the safety floor and the routing decision; each spoke owns its own Tools and capture logic. Coaching is the spoke a turn lands on when no other spoke is confident.
+A capability area a DM turn can be routed to — **journal**, **mood**, **tilt**, or the **AI Coach** itself (the universal fallback). A uniform deep module (ADR-0032): exposes a set of **Tools**, handles a fresh turn via `invoke`, resumes a two-turn capture via `resume`, and either *handles* the turn or *falls through* to coaching. The hub (the DM router) owns the safety floor and routing; each spoke owns its Tools and capture logic.
 _Avoid_: handler, command, feature (too generic)
 
 **Tool**:
-A single capability a **Spoke** exposes and the intent router selects — e.g. journal's `save_entry`, `get_entry`, `give_prompt`. Each Tool carries its own access tier (`any` for reads of one's own data, `active` for writes and new logging — ADR-0011), and may *arm a floor* for a two-turn capture. Tools are first-class across every spoke, not journal-only; adding one is a single declaration the router's prompt is generated from (ADR-0032).
+A single capability a **Spoke** exposes and the intent router selects — e.g. journal's `save_entry`, `get_entry`, `give_prompt`. Carries its own access tier (`any` for reads, `active` for writes and new logging — ADR-0011); may *arm a floor* for a two-turn capture. Adding one is a single declaration the router's prompt is generated from (ADR-0032).
 _Avoid_: action, command, function (when precision matters), intent (that is which Spoke, not which capability)
 
 **Check-in**:
