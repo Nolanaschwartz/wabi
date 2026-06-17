@@ -1,5 +1,11 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
-import { createLangfuseTracing, type LangfuseTracing, type Tracer } from '@wabi/shared/otel';
+import {
+  createLangfuseTracing,
+  createLangfuseScorer,
+  type LangfuseTracing,
+  type LangfuseScorer,
+  type Tracer,
+} from '@wabi/shared/otel';
 import { JsonLogger } from '../../lib/json-logger';
 import { LangfuseTracer } from './langfuse-tracer.service';
 
@@ -36,6 +42,7 @@ function flushTimeoutMs(): number {
 export class OtelTracingService implements OnApplicationShutdown {
   private readonly logger = new JsonLogger(OtelTracingService.name);
   private readonly tracing: LangfuseTracing;
+  private readonly scorer: LangfuseScorer;
 
   constructor(private readonly langfuseTracer: LangfuseTracer) {
     // The crisis backstop (ADR-0024) rides on the export filter: a crisis-latched trace drops its
@@ -45,6 +52,9 @@ export class OtelTracingService implements OnApplicationShutdown {
       sampleRate: resolveSampleRate(),
       shouldExportSpan: this.langfuseTracer.shouldExportSpan,
     });
+    // Per-turn quality scores via the official client — posted independent of the span sampler, so
+    // every turn is scored even when its spans are sampled out (ADR-0038).
+    this.scorer = createLangfuseScorer();
   }
 
   // The isolated provider's tracer, handed to the below-gate coach `generate` call as the AI SDK's
@@ -54,7 +64,13 @@ export class OtelTracingService implements OnApplicationShutdown {
     return this.tracing.tracer;
   }
 
+  // Emit a content-free NUMERIC score on the turn trace (e.g. latency_sla, reply_present). Fail-open.
+  score(traceId: string, name: string, value: number): void {
+    this.scorer.score({ traceId, name, value });
+  }
+
   async onApplicationShutdown(): Promise<void> {
-    await this.tracing.shutdown(flushTimeoutMs());
+    // Both the span exporter and the score client flush before the process exits (ADR-0038/0021).
+    await Promise.all([this.tracing.shutdown(flushTimeoutMs()), this.scorer.flush()]);
   }
 }

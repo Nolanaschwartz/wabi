@@ -18,7 +18,7 @@ describe('CoachHandler', () => {
   let coach: { generateDetailed: jest.Mock };
   let sessionBuffer: { append: jest.Mock };
   let langfuseTracer: { span: jest.Mock; score: jest.Mock; traceObservation: jest.Mock; latchCrisis: jest.Mock };
-  let otelTracing: { tracer: unknown };
+  let otelTracing: { tracer: unknown; score: jest.Mock };
   let memoryStore: { search: jest.Mock; deriveAndStore: jest.Mock };
   let habitEngagement: { record: jest.Mock };
 
@@ -44,7 +44,7 @@ describe('CoachHandler', () => {
     };
     sessionBuffer = { append: jest.fn().mockResolvedValue(undefined) };
     langfuseTracer = { span: jest.fn(), score: jest.fn(), traceObservation: jest.fn(), latchCrisis: jest.fn() };
-    otelTracing = { tracer: ISOLATED_TRACER };
+    otelTracing = { tracer: ISOLATED_TRACER, score: jest.fn() };
     memoryStore = {
       search: jest.fn().mockResolvedValue([]),
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
@@ -193,7 +193,7 @@ describe('CoachHandler', () => {
   it('records a latency-SLA score and a reply-present score on a successful turn', async () => {
     await handler.handle(baseCtx());
 
-    const scores = langfuseTracer.score.mock.calls.map((c) => ({ name: c[1], value: c[2], traceId: c[0] }));
+    const scores = otelTracing.score.mock.calls.map((c) => ({ traceId: c[0], name: c[1], value: c[2] }));
     const latency = scores.find((s) => s.name === 'latency_sla');
     const present = scores.find((s) => s.name === 'reply_present');
     expect(latency).toBeDefined();
@@ -206,11 +206,11 @@ describe('CoachHandler', () => {
 
     await handler.handle(baseCtx());
 
-    expect(langfuseTracer.score).toHaveBeenCalledWith('trace-1', 'reply_present', 0);
+    expect(otelTracing.score).toHaveBeenCalledWith('trace-1', 'reply_present', 0);
   });
 
   it('still replies when scoring throws (hot-path isolation)', async () => {
-    langfuseTracer.score.mockImplementation(() => {
+    otelTracing.score.mockImplementation(() => {
       throw new Error('score down');
     });
     const ctx = baseCtx();

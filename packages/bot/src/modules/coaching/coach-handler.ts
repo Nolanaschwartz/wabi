@@ -172,12 +172,14 @@ export class CoachHandler implements Spoke {
     void this.memoryStore.deriveAndStore(userId, `${message.content} | ${reply}`);
   }
 
-  // Record the turn's quality scores. Wrapped so a scoring failure can never break the hot path
-  // (ADR-0021) — the tracer also swallows internally, this is belt-and-suspenders.
+  // Record the turn's quality scores via @langfuse/client (ADR-0038) — posted independent of the span
+  // sampler, so every turn is scored even when its spans are sampled out. Emitted below the crisis gate
+  // (inherently non-crisis). Wrapped so a scoring failure can never break the hot path (ADR-0021) — the
+  // scorer also swallows internally, this is belt-and-suspenders.
   private recordScores(traceId: string, coachLatencyMs: number, replyPresent: 0 | 1): void {
     try {
-      this.langfuseTracer.score(traceId, 'latency_sla', coachLatencyMs <= COACH_LATENCY_SLA_MS ? 1 : 0);
-      this.langfuseTracer.score(traceId, 'reply_present', replyPresent);
+      this.otelTracing.score(traceId, 'latency_sla', coachLatencyMs <= COACH_LATENCY_SLA_MS ? 1 : 0);
+      this.otelTracing.score(traceId, 'reply_present', replyPresent);
     } catch (err) {
       this.logger.warn('scoring failed', { error: err instanceof Error ? err.message : String(err) });
     }

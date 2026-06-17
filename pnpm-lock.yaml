@@ -156,6 +156,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.68
         version: 3.0.68(zod@4.4.3)
+      '@langfuse/client':
+        specifier: ^5.4.1
+        version: 5.4.1(@opentelemetry/api@1.9.1)
       '@langfuse/otel':
         specifier: ^5.4.1
         version: 5.4.1(@opentelemetry/api@1.9.1)(@opentelemetry/core@2.8.0(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.219.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.8.0(@opentelemetry/api@1.9.1))
@@ -1007,6 +1010,11 @@ packages:
 
   '@kwsites/file-exists@1.1.1':
     resolution: {integrity: sha512-m9/5YGR18lIwxSFDwfE3oA7bWuq9kdau6ugN4H2rJeyhFQZcG9AgSHkQtSD15a8WvTgfz9aikZMrKPHvbpqFiw==}
+
+  '@langfuse/client@5.4.1':
+    resolution: {integrity: sha512-uANJfL52Y3zhN5wjQUsTVcOd4bmHoTqpRcpfxlbEyzjUCOhVyQymmP88hshbNHD+JfJa2sYLaHpsvt6owfVD7A==}
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
 
   '@langfuse/core@5.4.1':
     resolution: {integrity: sha512-TjaRTr9fGqaWuyYKFSezKxN4DWAaK/lq//hRMw8rQKFkZUs6vTgUODxqZTFTR6np5VnLVw+eZLlnHROPKbXqdg==}
@@ -3801,6 +3809,10 @@ packages:
     resolution: {integrity: sha512-mo+QTzKlx8R7E5ylSXxWzGoXoZbOsRMpyitcht8By2KHvMbf3tjwosZ/Mu/XYU6UuJ3VZnODIrak5ZrPiPyB6A==}
     engines: {node: '>= 10.16.0'}
 
+  mustache@4.2.0:
+    resolution: {integrity: sha512-71ippSywq5Yb7/tVYyGbkBggbU8H3u5Rz56fH60jGFgr8uHwxs+aSKeqmluIVzM0m0kB7xQjKS6qPfd0b2ZoqQ==}
+    hasBin: true
+
   mute-stream@2.0.0:
     resolution: {integrity: sha512-WWdIxpyjEn+FhQJQQv9aQAYlHoNVdzIzUySNV1gHUPDSdZJ3yZn7pAAbQcV7B56Mvu881q9FZV+0Vx2xC44VWA==}
     engines: {node: ^18.17.0 || >=20.5.0}
@@ -5794,6 +5806,13 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+
+  '@langfuse/client@5.4.1(@opentelemetry/api@1.9.1)':
+    dependencies:
+      '@langfuse/core': 5.4.1(@opentelemetry/api@1.9.1)
+      '@langfuse/tracing': 5.4.1(@opentelemetry/api@1.9.1)
+      '@opentelemetry/api': 1.9.1
+      mustache: 4.2.0
 
   '@langfuse/core@5.4.1(@opentelemetry/api@1.9.1)':
     dependencies:
@@ -8707,6 +8726,8 @@ snapshots:
       busboy: 1.6.0
       concat-stream: 2.0.0
       type-is: 1.6.18
+
+  mustache@4.2.0: {}
 
   mute-stream@2.0.0: {}
 

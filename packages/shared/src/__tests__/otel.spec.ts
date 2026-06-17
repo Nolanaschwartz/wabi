@@ -1,4 +1,9 @@
-import { createLangfuseTracing, startActiveObservation, getActiveTraceId } from '../otel';
+import {
+  createLangfuseTracing,
+  createLangfuseScorer,
+  startActiveObservation,
+  getActiveTraceId,
+} from '../otel';
 
 describe('createLangfuseTracing', () => {
   const savedEnv = { ...process.env };
@@ -122,5 +127,57 @@ describe('createLangfuseTracing', () => {
 
     expect(active).toMatch(/^[0-9a-f]{32}$/);
     await tracing.shutdown(200);
+  });
+});
+
+describe('createLangfuseScorer', () => {
+  const savedEnv = { ...process.env };
+  afterEach(() => {
+    process.env = { ...savedEnv };
+  });
+
+  it('emits a NUMERIC score keyed on `${traceId}-${name}` for idempotency', () => {
+    const create = jest.fn();
+    const client = { score: { create }, flush: jest.fn().mockResolvedValue(undefined) };
+
+    const scorer = createLangfuseScorer({ client });
+    scorer.score({ traceId: 'trace-1', name: 'latency_sla', value: 1 });
+
+    expect(create).toHaveBeenCalledWith({
+      id: 'trace-1-latency_sla',
+      traceId: 'trace-1',
+      name: 'latency_sla',
+      value: 1,
+      dataType: 'NUMERIC',
+    });
+  });
+
+  it('flush delegates to the client', async () => {
+    const flush = jest.fn().mockResolvedValue(undefined);
+    const scorer = createLangfuseScorer({ client: { score: { create: jest.fn() }, flush } });
+    await scorer.flush();
+    expect(flush).toHaveBeenCalled();
+  });
+
+  it('is fail-open: a client error never propagates', () => {
+    const scorer = createLangfuseScorer({
+      client: {
+        score: {
+          create: () => {
+            throw new Error('langfuse down');
+          },
+        },
+        flush: jest.fn().mockResolvedValue(undefined),
+      },
+    });
+    expect(() => scorer.score({ traceId: 't', name: 'reply_present', value: 0 })).not.toThrow();
+  });
+
+  it('is a no-op when LANGFUSE_* creds are absent', async () => {
+    delete process.env.LANGFUSE_PUBLIC_KEY;
+    delete process.env.LANGFUSE_SECRET_KEY;
+    const scorer = createLangfuseScorer();
+    expect(() => scorer.score({ traceId: 't', name: 'reply_present', value: 1 })).not.toThrow();
+    await expect(scorer.flush()).resolves.toBeUndefined();
   });
 });

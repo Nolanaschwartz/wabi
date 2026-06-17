@@ -203,7 +203,7 @@ describe('CoachingService', () => {
       langfuseTracer,
       memoryStore,
       habitEngagement,
-      { tracer: {} } as any,
+      { tracer: {}, score: () => {} } as any,
     );
     // Journal handler is mocked, but the router is REAL — so a confident inline journal verdict really
     // routes here (proved below). Most tests drive the coach path (intent defaults to coach/0).

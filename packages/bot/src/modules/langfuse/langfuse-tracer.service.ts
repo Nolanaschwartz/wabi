@@ -173,40 +173,6 @@ export class LangfuseTracer implements OnApplicationShutdown {
     this.ingest.post('span', { batch: envelope.batch });
   }
 
-  score(
-    traceId: string,
-    name: string,
-    value: number,
-    isCrisis?: boolean,
-  ): void {
-    if (!this.localFullFidelity) {
-      if (isCrisis) this.latchCrisis(traceId);
-      if (this.crisisTurns.has(traceId)) return;
-    }
-    if (!this.enabled) return;
-
-    // Full-fidelity, NOT span-sampled: aggregate quality/SLA rates need every turn, and a score is
-    // content-free so there is no privacy/volume reason to drop it. The content-free parent trace is
-    // upserted alongside so the score is never orphaned on a turn whose content spans were sampled out.
-    const timestamp = new Date().toISOString();
-    this.ingest.post('score-create', {
-      batch: [
-        {
-          id: crypto.randomUUID(),
-          type: 'trace-create',
-          timestamp,
-          body: { id: traceId, name: 'turn' },
-        },
-        {
-          id: crypto.randomUUID(),
-          type: 'score-create',
-          timestamp,
-          body: { id: `${traceId}-${name}`, traceId, name, value, dataType: 'NUMERIC' },
-        },
-      ],
-    });
-  }
-
   // Latch a turn as crisis (bounded FIFO so it can't grow unbounded over the process lifetime). Public
   // so the orchestrator can latch SYNCHRONOUSLY at the `classification === 'crisis'` short-circuit —
   // before any span of the turn ends — guaranteeing the export-time drop sees the latch (ADR-0024).

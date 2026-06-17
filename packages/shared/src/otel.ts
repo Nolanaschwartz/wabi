@@ -4,6 +4,7 @@ import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 import { TraceIdRatioBasedSampler, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { LangfuseSpanProcessor, type ShouldExportSpan } from '@langfuse/otel';
 import { setLangfuseTracerProvider } from '@langfuse/tracing';
+import { LangfuseClient } from '@langfuse/client';
 
 // Re-export the manual-tracing helpers through this single seam so the rest of the monorepo never
 // imports `@langfuse/*` directly — keeping the OpenTelemetry dependency isolated behind `./otel`.
@@ -99,4 +100,64 @@ export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): Langf
     // Truly exceptional (provider construction failed) — fall back to the global no-op tracer.
     return noopHandle(serviceName);
   }
+}
+
+/**
+ * Content-free per-turn quality scoring via the official `@langfuse/client` (ADR-0038).
+ *
+ * Scores post to the scores endpoint independent of the span sampler, so every turn is scored even
+ * when its spans are sampled out. They are emitted below the crisis gate (inherently non-crisis), so
+ * no crisis gating is needed here — and the `turn` root already creates the trace, so no content-free
+ * trace-upsert hack. The `id` (`${traceId}-${name}`) preserves idempotency. Fail-open (ADR-0021):
+ * missing `LANGFUSE_*` creds or any error yields a no-op scorer.
+ */
+export interface LangfuseScorer {
+  score(params: { traceId: string; name: string; value: number }): void;
+  flush(): Promise<void>;
+}
+
+// Minimal structural seam over LangfuseClient so a test can inject a fake and assert the emitted body.
+export interface ScoreClientLike {
+  score: {
+    create(body: {
+      id?: string;
+      traceId?: string;
+      name: string;
+      value: number;
+      dataType?: string;
+    }): void;
+  };
+  flush(): Promise<void>;
+}
+
+export function createLangfuseScorer(opts?: { client?: ScoreClientLike }): LangfuseScorer {
+  const noop: LangfuseScorer = { score: () => {}, flush: async () => {} };
+
+  let client = opts?.client;
+  if (!client) {
+    if (!process.env.LANGFUSE_PUBLIC_KEY || !process.env.LANGFUSE_SECRET_KEY) return noop;
+    try {
+      client = new LangfuseClient() as unknown as ScoreClientLike;
+    } catch {
+      return noop;
+    }
+  }
+
+  const c = client;
+  return {
+    score: ({ traceId, name, value }) => {
+      try {
+        c.score.create({ id: `${traceId}-${name}`, traceId, name, value, dataType: 'NUMERIC' });
+      } catch {
+        // fail-open: a scoring failure must never break the hot path.
+      }
+    },
+    flush: async () => {
+      try {
+        await c.flush();
+      } catch {
+        // fail-open
+      }
+    },
+  };
 }

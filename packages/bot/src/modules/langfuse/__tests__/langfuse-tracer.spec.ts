@@ -49,12 +49,6 @@ describe('LangfuseTracer', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it('skips crisis scores in production', () => {
-    process.env.NODE_ENV = 'production';
-    enabledTracer().score('test-1', 'safety', 0.5, true);
-    expect(global.fetch).not.toHaveBeenCalled();
-  });
-
   // Local-dev full fidelity (NODE_ENV !== 'production'): crisis content IS traced for debugging. The
   // user explicitly opted out of redaction outside prod; the prod drop above is the safety default.
   it('traces crisis spans outside production (local full fidelity)', () => {
@@ -72,44 +66,16 @@ describe('LangfuseTracer', () => {
     expect((global.fetch as jest.Mock).mock.calls.length).toBe(2);
   });
 
-  it('posts a score-create event attached to the trace id', () => {
-    enabledTracer().score('test-1', 'latency_sla', 1);
-    const event = batch().find((e: any) => e.type === 'score-create');
-    expect(event.body.traceId).toBe('test-1');
-    expect(event.body.name).toBe('latency_sla');
-    expect(event.body.value).toBe(1);
-  });
-
-  // Scores carry the content-free parent trace upsert so a score is never orphaned on a turn whose
-  // (heavy, content-bearing) spans were sampled out.
-  it('emits the content-free parent trace alongside the score', () => {
-    enabledTracer().score('test-1', 'latency_sla', 1);
-    const parent = batch().find((e: any) => e.type === 'trace-create');
-    expect(parent.body.id).toBe('test-1');
-    expect(parent.body).not.toHaveProperty('input');
-    expect(parent.body).not.toHaveProperty('output');
-  });
-
-  // Eval scores are full-fidelity (NOT span-sampled): aggregate quality/SLA rates need every turn, and
-  // a score is content-free so there is no privacy/volume reason to drop it. (Finding #2.)
-  it('records scores on every turn even when content spans are unsampled (rate 0)', () => {
-    delete process.env.NODE_ENV;
-    process.env.LANGFUSE_SAMPLE_RATE = '0';
-    enabledTracer().score('test-1', 'latency_sla', 1);
-    const event = batch().find((e: any) => e.type === 'score-create');
-    expect(event.body.value).toBe(1);
-  });
-
-  // Central crisis latch: once ANY span of a turn is flagged crisis, every later span/score for that
-  // traceId is suppressed — a new call site that forgets isCrisis cannot leak crisis content. (Finding #3.)
-  it('suppresses all later spans and scores of a turn once it is flagged crisis', () => {
+  // Central crisis latch: once ANY span of a turn is flagged crisis, every later span for that traceId
+  // is suppressed — a new call site that forgets isCrisis cannot leak crisis content. (Finding #3.)
+  // (Per-turn scoring moved to @langfuse/client in slice 04; scores are emitted below the gate.)
+  it('suppresses all later spans of a turn once it is flagged crisis', () => {
     process.env.NODE_ENV = 'production';
     process.env.LANGFUSE_SAMPLE_RATE = '1'; // isolate the latch from prod sampling
     const t = enabledTracer();
     t.span({ traceId: 'c1', span: 'classify', input: 'crisis text', output: 'crisis', isCrisis: true });
-    // These later calls do NOT set isCrisis, yet must still be dropped because the turn is latched.
+    // This later call does NOT set isCrisis, yet must still be dropped because the turn is latched.
     t.span({ traceId: 'c1', span: 'coach', input: 'verbatim secret', output: 'verbatim secret' });
-    t.score('c1', 'reply_present', 1);
     expect(global.fetch).not.toHaveBeenCalled();
   });
 

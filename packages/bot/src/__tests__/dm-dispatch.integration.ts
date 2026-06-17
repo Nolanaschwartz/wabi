@@ -106,7 +106,7 @@ describe('DM dispatch integration', () => {
       langfuseTracer,
       memoryStore,
       habitEngagement,
-      { tracer: {} } as any,
+      { tracer: {}, score: () => {} } as any,
     );
     // Journal/tilt/mood spokes are unused on this coach-path test (intent coach/0, nothing pending),
     // but the router projects every registered spoke into its catalogue at construction, so each must
