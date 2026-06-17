@@ -156,6 +156,13 @@ export default function AccountDataPanel() {
     if (!res.ok) throw new Error('delete-data failed');
   };
 
+  const deleteAccount = async () => {
+    const res = await fetch('/api/account/delete', { method: 'POST' });
+    if (!res.ok) throw new Error('delete-account failed');
+    // The account (and session) are gone — leave the dashboard for the public landing page.
+    window.location.href = '/';
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between rounded-md border border-ink-2 bg-ink-0 p-4">
@@ -185,6 +192,16 @@ export default function AccountDataPanel() {
         actionLabel="Delete my data"
         successMessage="Your data has been deleted. You're starting fresh."
         onConfirm={deleteData}
+      />
+
+      <DangerAction
+        title="Delete my account"
+        description="Permanently delete your account and everything in it. Your subscription ends immediately with no refund, and your account can't be recovered — you'd start over from scratch if you ever came back."
+        confirmWord="DELETE"
+        confirmPrompt="This ends your subscription now (no refund) and can't be undone."
+        actionLabel="Delete my account"
+        successMessage="Your account has been deleted. Take care."
+        onConfirm={deleteAccount}
       />
     </div>
   );
