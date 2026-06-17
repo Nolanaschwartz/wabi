@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import MoodChart from './MoodChart';
+import MoodCalendar from './MoodCalendar';
 import AccountDataPanel from './AccountDataPanel';
 import type { MoodDayPoint } from '@/lib/mood-series';
 
@@ -15,6 +16,10 @@ interface DashboardViewProps {
   user: { discordId: string; email: string | null };
   moods: Array<{ rating: number; emoji: string; createdAt: Date }>;
   moodSeries: MoodDayPoint[];
+  moodGrid: MoodDayPoint[];
+  calendarYear: number;
+  calendarMonth: number;
+  today: string;
   playtimes: Array<{ duration: number; createdAt: Date }>;
   streak: number;
   billing: BillingState;
@@ -87,7 +92,7 @@ function BillingPanel({ billing }: { billing: BillingState }) {
   );
 }
 
-export default function DashboardView({ user, moods, moodSeries, playtimes, streak, billing }: DashboardViewProps) {
+export default function DashboardView({ user, moods, moodSeries, moodGrid, calendarYear, calendarMonth, today, playtimes, streak, billing }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<'mood' | 'playtime' | 'streak' | 'account'>('mood');
   const [moodWindow, setMoodWindow] = useState<7 | 30>(7);
 
@@ -176,17 +181,12 @@ export default function DashboardView({ user, moods, moodSeries, playtimes, stre
                   ))}
                 </div>
                 <MoodChart data={chartSeries} />
-                {moods.map((mood, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-center justify-between rounded-md border border-ink-2 bg-ink-0 p-3"
-                  >
-                    <span className="text-2xl">{mood.emoji}</span>
-                    <span className="font-mono text-xs text-bone-2">
-                      {new Date(mood.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
-                ))}
+                <MoodCalendar
+                  days={moodGrid}
+                  year={calendarYear}
+                  month={calendarMonth}
+                  today={today}
+                />
               </div>
             )}
 
