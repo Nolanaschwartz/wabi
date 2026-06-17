@@ -49,7 +49,10 @@ export class ResearchAgent {
     const psyPapers = await this.deps.psyarxiv.search(topic, this.bounds.maxPapersPerTopic)
       .catch((e) => { this.log.info('psyarxiv search failed', { topic, err: (e as Error)?.message ?? String(e) }); return []; });
     const queue: Array<{ kind: SourceKind; id: string; paper?: Paper }> = [
-      ...pmids.map((id) => ({ kind: 'pubmed' as const, id })),
+      // Prefix direct search hits with `PMID:` so their id matches the form used everywhere else —
+      // discovery expansion, paper.sourceId, and the bot's ProcessedSource ledger key. A bare PMID
+      // here made seen() and `visited` miss, re-submitting the same paper every run (duplicate drafts).
+      ...pmids.map((id) => ({ kind: 'pubmed' as const, id: `PMID:${id}` })),
       ...medPapers.map((p) => ({ kind: 'medrxiv' as const, id: p.sourceId, paper: p })),
       ...psyPapers.map((p) => ({ kind: 'psyarxiv' as const, id: p.sourceId, paper: p })),
     ];
