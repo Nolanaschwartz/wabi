@@ -1,4 +1,4 @@
-import { GET, POST } from '../[...path]/route';
+import { GET, POST, PATCH, DELETE } from '../[...path]/route';
 
 jest.mock('@/lib/session', () => ({
   validateRequest: jest.fn(),
@@ -64,6 +64,81 @@ describe('admin research proxy', () => {
       'http://research:3002/admin/research/config',
       expect.objectContaining({
         method: 'GET',
+        headers: expect.objectContaining({ 'x-admin-secret': 'sekret' }),
+      }),
+    );
+  });
+
+  it('returns 403 for a non-operator PATCH without calling the worker', async () => {
+    validateRequest.mockResolvedValue({ user: { discordId: 'someone_else' }, session: {} });
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as any;
+
+    const res = await PATCH({ json: async () => ({ enabled: false }) } as any, {
+      params: Promise.resolve({ path: ['topics', 't1'] }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 for a non-operator DELETE without calling the worker', async () => {
+    validateRequest.mockResolvedValue({ user: { discordId: 'someone_else' }, session: {} });
+    const fetchSpy = jest.fn();
+    global.fetch = fetchSpy as any;
+
+    const res = await DELETE({} as any, {
+      params: Promise.resolve({ path: ['topics', 't1'] }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('forwards an operator PATCH to the worker with the shared secret and body', async () => {
+    validateRequest.mockResolvedValue({ user: { discordId: 'op_1' }, session: {} });
+    const fetchSpy = jest.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 't1', enabled: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    global.fetch = fetchSpy as any;
+
+    const res = await PATCH({ json: async () => ({ enabled: false }) } as any, {
+      params: Promise.resolve({ path: ['topics', 't1'] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://research:3002/admin/research/topics/t1',
+      expect.objectContaining({
+        method: 'PATCH',
+        headers: expect.objectContaining({ 'x-admin-secret': 'sekret' }),
+        body: JSON.stringify({ enabled: false }),
+      }),
+    );
+  });
+
+  it('forwards an operator DELETE to the worker with the shared secret', async () => {
+    validateRequest.mockResolvedValue({ user: { discordId: 'op_1' }, session: {} });
+    const fetchSpy = jest.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 't1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    global.fetch = fetchSpy as any;
+
+    const res = await DELETE({} as any, {
+      params: Promise.resolve({ path: ['topics', 't1'] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://research:3002/admin/research/topics/t1',
+      expect.objectContaining({
+        method: 'DELETE',
         headers: expect.objectContaining({ 'x-admin-secret': 'sekret' }),
       }),
     );

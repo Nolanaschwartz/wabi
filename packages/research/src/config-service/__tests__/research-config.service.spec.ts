@@ -10,6 +10,9 @@ const prismaMock = {
     count: jest.fn(),
     createMany: jest.fn(),
     findMany: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
   },
 };
 
@@ -79,6 +82,95 @@ describe('ResearchConfigService', () => {
 
       expect(prismaMock.researchConfig.findUnique).toHaveBeenCalledWith({ where: { id: 'singleton' } });
       expect(result).toEqual({ config, topics });
+    });
+  });
+
+  describe('getEnabledTopics', () => {
+    it('returns only enabled topics, ordered by createdAt asc', async () => {
+      const enabled = [{ id: 't1', text: 'a', enabled: true }];
+      prismaMock.researchTopic.findMany.mockResolvedValue(enabled);
+
+      const result = await service.getEnabledTopics();
+
+      expect(prismaMock.researchTopic.findMany).toHaveBeenCalledWith({
+        where: { enabled: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(result).toEqual(enabled);
+    });
+  });
+
+  describe('createTopic', () => {
+    it('persists a new topic', async () => {
+      const created = { id: 't9', text: 'sleep hygiene', enabled: true };
+      prismaMock.researchTopic.create.mockResolvedValue(created);
+
+      const result = await service.createTopic('sleep hygiene');
+
+      expect(prismaMock.researchTopic.create).toHaveBeenCalledWith({ data: { text: 'sleep hygiene' } });
+      expect(result).toEqual(created);
+    });
+
+    it('rejects a duplicate text with a ConflictException (translates Prisma P2002)', async () => {
+      const { ConflictException } = require('@nestjs/common');
+      const p2002: any = new Error('Unique constraint failed');
+      p2002.code = 'P2002';
+      prismaMock.researchTopic.create.mockRejectedValue(p2002);
+
+      await expect(service.createTopic('dup')).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('rethrows non-unique-violation errors unchanged', async () => {
+      const other: any = new Error('connection lost');
+      prismaMock.researchTopic.create.mockRejectedValue(other);
+
+      await expect(service.createTopic('x')).rejects.toBe(other);
+    });
+  });
+
+  describe('updateTopic', () => {
+    it('updates text and/or enabled state', async () => {
+      const updated = { id: 't1', text: 'renamed', enabled: false };
+      prismaMock.researchTopic.update.mockResolvedValue(updated);
+
+      const result = await service.updateTopic('t1', { text: 'renamed', enabled: false });
+
+      expect(prismaMock.researchTopic.update).toHaveBeenCalledWith({
+        where: { id: 't1' },
+        data: { text: 'renamed', enabled: false },
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it('updates enabled alone without touching text', async () => {
+      prismaMock.researchTopic.update.mockResolvedValue({ id: 't1', text: 'a', enabled: false });
+
+      await service.updateTopic('t1', { enabled: false });
+
+      expect(prismaMock.researchTopic.update).toHaveBeenCalledWith({
+        where: { id: 't1' },
+        data: { enabled: false },
+      });
+    });
+
+    it('rejects an update that would duplicate another topic text (P2002 → Conflict)', async () => {
+      const { ConflictException } = require('@nestjs/common');
+      const p2002: any = new Error('Unique constraint failed');
+      p2002.code = 'P2002';
+      prismaMock.researchTopic.update.mockRejectedValue(p2002);
+
+      await expect(service.updateTopic('t1', { text: 'dup' })).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('deleteTopic', () => {
+    it('removes the topic', async () => {
+      prismaMock.researchTopic.delete.mockResolvedValue({ id: 't1', text: 'a', enabled: true });
+
+      const result = await service.deleteTopic('t1');
+
+      expect(prismaMock.researchTopic.delete).toHaveBeenCalledWith({ where: { id: 't1' } });
+      expect(result).toEqual({ id: 't1', text: 'a', enabled: true });
     });
   });
 });

@@ -65,3 +65,24 @@ export async function POST(
 	const body = await request.json().catch(() => ({}));
 	return forward("POST", path, body);
 }
+
+export async function PATCH(
+	request: NextRequest,
+	{ params }: { params: Promise<{ path: string[] }> },
+): Promise<NextResponse> {
+	const denied = await operatorGate();
+	if (denied) return denied;
+	const { path } = await params;
+	const body = await request.json().catch(() => ({}));
+	return forward("PATCH", path, body);
+}
+
+export async function DELETE(
+	_request: NextRequest,
+	{ params }: { params: Promise<{ path: string[] }> },
+): Promise<NextResponse> {
+	const denied = await operatorGate();
+	if (denied) return denied;
+	const { path } = await params;
+	return forward("DELETE", path);
+}

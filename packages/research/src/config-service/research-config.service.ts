@@ -1,6 +1,11 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { SEED_TOPICS } from '../seed-topics';
+
+/** True for the Prisma unique-constraint violation we translate into a 409. */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002';
+}
 
 const SINGLETON_ID = 'singleton';
 
@@ -50,5 +55,52 @@ export class ResearchConfigService implements OnModuleInit {
       prisma.researchTopic.findMany({ orderBy: { createdAt: 'asc' } }),
     ]);
     return { config, topics };
+  }
+
+  /**
+   * The runner's read: only enabled topics, oldest first. Disabled topics stay in the table
+   * (operator can re-enable) but never enter a run. Established now; the run itself lands later.
+   */
+  async getEnabledTopics(): Promise<unknown[]> {
+    return prisma.researchTopic.findMany({
+      where: { enabled: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /**
+   * Adds a topic. The model's `text @unique` is the integrity boundary; we catch the resulting
+   * P2002 and translate to a ConflictException so the admin surface returns 409 (mirrors the bot's
+   * strategy-admin dedupe) instead of leaking a raw Prisma error.
+   */
+  async createTopic(text: string): Promise<unknown> {
+    try {
+      return await prisma.researchTopic.create({ data: { text } });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new ConflictException({ status: 'duplicate', message: 'Topic already exists' });
+      }
+      throw err;
+    }
+  }
+
+  /** Updates a topic's text and/or enabled state. A text change can collide → 409 (as create). */
+  async updateTopic(id: string, data: { text?: string; enabled?: boolean }): Promise<unknown> {
+    const update: { text?: string; enabled?: boolean } = {};
+    if (data.text !== undefined) update.text = data.text;
+    if (data.enabled !== undefined) update.enabled = data.enabled;
+    try {
+      return await prisma.researchTopic.update({ where: { id }, data: update });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new ConflictException({ status: 'duplicate', message: 'Topic already exists' });
+      }
+      throw err;
+    }
+  }
+
+  /** Removes a topic outright. */
+  async deleteTopic(id: string): Promise<unknown> {
+    return prisma.researchTopic.delete({ where: { id } });
   }
 }
