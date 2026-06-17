@@ -1,15 +1,32 @@
 import { Bounds, Candidate, Paper, RunSummary, SourceKind } from '../types';
 import { Source } from '../sources/source';
 import { Logger, noopLogger } from '../util/logger';
+import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-tracer';
+import { StepTrace } from './relevance-gate';
 
 export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
    * The agent dispatches hydrate/fullText/expand to `sources.get(paper.sourceKind)` (ADR-0036). */
   sources: Map<SourceKind, Source>;
   seen: (sourceId: string) => Promise<boolean>;
-  gate: (abstract: string) => Promise<{ keep: boolean; tokens: number }>;
-  extract: (paper: Paper, body: string) => Promise<{ candidate: Candidate | null; tokens: number }>;
-  dedup: (candidate: Candidate, kept: Candidate[]) => Promise<{ duplicate: boolean; tokens: number }>;
+  gate: (abstract: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
+  extract: (paper: Paper, body: string) => Promise<{ candidate: Candidate | null; tokens: number; trace?: StepTrace }>;
+  dedup: (candidate: Candidate, kept: Candidate[]) => Promise<{ duplicate: boolean; tokens: number; trace?: StepTrace }>;
+}
+
+/** The structural slice of {@link ResearchTracer} the orchestrator uses. Kept as an interface (not the
+ * class) so the agent stays plain TS and a test can hand it a fake. */
+export interface AgentTracer {
+  run(input: RunTraceInput): void;
+  span(input: ResearchSpanInput): void;
+}
+
+/** Optional tracing wiring. The orchestrator owns the span tree; the tracer owns the transport. Absent
+ * → no tracing at all (the agent's pre-tracing behaviour). */
+export interface AgentTracing {
+  tracer: AgentTracer;
+  /** The trace id for the whole run — every span hangs under this parent. */
+  runId: string;
 }
 
 function emptySummary(): RunSummary {
@@ -23,7 +40,28 @@ export class ResearchAgent {
     private readonly deps: AgentDeps,
     private readonly bounds: Bounds,
     private readonly log: Logger = noopLogger,
+    private readonly tracing?: AgentTracing,
   ) {}
+
+  /** Emit one Langfuse span for a completed step, carrying its leaf data. Inert when no tracer is wired
+   * or the step produced no trace (a short-circuited dedup, a fail-open gate error). NEVER throws —
+   * tracing is additive and must never break a run (ADR-0021); a tracer error is swallowed + logged. */
+  private emitSpan(span: ResearchSpanName, trace: StepTrace | undefined): void {
+    if (!this.tracing || !trace) return;
+    try {
+      this.tracing.tracer.span({
+        runId: this.tracing.runId,
+        span,
+        input: trace.input,
+        output: trace.output,
+        model: trace.model,
+        latencyMs: trace.latencyMs,
+        usage: trace.usage,
+      });
+    } catch (err) {
+      this.log.debug('tracer span failed', { span, err: (err as Error)?.message ?? String(err) });
+    }
+  }
 
   async run(topic: string): Promise<{ candidates: Candidate[]; summary: RunSummary }> {
     const summary = emptySummary();
@@ -32,6 +70,16 @@ export class ResearchAgent {
     const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
     this.log.info('topic start', { topic });
+
+    // Upsert the run's parent trace so a paper-less run still appears. Guarded — a tracer error here
+    // must never abort the run (ADR-0021).
+    if (this.tracing) {
+      try {
+        this.tracing.tracer.run({ runId: this.tracing.runId, metadata: { topic } });
+      } catch (err) {
+        this.log.debug('tracer run failed', { err: (err as Error)?.message ?? String(err) });
+      }
+    }
 
     // Fan search out across every source (parallel within a source's own rate limiter). Fail-soft: a
     // source that throws logs `<kind> search failed` and contributes nothing — the run never aborts on
@@ -77,6 +125,7 @@ export class ResearchAgent {
 
         const gate = await this.deps.gate(paper.abstract);
         this.tokens += gate.tokens;
+        this.emitSpan('gate', gate.trace);
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
         if (!gate.keep) { summary.gatedOut++; papersRead++; this.log.info('gated out', { id: paper.sourceId }); continue; }
 
@@ -96,14 +145,16 @@ export class ResearchAgent {
         papersRead++;
         this.log.debug('body', { id: paper.sourceId, source: full ? 'fullText' : 'abstract', chars: body.length });
 
-        const { candidate, tokens } = await this.deps.extract(paper, body);
+        const { candidate, tokens, trace: extractTrace } = await this.deps.extract(paper, body);
         this.tokens += tokens;
+        this.emitSpan('extract', extractTrace);
         if (!candidate) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
         summary.extracted++;
         this.log.info('extracted', { id: paper.sourceId, title: candidate.title, tokens });
 
         const dd = await this.deps.dedup(candidate, kept);
         this.tokens += dd.tokens;
+        this.emitSpan('dedup', dd.trace);
         if (dd.duplicate) {
           summary.inRunDeduped++;
           this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });

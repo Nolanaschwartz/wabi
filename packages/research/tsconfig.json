@@ -7,7 +7,8 @@
     "outDir": "dist", "rootDir": "src",
     "baseUrl": ".",
     "paths": {
-      "@wabi/shared/generate": ["node_modules/@wabi/shared/dist/generate"]
+      "@wabi/shared/generate": ["node_modules/@wabi/shared/dist/generate"],
+      "@wabi/shared/langfuse": ["node_modules/@wabi/shared/dist/langfuse"]
     }
   },
   "include": ["src"],

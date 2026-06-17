@@ -1,6 +1,7 @@
 import { generate } from '@wabi/shared/generate';
 import { triageMaxTokens } from '../config';
 import { Candidate } from '../types';
+import { StepTrace } from './relevance-gate';
 
 const HIGH = 0.6;
 // Anything with non-trivial lexical overlap is ambiguous and goes to the LLM; only a clean
@@ -20,7 +21,7 @@ function jaccard(a: string, b: string): number {
 }
 const sig = (c: Candidate) => `${c.title} ${c.technique}`;
 
-export interface DedupResult { duplicate: boolean; tokens: number }
+export interface DedupResult { duplicate: boolean; tokens: number; trace?: StepTrace }
 
 /** In-run technique dedup with no embeddings (those live on the bot). Lexical prefilter decides the
  * clear cases; the triage LLM only adjudicates the ambiguous middle. */
@@ -41,15 +42,20 @@ export async function isDuplicateInRun(candidate: Candidate, kept: Candidate[]):
     // generate owns the mechanism (lazy provider resolution, the client, the call); dedup keeps its
     // role, its cap, and its fail policy. No retry-on-empty — an empty/starved reply maps to not-a-
     // duplicate below, same as a transport error, so a second attempt buys nothing on this path.
-    const { text, usage } = await generate('research-triage', {
-      prompt:
-        `Are these two coaching techniques essentially the same? Answer only "same" or "different".\n` +
-        `A: ${sig(candidate)}\nB: ${sig(best)}`,
+    const prompt =
+      `Are these two coaching techniques essentially the same? Answer only "same" or "different".\n` +
+      `A: ${sig(candidate)}\nB: ${sig(best)}`;
+    const { text, usage, model, latencyMs } = await generate('research-triage', {
+      prompt,
       maxOutputTokens: triageMaxTokens(),
     });
     // Empty/uncertain output (e.g. a reasoning model starved by the cap) reads as NOT duplicate,
     // the safe direction — keep the candidate rather than silently drop it on an unparseable answer.
-    return { duplicate: text.trim().toLowerCase().startsWith('same'), tokens: usage?.totalTokens ?? 0 };
+    return {
+      duplicate: text.trim().toLowerCase().startsWith('same'),
+      tokens: usage?.totalTokens ?? 0,
+      trace: { input: prompt, output: text, model, latencyMs, usage },
+    };
   } catch {
     return { duplicate: false, tokens: 0 };
   }
