@@ -1,6 +1,6 @@
 /**
- * Tiny structured logger for the research worker. Progress goes to STDERR so STDOUT stays clean for
- * the final run-summary JSON. Level is read lazily from RESEARCH_LOG_LEVEL on every call (CLAUDE.md:
+ * Tiny structured logger for the research worker. Progress goes to STDERR so it does not mix with
+ * any process-level output on STDOUT. Level is read lazily from RESEARCH_LOG_LEVEL on every call (CLAUDE.md:
  * never freeze env-derived state) — silent | info | debug, default info.
  */
 export type LogLevel = 'silent' | 'info' | 'debug';

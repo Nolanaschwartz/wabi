@@ -3,7 +3,6 @@
  * and the welcome-on-join path send this so the two can never drift apart.
  *
  * Onboarding entry point: the OAuth route starts Discord login → explicit consent → dashboard.
- * (There is no /onboard page; that was a dead link — issue #28.)
  */
 export function setupLinkMessage(baseUrl: string): string {
   const setupUrl = `${baseUrl}/api/auth/discord`;

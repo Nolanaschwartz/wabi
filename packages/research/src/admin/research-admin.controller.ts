@@ -24,9 +24,7 @@ import { isValidCron } from '../cron-compile/cron-compile';
 
 /**
  * Admin HTTP surface for the research worker (ADR-0034). All routes are behind the timing-safe
- * `x-admin-secret` guard; the web proxy is the only caller. Slice 01 exposed the read-only config;
- * slice 02 added topic CRUD; slices 03/04 added bounds + schedule; slice 05 adds the manual run
- * trigger and run history.
+ * `x-admin-secret` guard; the web proxy is the only caller.
  */
 @Controller('admin/research')
 @UseGuards(AdminGuard)

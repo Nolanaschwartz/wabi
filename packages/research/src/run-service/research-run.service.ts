@@ -213,7 +213,7 @@ export class ResearchRunService implements OnModuleInit {
    * Fail-safe: if the DB write throws (degraded), return `{ runId: null }` so the operator gets a
    * clear no-op rather than a 500 stack trace.
    *
-   * Fix 1 (ADR-0034): the `running` row is created BEFORE the enqueue, so if `send()` throws after
+   * (ADR-0034): the `running` row is created BEFORE the enqueue, so if `send()` throws after
    * a successful create the row would otherwise orphan as `running` and jam single-flight forever.
    * We finalize that row to `failed` before returning the degraded result, releasing the guard so
    * the next trigger can proceed. This is kept distinct from the create-itself-failed path (no row
@@ -266,7 +266,7 @@ export class ResearchRunService implements OnModuleInit {
   /**
    * The secondary single-flight guard: the currently-active run, if any.
    *
-   * Fix 2 (ADR-0034): a crash between creating the `running` row and finalizing it would otherwise
+   * (ADR-0034): a crash between creating the `running` row and finalizing it would otherwise
    * leave a permanent `running` row that wedges single-flight. So a `running` row whose `startedAt`
    * predates `now - runTimeoutMs` is treated as stale/abandoned and does NOT count as active — it is
    * reaped (best-effort finalized to `failed`) and a new run is allowed to proceed. The staleness

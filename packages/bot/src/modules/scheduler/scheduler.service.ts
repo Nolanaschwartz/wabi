@@ -17,14 +17,13 @@ export interface JobStatus {
 }
 
 /**
- * The bot's single pg-boss client and job seam. Before this, five services each constructed their
- * own `new PgBoss(connectionString)` — five connection pools and five copies of start/createQueue/
- * work/stop + graceful-degradation. They now register through one Scheduler: one pool, one
- * lifecycle, connection tuning in one place.
+ * The bot's single pg-boss client and job seam. Jobs are declared via {@link JobRegistry} (owners
+ * push a {@link JobDefinition} from `onModuleInit`) and bound to the live client by
+ * {@link drainRegistry} at application bootstrap, which records each outcome in {@link jobStatus}.
  *
- * Fails closed like everything else: if DATABASE_URL is absent or pg-boss can't start, the client
- * stays null and every register/enqueue call is a no-op (the bot still comes online, ADR-0019/0021).
- * Callers that must branch on degraded mode read `available`.
+ * Fails closed (ADR-0019/0021): if DATABASE_URL is absent or pg-boss can't start, the client stays
+ * null and every register/enqueue call is a no-op — the bot still comes online. Callers that must
+ * branch on degraded mode read `available`.
  */
 @Injectable()
 export class SchedulerService {

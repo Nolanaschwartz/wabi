@@ -4,7 +4,7 @@ Wabi degrades along a single principle: **the crisis tripwire → resources path
 
 ## The safety floor (zero dependencies)
 
-The crisis **tripwire** is in-process keyword/regex matching, and **Crisis Resources** are a **local file** (`crisis-resources.json`). So the tripwire → surface-resources path works even if Postgres, Redis, Mem0, Qdrant, embeddings, *and* the chat LLM are all down. Escalation-Event *logging* may be deferred/lost if Postgres is down, but **surfacing resources never is**. Safety has no runtime dependency.
+The crisis **tripwire** is in-process keyword/regex matching, and **Crisis Resources** are a **hardcoded `RESOURCES` const in `crisis-resources.service.ts`**, compiled into the bot image. So the tripwire → surface-resources path works even if Postgres, Redis, Mem0, Qdrant, embeddings, *and* the chat LLM are all down. Escalation-Event *logging* may be deferred/lost if Postgres is down, but **surfacing resources never is**. Safety has no runtime dependency.
 
 ## Graceful coach degradation (non-fatal)
 
@@ -29,7 +29,7 @@ A mental-health companion must keep its one hard promise (surface help in a cris
 ## Consequences
 
 - An LLM-provider outage means the bot **stops coaching** (benign messages included) rather than coaching unscreened — an accepted availability cost.
-- `crisis-resources.json` must ship in the bot image (not fetched at runtime) so it survives total backend outage.
+- Crisis resources are a hardcoded `RESOURCES` const in `crisis-resources.service.ts` and ship compiled into the bot image (no runtime fetch), so they survive total backend outage.
 
 ## Amendment (2026-06-07): neo4j joins the Mem0 degradation set (ADR-0025)
 

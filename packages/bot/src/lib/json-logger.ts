@@ -73,7 +73,7 @@ export class JsonLogger implements LoggerService {
       return { message, metadata: { _ctx: second } };
     }
 
-    // Error stack: logger.error('msg', err.stack) — treat as metadata
+    // Error object: logger.error('msg', err) — extracts message and stack into metadata
     if (second instanceof Error) {
       return { message, metadata: { error: second.message, stack: second.stack } };
     }

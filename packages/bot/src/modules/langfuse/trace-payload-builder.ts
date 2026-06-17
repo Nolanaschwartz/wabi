@@ -1,5 +1,5 @@
-// Single enumerated span vocabulary for a coaching turn. classify/intent/coach are wired now;
-// retrieval/memory are wired in later slices. Call sites reference this union, never ad-hoc strings.
+// Single enumerated span vocabulary for a coaching turn — classify, intent, coach, retrieval, and memory.
+// Call sites reference this union, never ad-hoc strings.
 import { compactUsage } from '../../lib/usage';
 
 export type SpanName = 'classify' | 'intent' | 'coach' | 'retrieval' | 'memory';

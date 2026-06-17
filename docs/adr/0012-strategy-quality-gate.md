@@ -1,6 +1,6 @@
 # Strategy library: trust-but-monitor, gated on source provenance (not LLM-claimed evidence)
 
-Wabi's Strategy library (Qdrant, ADR-0004) grows partly through automated pipelines (`research-cron`, `session-mining`). Because Strategies are coping advice served to people in distress (ADR-0001), what may auto-publish is tightly constrained.
+Wabi's Strategy library (Qdrant, ADR-0004) grows partly through automated pipelines (the research worker (ADR-0034) and the session sweeper's draft-submission path). Because Strategies are coping advice served to people in distress (ADR-0001), what may auto-publish is tightly constrained.
 
 ## The rule
 

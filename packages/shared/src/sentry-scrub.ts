@@ -3,9 +3,8 @@
  *
  * Wabi handles mental-health-adjacent personal data, so error payloads must never carry user
  * content into Sentry (ADR-0002/0017). This `beforeSend` scrubber is shared by the bot
- * (`@sentry/node`) and both web runtimes (`@sentry/nextjs`) so the redaction can never drift
- * between them — previously each maintained its own copy and they had already diverged (the bot
- * scrubbed `request.data`; web did not).
+ * (`@sentry/node`) and the web server and edge runtimes (`@sentry/nextjs`) so the redaction can never drift
+ * between them.
  *
  * Deliberately zero-dependency and Prisma-free: the web *edge* runtime imports this via the
  * `@wabi/shared/sentry-scrub` subpath, which must not drag in the Prisma client that the package

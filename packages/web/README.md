@@ -25,11 +25,13 @@ App Router under `src/app/`:
 - `consent/` — consent capture
 - `dashboard/` — member dashboard
 - `admin/strategies/` — strategy-draft review UI (proxies to the bot's admin API)
+- `admin/research/` — research worker config/schedule/run UI
 - `api/` — route handlers:
   - `api/auth/discord/` (+ `callback/`), `api/auth/logout/` — OAuth + sessions
   - `api/billing/checkout/`, `api/billing/portal/` — Stripe
-  - `api/consent/` — consent persistence
+  - `api/consent/accept/`, `api/consent/decline/` — consent persistence
   - `api/admin/strategies/[...path]/` — authenticated proxy to the bot's strategy-admin API
+  - `api/admin/research/[...path]/` — authenticated proxy to the research worker's admin API
 - `middleware.ts` — edge middleware
 
 `src/lib/` holds the cross-cutting helpers: `auth.ts` / `session.ts` (lucia),

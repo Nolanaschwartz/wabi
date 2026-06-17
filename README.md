@@ -30,7 +30,7 @@ own README.
 | [`@wabi/bot`](packages/bot) | NestJS + necord over discord.js. The heart: Discord gateway, crisis→coaching pipeline, Stripe webhook, pg-boss worker/scheduler. Always-on. |
 | [`@wabi/web`](packages/web) | Next.js 15 App Router. Landing, Discord OAuth + consent + trial + `User` creation, Stripe checkout, dashboard, `/admin/strategies` review. |
 | [`@wabi/shared`](packages/shared) | Plain TypeScript: Prisma client + generated types, constants, swappable-provider + access resolvers. Imported by the others. |
-| [`@wabi/research`](packages/research) | Standalone research worker. Mines PubMed/medRxiv for evidence-based techniques and submits `StrategyDraft`s to the bot for human review. |
+| [`@wabi/research`](packages/research) | Always-on NestJS service (:3002, ADR-0034). Mines PubMed/medRxiv for evidence-based techniques and submits `StrategyDraft`s to the bot for human review. |
 
 ## Quick start
 
@@ -87,7 +87,7 @@ Qdrant+neo4j) · neo4j (per-user graph) · local bge embeddings · Langfuse (tra
 These are the source of truth. **ADRs win where docs disagree.**
 
 - `docs/ARCHITECTURE.md` — consolidated system design, key flows, personal-data map.
-- `docs/adr/` — the *why* behind every structural decision (0001–0025).
+- `docs/adr/` — the *why* behind every structural decision (0001–0035).
 - `CONTEXT-MAP.md` → `docs/contexts/<context>/CONTEXT.md` — domain vocabulary. Contexts
   (Wellbeing / Accounts & Billing / Community) are **language boundaries, not packages**.
 - `CLAUDE.md` — working conventions and the patterns that bite.

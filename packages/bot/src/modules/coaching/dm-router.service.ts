@@ -37,7 +37,7 @@ export type RoutingPlan =
   | { kind: 'resume'; intent: Intent };
 
 /**
- * A routing plan, the raw verdict it derived from (for the observe-only intent trace), and the access
+ * A routing plan, the raw verdict it derived from (for the intent trace), and the access
  * tier the plan's tool requires — read once from the registry here so the upstream gate is a trivial
  * field check, not a second tool lookup (ADR-0011/0032).
  *

@@ -1,6 +1,6 @@
 # Wabi does not persist verbatim conversation transcripts
 
-Wabi keeps **no durable store of verbatim coaching conversations**. `AiConversation` stays metadata-only (`sessionId`, `topic`) — this is intentional, not a gap.
+Wabi keeps **no durable store of verbatim coaching conversations**. `AiConversation` stays metadata-only (`userId`, `topic`) — this is intentional, not a gap.
 
 - **Within-session continuity:** a short-lived, ephemeral session buffer (short TTL), not a permanent table.
 - **Cross-session continuity:** Mem0 derived **Memory** (ADR-0004) — Wabi remembers the *gist*, not the words.

@@ -4,7 +4,7 @@
 
 **Goal:** Build a **DM-first**, paid AI wellness *companion* (not a clinical/therapy service) that helps gamers track mood, manage tilt, build healthy gaming habits, and access conversational coaching — privately, 1:1, in their Discord DMs — with deep personalization via persistent memory and semantic search. A companion Next.js web app provides landing page, Discord OAuth, billing portal, and user dashboard.
 
-**Architecture:** TypeScript monorepo (`packages/bot`, `packages/web`, `packages/shared`). Discord bot (user-installable, DM-first) handles commands, events, and UI. Next.js web app handles marketing landing page, Discord OAuth auth, Stripe Checkout, billing portal, and user dashboard. Vercel AI SDK orchestrates LLM calls **behind a swappable, OpenAI-compatible interface** (provider is configuration, not a fixed dependency). Mem0 provides persistent long-term user memory. Qdrant powers semantic RAG retrieval. PostgreSQL (Prisma) stores structured data shared by bot + web. Stripe handles the single paid subscription (with trial) via web checkout. **All data stores are self-hosted.**
+**Architecture:** TypeScript monorepo (`packages/bot`, `packages/web`, `packages/shared`, `packages/research`). Discord bot (user-installable, DM-first) handles commands, events, and UI. Next.js web app handles marketing landing page, Discord OAuth auth, Stripe Checkout, billing portal, and user dashboard. Vercel AI SDK orchestrates LLM calls **behind a swappable, OpenAI-compatible interface** (provider is configuration, not a fixed dependency). Mem0 provides persistent long-term user memory. Qdrant powers semantic RAG retrieval. PostgreSQL (Prisma) stores structured data shared by bot + web. Stripe handles the single paid subscription (with trial) via web checkout. **All data stores are self-hosted.**
 
 **Tech Stack:** TypeScript, Node.js 20, **NestJS + necord** (bot/backend, ADR-0019) over discord.js v14, Next.js 15 (App Router, web), Tailwind CSS, Vercel AI SDK, Mem0 (self-hosted), Qdrant (self-hosted), **self-hosted embeddings** (bge-base 768-dim, ADR-0017), **Redis** (ephemeral session buffer, persistence off, ADR-0016), **pg-boss** (durable jobs on Postgres, ADR-0018), **Langfuse** (self-hosted), OpenAI-compatible LLM endpoint per role (GPT-4o for PoC; local/open model as the destination), PostgreSQL (Prisma ORM), Stripe (webhook via NestJS controller), Docker, lucia-auth (Discord OAuth, self-hosted sessions)
 
@@ -394,7 +394,7 @@ git commit -m "feat: initialize monorepo (bot + web + shared) with AI stack"
 **Objective:** Define the database schema for all 5 feature buckets.
 
 **Files:**
-- Create: `prisma/schema.prisma`
+- Create: `packages/shared/prisma/schema.prisma`
 
 **Prisma Schema:**
 
@@ -587,7 +587,7 @@ model AiConversation {
 ```
 
 **Step 1: Create schema**
-Write the schema to `prisma/schema.prisma`.
+Write the schema to `packages/shared/prisma/schema.prisma`.
 
 **Step 2: Generate client & push**
 

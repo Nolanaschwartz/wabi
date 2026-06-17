@@ -1,6 +1,6 @@
 # Embeddings are self-hosted from day one; personal-data sub-processors go local first
 
-Wabi self-hosts a single OpenAI-compatible **embedding** endpoint (e.g. TEI/Infinity serving `bge-base-en-v1.5`, **768-dim**) from day one, used for **both** the shared Strategy library (Qdrant `wabi_strategies`) **and** personal Mem0 memories. The chat LLM stays external (OpenAI/GPT-4o) for the PoC behind the swappable interface (ADR-0009). This refines ADR-0009: not all sub-processors swap on the same timeline — **sub-processors that touch personal data go local first; the chat LLM can stay PoC-external longest.**
+Wabi self-hosts a single OpenAI-compatible **embedding** endpoint (e.g. serving `nomic-embed-text-v2-moe`, **768-dim**) from day one, used for **both** the shared Strategy library (Qdrant `wabi_strategies`) **and** personal Mem0 memories. The chat LLM stays external (OpenAI/GPT-4o) for the PoC behind the swappable interface (ADR-0009). This refines ADR-0009: not all sub-processors swap on the same timeline — **sub-processors that touch personal data go local first; the chat LLM can stay PoC-external longest.**
 
 ## Why
 

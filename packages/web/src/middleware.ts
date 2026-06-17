@@ -51,8 +51,9 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 export const config = {
 	matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 	// Lucia's session validation and the dashboard consent check go through PrismaAdapter,
-	// and Prisma Client cannot run on the Edge runtime. Next.js 15.5 makes Node.js Middleware
-	// stable, so we run middleware on Node where Prisma works. We deploy on Railway (Node),
-	// not on an edge network, so there is no latency tradeoff here.
+	// and Prisma Client cannot run on the Edge runtime. Next.js 15 makes Node.js Middleware
+	// stable (runtime: "nodejs" supported from 15.x), so we run middleware on Node where
+	// Prisma works. We deploy on Railway (Node), not on an edge network, so there is no
+	// latency tradeoff here.
 	runtime: "nodejs",
 };

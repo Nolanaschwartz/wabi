@@ -1,6 +1,6 @@
 # Trial starts on first use; lapsed users keep read-only access and full data rights
 
-Defines the access lifecycle behind ADR-0005 (`hasActiveAccess`, `trialEndsAt`, `subscriptionStatus`).
+Defines the access lifecycle behind ADR-0005 (`hasActiveAccess`, `trialEndsAt`, `subscriptionStatus`). `hasActiveAccess` is a computed accessor in `packages/shared/src/access.ts`, derived from `subscriptionStatus` and `trialEndsAt` — not a stored field.
 
 ## Trial start
 

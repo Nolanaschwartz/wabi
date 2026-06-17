@@ -19,7 +19,7 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   const now = new Date();
-  // The Trial grant (window + initial status) is computed by the shared Entitlement module so the
+  // The Trial grant (window + initial status) is computed by the shared access module (`trialGrant`) so the
   // web writer and the bot's read agree on what a Trial is (ADR-0011).
   const { trialEndsAt, subscriptionStatus } = trialGrant(now);
 

@@ -30,15 +30,15 @@ implementations and is invoked by the `research-run` consumer.
 ## Nest layout (`src/`)
 
 - `main.ts` / `app.module.ts` — bootstrap; `ConfigModule.forRoot` loads the root `.env`
-  (replaces the old hand-rolled `loadDotenv()` on the service path).
+  (non-Nest callers such as scripts use `util/load-env.ts` directly).
 - `research.module.ts` — wires the services + admin controller + guard, and imports
   `SchedulerModule`.
 - `config-service/` — `ResearchConfigService`: owns the `ResearchConfig` singleton +
   `ResearchTopic` list; idempotent boot seed; topic CRUD; bounds validation/persist;
   `getEnabledTopics()` (the runner read).
+- `cron-compile/` — pure cadence⇄cron + cron validation module.
 - `schedule-service/` — `ResearchScheduleService`: reconciles the pg-boss schedule from the
-  persisted config and re-asserts it on boot. `cron-compile/` is the pure cadence⇄cron + cron
-  validation module.
+  persisted config and re-asserts it on boot.
 - `run-service/` — `ResearchRunService` (the `research-run` consumer: single-flight, stale-run
   reaper, run-record lifecycle) and `ResearchRunnerService` (wraps `runResearch`).
 - `scheduler/` — `SchedulerService`: the thin pg-boss wrapper (start/work/send/schedule/
@@ -57,8 +57,7 @@ implementations and is invoked by the `research-run` consumer.
 ## Admin HTTP surface (behind `AdminGuard`, reached via the web `/api/admin/research` proxy)
 
 `GET config` · `PUT schedule` · `PUT bounds` · `POST topics` · `PATCH topics/:id` ·
-`DELETE topics/:id` · `POST run` (Run now) · `GET runs`. The operator drives all of these from
-the web `/admin/research` page.
+`DELETE topics/:id` · `POST run` (Run now) · `GET runs`.
 
 ## Running
 
@@ -69,9 +68,7 @@ pnpm test                        # jest
 pnpm build                       # tsc
 ```
 
-The service comes online even if Postgres/pg-boss is down (degraded: schedule/run ops no-op),
-mirroring the bot. Schedules and run history are DB-backed and survive restarts (the schedule is
-re-asserted on boot).
+The service starts degraded when Postgres/pg-boss is down (schedule/run ops no-op); schedules and run history are DB-backed and survive restarts.
 
 ## Configuration (env)
 

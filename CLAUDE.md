@@ -8,7 +8,7 @@ A **DM-first, non-clinical wellness companion for gamers on Discord** (ADR-0001/
 
 Read these before non-trivial work — they are the source of truth, and **ADRs win where docs disagree**:
 - `docs/ARCHITECTURE.md` — the consolidated system design, key flows, personal-data map.
-- `docs/adr/` — the *why* behind every structural decision (0001–0025). The hot path, gating rules, and store choices all trace to a numbered ADR.
+- `docs/adr/` — the *why* behind every structural decision (0001–0035). The hot path, gating rules, and store choices all trace to a numbered ADR.
 - `CONTEXT-MAP.md` → `docs/contexts/<context>/CONTEXT.md` — the domain vocabulary. Contexts (Wellbeing / Accounts & Billing / Community) are **language boundaries, not packages**.
 
 ## Commands
@@ -16,7 +16,7 @@ Read these before non-trivial work — they are the source of truth, and **ADRs 
 Run from repo root unless noted. Package manager is **pnpm** (workspace).
 
 ```bash
-pnpm dev            # all packages in parallel (web :3000, bot :3001); excludes community
+pnpm dev            # all packages in parallel (web :3000, bot :3001, research :3002); excludes community
 pnpm dev:bot        # bot only (nest --watch)
 pnpm dev:web        # web only (next dev)
 pnpm build          # build all packages
@@ -51,7 +51,7 @@ Four workspace packages (`packages/*`); there is no `apps/`:
 - **`@wabi/bot`** — NestJS 11 + necord over discord.js v14. The heart of the system: Discord gateway, the crisis→coaching pipeline, the Stripe webhook controller, and the pg-boss worker/scheduler. Must be always-on; never serverless (ADR-0019/0020).
 - **`@wabi/web`** — Next.js 15 App Router. Landing, Discord OAuth + consent + trial + `User` creation, Stripe checkout, dashboard, `/admin/strategies` strategy review. Sessions via lucia.
 - **`@wabi/shared`** — plain TypeScript: Prisma client + generated types, constants, and the swappable-provider + access resolvers. Imported by the other packages.
-- **`@wabi/research`** — standalone TypeScript worker (not NestJS). Mines PubMed/medRxiv for evidence-based techniques and submits `StrategyDraft`s to the bot's strategy-admin API for human review (ADR-0012); never writes the DB directly. Run via `pnpm -F research start` (`ts-node src/run.ts`, `--topic` for one topic). Loads the root `.env` itself (no Nest `ConfigModule`) — providers via `RESEARCH_*` / `RESEARCH_TRIAGE_*` (fallback `CLASSIFIER_*`). See `packages/research/README.md`.
+- **`@wabi/research`** — always-on NestJS service (ADR-0034, :3002). Mines PubMed/medRxiv for evidence-based techniques and submits `StrategyDraft`s to the bot's strategy-admin API for human review (ADR-0012); never writes the DB directly. Run via `pnpm -F research dev` (local) or `pnpm -F research start:prod` (production). Providers via `RESEARCH_*` / `RESEARCH_TRIAGE_*` (fallback `CLASSIFIER_*`). See `packages/research/README.md`.
 
 ### Bot module layout
 

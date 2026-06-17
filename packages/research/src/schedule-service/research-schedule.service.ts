@@ -3,7 +3,7 @@ import { SchedulerService } from '../scheduler/scheduler.service';
 import { ResearchConfigService } from '../config-service/research-config.service';
 import { isValidCron } from '../cron-compile/cron-compile';
 
-/** The pg-boss queue this worker schedules + (in a later slice) consumes. */
+/** The pg-boss queue this worker schedules and consumes. */
 export const RESEARCH_RUN_QUEUE = 'research-run';
 
 /** The slice of ResearchConfig that drives scheduling. */
@@ -24,9 +24,6 @@ export interface SchedulableConfig {
  *
  * `tz` comes from RESEARCH_TZ (default UTC), read lazily per call — never cached in a field/const,
  * because ConfigModule populates process.env at bootstrap after import time.
- *
- * NOTE (this slice): we create/reconcile the schedule ENTRY only. The worker that consumes
- * `research-run` arrives in the next slice; until then a due schedule simply enqueues jobs that wait.
  */
 @Injectable()
 export class ResearchScheduleService implements OnModuleInit {

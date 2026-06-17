@@ -38,10 +38,9 @@ export function getProvider(role: ProviderRole): ProviderConfig {
       model: process.env.ROUTER_MODEL || 'gpt-4o-mini',
       apiKey: process.env.ROUTER_API_KEY || '',
     },
-    // Capable extraction model for the research worker — faithful, generalized technique
-    // extraction with verbatim grounding. Self-controlled tier in production. Falls back to the
-    // COACH tier (the capable local model) when RESEARCH_* is unset, mirroring research-triage ->
-    // CLASSIFIER, so the worker runs on a local setup without a separate research endpoint.
+    // Research worker extraction model — self-controlled tier in production. Falls back to COACH
+    // when RESEARCH_* is unset, mirroring research-triage -> CLASSIFIER, so a local setup needs
+    // no separate research endpoint.
     research: {
       baseUrl: process.env.RESEARCH_BASE_URL || process.env.COACH_BASE_URL || 'https://api.openai.com/v1',
       model: process.env.RESEARCH_MODEL || process.env.COACH_MODEL || 'gpt-4o',

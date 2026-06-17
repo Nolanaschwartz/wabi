@@ -1,6 +1,6 @@
 # Wabi is paid-only (with a free trial); safety is never gated
 
-Wabi has **no free tier**. LLM inference is a real per-message cost, so coaching requires an active paid **Subscription**. New users get a **time-limited free trial (~7 days)** — the only no-cost path — after which access ends unless they subscribe. There is a single tier; the former `isPro`/`isTeam` booleans are **replaced by a single `hasActiveAccess` field** (true while trialing or subscribed). `isTeam` and its Team tier died with the community layer (ADR-0003).
+Wabi has **no free tier**. LLM inference is a real per-message cost, so coaching requires an active paid **Subscription**. New users get a **time-limited free trial (~7 days)** — the only no-cost path — after which access ends unless they subscribe. There is a single tier; the former `isPro`/`isTeam` booleans are **replaced by a computed `hasActiveAccess` accessor (see `packages/shared/src/access.ts`), derived from `trialEndsAt`/`subscriptionStatus`** (true while trialing or subscribed). `isTeam` and its Team tier died with the community layer (ADR-0003).
 
 ## The one carve-out: crisis safety is never gated
 
@@ -12,5 +12,5 @@ Giving inference away free is not viable. But a mental-health-adjacent product c
 
 ## Consequences
 
-- `isPro`/`isTeam` removed from the data model, replaced by a single `hasActiveAccess` boolean meaning "active access (trial or paid)".
+- `isPro`/`isTeam` removed from the data model, replaced by a computed `hasActiveAccess` accessor in `packages/shared/src/access.ts`, derived from `subscriptionStatus` and `trialEndsAt`, meaning "active access (trial or paid)".
 - Access checks must distinguish "no active access → gate coaching" from "crisis detected → escalate regardless".

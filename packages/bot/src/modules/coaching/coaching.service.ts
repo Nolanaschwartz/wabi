@@ -71,7 +71,7 @@ export class CoachingService {
 
       // Tilt offer response: if we previously offered a Tilt Session, this turn may be the user's
       // accept/decline. The whole state machine lives in TiltService now; here we just route its
-      // reply. accepted/declined end the turn; none/ignored fall through to coaching. (#31 / #12)
+      // reply. accepted/declined end the turn; none/ignored fall through to coaching.
       const offerResponse = await this.tilt.respondToPendingOffer(userId, message.content);
       if (offerResponse.kind === 'accepted' || offerResponse.kind === 'declined') {
         this.logger.log('tilt offer response', { userId, kind: offerResponse.kind });
@@ -162,9 +162,8 @@ export class CoachingService {
           latencyMs: classifyResult.latencyMs,
         });
 
-        // Observe-only: record the router's verdict on every safe turn so the dispatch threshold (θ) can
-        // be tuned against real traffic before any intent actually changes behaviour (Slice A2). The
-        // intent span carries the router's latency as well as its confidence.
+        // Record the router's verdict on every safe turn so the dispatch threshold (θ) can be tuned
+        // from Langfuse traces. The intent span carries the router's latency and its confidence.
         this.langfuseTracer.span({
           traceId,
           span: 'intent',
@@ -212,7 +211,7 @@ export class CoachingService {
 
         // Detected gameplay frustration → offer a Tilt Session (user stays in control), never
         // auto-start one. Suppressed during crisis aftermath (#05); maybeOffer self-suppresses when an
-        // offer is already pending (the lapsing 'ignored' case above). (#31 / #12)
+        // offer is already pending (the lapsing 'ignored' case above).
         if (!inAftermath) {
           const offerMessage = this.tilt.maybeOffer(userId, batch);
           if (offerMessage) {

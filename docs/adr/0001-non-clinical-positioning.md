@@ -6,5 +6,5 @@ Because the bot still converses with potentially distressed users, it carries a 
 
 ## Consequences
 
-- The glossary forbids clinical synonyms (see `CONTEXT.md`).
+- The glossary forbids clinical synonyms (see `CONTEXT-MAP.md` → `docs/contexts/<context>/CONTEXT.md`).
 - The AI coach needs a crisis-detection + escalation path before launch; it is a safety requirement, not a feature.
