@@ -45,6 +45,52 @@ describe('PubMedTool', () => {
     expect(await tool.fullText('111')).toBeNull();
   });
 
+  it('fullText fetches BioC with the PMC-prefixed id and parses the top-level array (real API shape)', async () => {
+    // Real esummary returns the pmc id WITH the "PMC" prefix; real BioC returns a top-level ARRAY
+    // ([collection]) whose collection.documents[].passages[].text hold the body. Verified against
+    // the live NCBI APIs — both shapes the original code got wrong.
+    const fetchFn = jest
+      .fn()
+      .mockReturnValueOnce(
+        jsonResponse({ result: { '111': { uid: '111', articleids: [{ idtype: 'pmc', value: 'PMC8314311' }] } } }),
+      )
+      .mockReturnValueOnce(
+        jsonResponse([
+          {
+            bioctype: 'BioCCollection',
+            documents: [{ passages: [{ text: 'Background: occupational stress.' }, { text: 'Method: PMR protocol.' }] }],
+          },
+        ]),
+      );
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    const text = await tool.fullText('111');
+    expect(text).toContain('occupational stress');
+    expect(text).toContain('PMR protocol');
+    // The BioC URL must keep the PMC prefix — stripping it returns "[Error] : No result can be found".
+    expect(fetchFn.mock.calls[1][0]).toContain('/BioC_json/PMC8314311/unicode');
+  });
+
+  it('fullText returns null when the BioC body is a non-JSON error (not yet in BioC)', async () => {
+    // Very recent OA papers return a non-JSON "[Error]" body with HTTP 200 — json() throws → null.
+    const fetchFn = jest
+      .fn()
+      .mockReturnValueOnce(
+        jsonResponse({ result: { '111': { uid: '111', articleids: [{ idtype: 'pmc', value: 'PMC9999999' }] } } }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError('Unexpected token E');
+          },
+          text: async () => '[Error] : No result can be found.',
+        }),
+      );
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    expect(await tool.fullText('111')).toBeNull();
+  });
+
   it('throws on HTTP error', async () => {
     const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 503, text: async () => '', json: async () => ({}) });
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });

@@ -68,20 +68,24 @@ export class PubMedTool {
   async fullText(pmid: string): Promise<string | null> {
     const sumUrl = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${pmid}${this.key()}`;
     const sum = await this.getJson<{ result?: Record<string, { articleids?: { idtype: string; value: string }[] }> }>(sumUrl);
-    const pmcId = sum.result?.[pmid]?.articleids?.find((a) => a.idtype === 'pmc')?.value;
-    if (!pmcId) return null;
+    const rawPmcId = sum.result?.[pmid]?.articleids?.find((a) => a.idtype === 'pmc')?.value;
+    if (!rawPmcId) return null;
+    // The BioC endpoint requires the "PMC"-prefixed id (e.g. PMC8314311). Stripping the prefix
+    // returns "[Error] : No result can be found" — verified against the live NCBI API.
+    const pmcId = rawPmcId.startsWith('PMC') ? rawPmcId : `PMC${rawPmcId}`;
     try {
-      const bioc = await this.getJson<{ documents?: { passages?: { text?: string }[] }[] }>(
-        `${BIOC}/${pmcId.replace('PMC', '')}/unicode`,
-      );
-      const text = (bioc.documents ?? [])
+      // BioC returns a TOP-LEVEL ARRAY: [{ ..., documents: [{ passages: [{ text }] }] }].
+      type BioCCollection = { documents?: { passages?: { text?: string }[] }[] };
+      const bioc = await this.getJson<BioCCollection | BioCCollection[]>(`${BIOC}/${pmcId}/unicode`);
+      const collection = Array.isArray(bioc) ? bioc[0] : bioc;
+      const text = (collection?.documents ?? [])
         .flatMap((d) => d.passages ?? [])
         .map((p) => p.text ?? '')
         .join('\n')
         .trim();
       return text.length > 0 ? text : null;
     } catch {
-      return null;
+      return null; // not OA / not yet in BioC / transient — caller falls back to the abstract
     }
   }
 }
