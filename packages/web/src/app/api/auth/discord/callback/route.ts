@@ -40,8 +40,8 @@ export async function GET(request: NextRequest): Promise<Response> {
 			return response;
 		}
 
-		// New identity: do NOT create a User row or a session yet. GDPR Art. 9 / ADR-0009
-		// require explicit consent before we persist an identifiable User, and Lucia can't
+		// New identity: do NOT create a User row or a session yet. Privacy-by-construction
+		// (ADR-0002) requires explicit consent before we persist an identifiable User, and Lucia can't
 		// mint a session without one. Hold the authenticated identity in a signed, httpOnly
 		// pending-consent cookie; the first-ever user.create happens on the consent POST.
 		// (Issue #29.)

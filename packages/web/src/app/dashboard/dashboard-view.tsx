@@ -44,8 +44,6 @@ function BillingPanel({ billing }: { billing: BillingState }) {
     : 0;
   const trialDaysLeft = Math.max(0, Math.ceil(trialMsLeft / (24 * 60 * 60 * 1000)));
 
-  // Display derived from the shared access state (page.tsx → decideAccess), so a lapsed trial reads
-  // "Not subscribed" here exactly when the bot stops coaching.
   const isActive = billing.subscriptionStatus === 'active';
   const inTrial = billing.hasActiveAccess && billing.subscriptionStatus === 'trialing';
   // Anyone with a Stripe subscription (active or past_due) manages it via the portal; everyone else

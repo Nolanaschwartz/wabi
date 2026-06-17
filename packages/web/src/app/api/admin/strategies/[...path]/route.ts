@@ -7,6 +7,7 @@ import { isOperator } from "@/lib/admin";
  * already gates `/api/admin/*`; this handler re-checks the operator (defense in
  * depth) and forwards to the bot with the shared `x-admin-secret`. The secret is
  * read server-side only and never reaches the browser.
+ * Currently exposes GET and POST only; add PATCH/PUT/DELETE if the bot strategy-admin API gains those endpoints.
  */
 function botBaseUrl(): string {
 	// The bot binds :3001 (web owns :3000). A :3000 default would forward to web itself → 404/redirect
