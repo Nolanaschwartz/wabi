@@ -2,6 +2,7 @@ import { CoachingService } from '../coaching.service';
 import { CoachHandler } from '../coach-handler';
 import { DmRouterService } from '../dm-router.service';
 import { ClassifierService } from '../../crisis/classifier.service';
+import type { GenerationCallTelemetry } from '@wabi/shared/generate';
 import { CoachService } from '../coach.service';
 import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../../session-buffer/session-buffer.service';
@@ -75,6 +76,8 @@ jest.mock('../../langfuse/langfuse-tracer.service', () => ({
   LangfuseTracer: jest.fn().mockImplementation(() => ({
     span: jest.fn(),
     score: jest.fn(),
+    traceObservation: jest.fn(),
+    latchCrisis: jest.fn(),
   })),
 }));
 
@@ -201,6 +204,7 @@ describe('CoachingService', () => {
       langfuseTracer,
       memoryStore,
       habitEngagement,
+      { tracer: {}, score: () => {} } as any,
     );
     // Journal handler is mocked, but the router is REAL — so a confident inline journal verdict really
     // routes here (proved below). Most tests drive the coach path (intent defaults to coach/0).
@@ -307,6 +311,7 @@ describe('CoachingService', () => {
     expect(classifier.classify).toHaveBeenCalledWith(
       'i guess things are fine',
       expect.objectContaining({ inTiltSession: false }),
+      expect.any(Function), // out-of-band telemetry sink
     );
     expect(mockMessage.reply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -395,12 +400,16 @@ describe('CoachingService', () => {
     expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
     expect(coach.generateDetailed).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
-    expect(langfuseTracer.span).toHaveBeenCalledWith(
+    // The turn is crisis-latched synchronously so the OTEL export filter drops the whole tree (ADR-0024).
+    // The classify observation is emitted, but FAIL-CLOSED on content: when not in local full fidelity
+    // (the mock leaves localFullFidelity falsy, i.e. prod) the raw crisis text is held back (input ''),
+    // so even if the trace-id export drop is defeated, no crisis content can leak.
+    expect(langfuseTracer.latchCrisis).toHaveBeenCalled();
+    expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
       expect.objectContaining({
-        span: 'classify',
-        input: 'batch',
+        name: 'classify',
+        input: '',
         output: 'crisis',
-        isCrisis: true,
       }),
     );
   });
@@ -435,6 +444,7 @@ describe('CoachingService', () => {
     expect(coach.generateDetailed).toHaveBeenCalledWith(
       expect.stringContaining('compassionate DM companion'),
       expect.stringContaining('Tilts in ranked'),
+      expect.objectContaining({ isEnabled: true, functionId: 'coach' }),
     );
     expect(mockMessage.reply).toHaveBeenCalledWith("That sounds tough. Hang in there.");
   });
@@ -522,6 +532,7 @@ describe('CoachingService', () => {
     expect(classifier.classify).toHaveBeenCalledWith(
       'test message',
       expect.objectContaining({ inTiltSession: false }),
+      expect.any(Function), // out-of-band telemetry sink
     );
     expect(strategyRetrieval.search).toHaveBeenCalledWith('test message');
     expect(coach.generateDetailed).toHaveBeenCalled();
@@ -547,11 +558,12 @@ describe('CoachingService', () => {
       'want to journal about tonight',
       expect.any(Array), // the generated spoke catalogue
       expect.objectContaining({ recentTurns: undefined }),
+      expect.any(Function), // out-of-band telemetry sink
     );
     // The verdict is traced for threshold tuning (intent span carries confidence + router latency)...
-    expect(langfuseTracer.span).toHaveBeenCalledWith(
+    expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
       expect.objectContaining({
-        span: 'intent',
+        name: 'intent',
         input: 'want to journal about tonight',
         output: 'journal',
         confidence: 0.5,
@@ -559,6 +571,46 @@ describe('CoachingService', () => {
     );
     // ...and below θ the turn still reaches the coach (coaching is the fallback).
     expect(coach.generateDetailed).toHaveBeenCalled();
+  });
+
+  it('stamps model + token usage on the classify and intent generation spans', async () => {
+    activeUser();
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'hi there' });
+    // Classifier reports its model/usage out-of-band via the optional sink (3rd arg) — the verdict
+    // contract is unchanged.
+    classifier.classify.mockImplementation(
+      (_b: string, _c: unknown, onTel?: (t: GenerationCallTelemetry) => void) => {
+        onTel?.({ model: 'qwopus-classifier', usage: { inputTokens: 10, outputTokens: 1 } });
+        return Promise.resolve('safe');
+      },
+    );
+    // Router reports its model/usage via the sink (4th arg); the REAL DmRouter surfaces it on the decision.
+    intentRouter.route.mockImplementation(
+      async (_b: string, _c: unknown, _ctx: unknown, onTel?: (t: GenerationCallTelemetry) => void) => {
+        onTel?.({ model: 'qwopus-router', usage: { inputTokens: 20, outputTokens: 2 } });
+        return { intent: 'coach', confidence: 0.5 };
+      },
+    );
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
+
+    await service.handle(mockMessage);
+
+    expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'classify',
+        model: 'qwopus-classifier',
+        usage: { inputTokens: 10, outputTokens: 1 },
+      }),
+    );
+    expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'intent',
+        model: 'qwopus-router',
+        usage: { inputTokens: 20, outputTokens: 2 },
+      }),
+    );
   });
 
   it('emits a retrieval span with strategy counts/scores/ids and no strategy text on a safe turn', async () => {
@@ -574,9 +626,9 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    const retrieval = langfuseTracer.span.mock.calls
+    const retrieval = langfuseTracer.traceObservation.mock.calls
       .map((c) => c[0] as any)
-      .find((p) => p.span === 'retrieval');
+      .find((p) => p.name === 'retrieval');
     expect(retrieval).toBeDefined();
     expect(retrieval.metadata.count).toBe(2);
     expect(retrieval.metadata.ids).toEqual(['s1', 's2']);
@@ -600,9 +652,9 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    const retrieval = langfuseTracer.span.mock.calls
+    const retrieval = langfuseTracer.traceObservation.mock.calls
       .map((c) => c[0] as any)
-      .find((p) => p.span === 'retrieval');
+      .find((p) => p.name === 'retrieval');
     expect(retrieval.input).toBe('help me focus');
     expect(retrieval.output).toContain('box breathing');
     // Metadata still present alongside the verbatim text.
@@ -682,8 +734,8 @@ describe('CoachingService', () => {
     expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
     expect(coach.generateDetailed).not.toHaveBeenCalled();
     // The crisis short-circuit happens before the intent trace — the routing verdict is dropped.
-    expect(langfuseTracer.span).not.toHaveBeenCalledWith(
-      expect.objectContaining({ span: 'intent' }),
+    expect(langfuseTracer.traceObservation).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'intent' }),
     );
   });
 
@@ -820,6 +872,7 @@ describe('CoachingService', () => {
     expect(classifier.classify).toHaveBeenCalledWith(
       "it's not helping",
       expect.objectContaining({ inTiltSession: true }),
+      expect.any(Function), // out-of-band telemetry sink
     );
     expect(escalation.escalate).not.toHaveBeenCalled();
   });
@@ -839,6 +892,7 @@ describe('CoachingService', () => {
     expect(classifier.classify).toHaveBeenCalledWith(
       'just chatting',
       expect.objectContaining({ inTiltSession: false }),
+      expect.any(Function), // out-of-band telemetry sink
     );
   });
 
@@ -857,6 +911,7 @@ describe('CoachingService', () => {
     expect(classifier.classify).toHaveBeenCalledWith(
       'rough night',
       expect.objectContaining({ inTiltSession: false }),
+      expect.any(Function), // out-of-band telemetry sink
     );
   });
 

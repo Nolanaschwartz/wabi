@@ -14,7 +14,25 @@
  */
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
+import type { Tracer } from '@opentelemetry/api';
 import { getProvider, type ProviderRole } from './provider';
+
+/**
+ * Opt-in OpenTelemetry instrumentation for a single `generate` call (ADR-0037 caller-owns-policy
+ * seam, ADR-0038). When `isEnabled`, the AI SDK emits a generation span (model, token usage, latency)
+ * to the supplied `tracer`. Off/undefined means NO telemetry — the invariant for every call ABOVE the
+ * crisis gate, where auto-instrumentation would capture raw pre-verdict content. Only the below-gate
+ * `coach` call enables it.
+ */
+export interface GenerateTelemetry {
+  isEnabled?: boolean;
+  functionId?: string;
+  recordInputs?: boolean;
+  recordOutputs?: boolean;
+  metadata?: Record<string, string | number | boolean>;
+  /** OTEL tracer to route AI-SDK spans to — the isolated Langfuse provider's tracer, never the global one. */
+  tracer?: Tracer;
+}
 
 /** Token usage, normalised so a field is present ONLY when the provider reported it — a real 0 is
  * kept; a count no attempt returned stays absent (never coerced to zero). */
@@ -48,6 +66,9 @@ export interface GenerateOptions {
   /** Optional hook so the module can surface the empty/cap diagnostic without depending on a concrete
    * logger. Fires only when output is still empty after any retry. */
   log?: (event: GenerateEmptyDiagnostic) => void;
+  /** Opt-in OpenTelemetry instrumentation for this call. Off by default — the call site decides
+   * (the crisis-gate boundary depends on classifier/router calls NOT being instrumented). */
+  telemetry?: GenerateTelemetry;
 }
 
 export interface GenerateResult {
@@ -59,6 +80,17 @@ export interface GenerateResult {
   model: string;
   /** Wall-clock latency in ms, summed across attempts when a retry occurred. */
   latencyMs: number;
+}
+
+/**
+ * A single completed LLM call's telemetry — the resolved model id and its token usage. Reported
+ * OUT-OF-BAND (via an optional sink) by the safety/router seams whose primary return is a verdict, so
+ * a tracer can stamp model/usage on the manual generation span WITHOUT those seams depending on the
+ * tracing module. Model id and token counts are operational metadata, not personal data.
+ */
+export interface GenerationCallTelemetry {
+  model: string;
+  usage?: GenerateUsage;
 }
 
 type RawUsage = { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
@@ -94,6 +126,7 @@ export async function generate(role: ProviderRole, opts: GenerateOptions): Promi
     prompt: opts.prompt,
     temperature: opts.temperature,
     maxOutputTokens: opts.maxOutputTokens,
+    experimental_telemetry: opts.telemetry,
   });
   let text = first.text.trim();
   usageParts.push(first.usage as RawUsage);
@@ -108,6 +141,9 @@ export async function generate(role: ProviderRole, opts: GenerateOptions): Promi
       prompt: opts.prompt,
       temperature: opts.retryOnEmpty.temperature,
       maxOutputTokens: opts.maxOutputTokens,
+      // No telemetry on the retry: the AI SDK emits one generation span per call, so re-passing it would
+      // produce TWO generation spans (double token/cost + duplicate prompt/reply capture) under one coach
+      // parent for a single logical turn. The first attempt's span already represents the call.
     });
     text = retry.text.trim();
     usageParts.push(retry.usage as RawUsage);

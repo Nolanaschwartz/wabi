@@ -1,24 +1,28 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
-import { LangfuseIngest } from '@wabi/shared/langfuse';
+import {
+  createLangfuseTracing,
+  startObservation,
+  type LangfuseTracing,
+  type SpanContext,
+} from '@wabi/shared/otel';
 import { defaultLogger, Logger } from '../util/logger';
 
 /**
- * ResearchTracer — first-class Langfuse tracing for the research worker (ADR-0037, ADR-0024).
+ * ResearchTracer — first-class Langfuse tracing for the research worker (ADR-0038, ADR-0024).
  *
- * Wraps the content-AGNOSTIC `@wabi/shared/langfuse` kernel (`LangfuseIngest`) and adds ONLY the
- * research-worker policy on top: the run/paper span VOCABULARY. A RUN is the parent trace; each
- * paper's `gate`/`extract`/`dedup` LLM calls become child spans under it, carrying the leaf data
- * (`input`/`output`, `model`, `usage`, `latencyMs`) the migrated callers already surface from
- * `generate`. The kernel owns the mechanism (enablement, per-id sampling, the in-flight POST set,
- * the flush deadline race); the tracer owns nothing about the network.
+ * Re-expresses the run/paper tree over the official Langfuse OpenTelemetry SDK (`createLangfuseTracing`),
+ * adding ONLY the research-worker policy: the run/paper span VOCABULARY. A RUN is the parent
+ * observation; each paper's `gate`/`extract`/`dedup` LLM calls become child generations under it,
+ * carrying the leaf data (`input`/`output`, `model`, `usage`, `latencyMs`) the migrated callers surface
+ * from `generate`. The SDK owns the mechanism (sampling, batching, the flush deadline race).
  *
  * Deliberately UNLIKE the bot's `LangfuseTracer`: there is NO crisis latch and NO content redaction.
- * The research worker handles no end-user content and has no crisis concept — a "crisis-like" string
- * in an abstract is just text, and suppressing it would be meaningless. The bot's latch/redaction are
+ * The research worker handles no end-user content and has no crisis concept — a "crisis-like" string in
+ * an abstract is just text, and suppressing it would be meaningless. The bot's latch/redaction are
  * Wellbeing-context concerns (ADR-0013/0024) that stay in the bot.
  *
  * Every failure is swallowed and logged (ADR-0021) — tracing must NEVER break a run. Disabled (no
- * Langfuse env) is a clean no-op: no fetch, no per-call work.
+ * Langfuse env) is a clean no-op via the fail-open createLangfuseTracing handle.
  */
 
 // The research span vocabulary — one enumerated union, never ad-hoc strings at call sites. These
@@ -26,7 +30,7 @@ import { defaultLogger, Logger } from '../util/logger';
 export type ResearchSpanName = 'gate' | 'extract' | 'dedup';
 
 export interface RunTraceInput {
-  /** The trace id for the whole run — every span of the run hangs under this parent. */
+  /** The orchestrator's run id — used to correlate this run's spans to one parent observation. */
   runId: string;
   /** Optional run-level metadata (topic, counts) — never verbatim user content (there is none). */
   metadata?: Record<string, unknown>;
@@ -51,7 +55,7 @@ export interface ResearchSpanInput {
 
 // Dev keeps full visibility (sample everything); prod samples 10%. Read per-call from env so it tracks
 // the running environment, never frozen at import. LANGFUSE_SAMPLE_RATE overrides both.
-function sampleRate(): number {
+function resolveSampleRate(): number {
   const override = process.env.LANGFUSE_SAMPLE_RATE;
   if (override !== undefined && override !== '') {
     const parsed = Number(override);
@@ -60,131 +64,107 @@ function sampleRate(): number {
   return process.env.NODE_ENV === 'production' ? 0.1 : 1.0;
 }
 
-// How long onApplicationShutdown waits for in-flight ingestion before giving up. A Langfuse that
+// How long onApplicationShutdown waits for in-flight spans to flush before giving up. A Langfuse that
 // accepts the connection but never responds must not block process exit indefinitely (ADR-0021).
 function flushTimeoutMs(): number {
   const parsed = Number(process.env.LANGFUSE_FLUSH_TIMEOUT_MS);
   return Number.isNaN(parsed) || parsed <= 0 ? 5000 : parsed;
 }
 
-// Langfuse usage shape. Include only the token fields the provider actually returned — an omitted
-// count must read as absent, never as 0. No fields → no usage block at all.
-function compactUsage(usage?: { inputTokens?: number; outputTokens?: number }): { input?: number; output?: number } | undefined {
-  if (!usage) return undefined;
-  const out: { input?: number; output?: number } = {};
-  if (typeof usage.inputTokens === 'number') out.input = usage.inputTokens;
-  if (typeof usage.outputTokens === 'number') out.output = usage.outputTokens;
-  return Object.keys(out).length ? out : undefined;
+// An open run-root observation: kept LIVE so children nest under it (ending it before its children
+// makes the SDK treat each child as its own app-root, fragmenting the tree). Stored with its span
+// context for parenting, plus the handle to end it when the run completes.
+interface OpenRun {
+  end(): void;
+  context: SpanContext;
 }
 
 @Injectable()
 export class ResearchTracer implements OnApplicationShutdown {
   private readonly log: Logger;
-  // The shared, content-AGNOSTIC transport kernel (ADR-0037). It owns enablement, per-id sampling,
-  // the in-flight POST set + cap, and the flush deadline race. The tracer adds only the span vocabulary.
-  private readonly ingest: LangfuseIngest;
+  private readonly tracing: LangfuseTracing;
+  // runId -> the run's LIVE root observation, so each paper's spans parent under one run trace.
+  private readonly runRoots = new Map<string, OpenRun>();
 
-  // Optional logger seam (matches the rest of the research package, which threads a Logger). Defaults
-  // to the env-gated stderr logger so a disabled-tracing process is still able to surface a warning.
   constructor(log: Logger = defaultLogger()) {
     this.log = log;
-    this.ingest = new LangfuseIngest({ warn: (m) => this.log.info(m) });
-  }
-
-  // Evaluated per-call by the kernel, NOT cached: the tracer can be constructed before the process's
-  // config populates process.env, which would freeze `enabled` to false and silently disable tracing
-  // forever (the same load-order trap as @wabi/shared getProvider).
-  private get enabled(): boolean {
-    return this.ingest.enabled;
+    this.tracing = createLangfuseTracing({ serviceName: 'wabi-research', sampleRate: resolveSampleRate() });
   }
 
   /**
-   * Upsert the run's content-free parent trace. Optional — every {@link span} upserts it too — but
-   * lets a run with zero papers still appear in Langfuse. Sampled and disabled-gated like a span.
-   * Never throws (ADR-0021).
+   * Open the run's parent observation and keep it LIVE so every later {@link span} nests under it. The
+   * root is ended by {@link endRun} when the run completes — NOT here — because ending it first would
+   * make the SDK tag each child as its own app-root and fragment the run/paper tree. Never throws.
    */
   run(input: RunTraceInput): void {
     try {
-      if (!this.enabled) return;
-      if (!this.ingest.shouldSample(input.runId, sampleRate())) return;
-      this.ingest.post('research-run', { batch: [this.traceEvent(input.runId, input.metadata)] });
+      const root = startObservation('run', { metadata: input.metadata }, { asType: 'span' });
+      this.runRoots.set(input.runId, { end: () => root.end(), context: root.otelSpan.spanContext() });
     } catch (err) {
       this.log.info(`research tracer run threw: ${err}`);
     }
   }
 
   /**
-   * Emit one child span (`gate`/`extract`/`dedup`) under the run's parent trace, carrying the leaf
-   * data the orchestrator passes through from the migrated callers. The whole run is sampled or
-   * dropped as a unit (binary, keyed on runId) so there are no partial trees. No-op when disabled or
-   * unsampled; never throws (ADR-0021).
+   * Emit one child generation (`gate`/`extract`/`dedup`) under the run's still-open parent, carrying the
+   * leaf data the orchestrator passes through. Each wraps an LLM call, so every span is a generation
+   * (model/usage render for costing). No-op-safe; never throws (ADR-0021).
    */
   span(input: ResearchSpanInput): void {
     try {
-      // Cheap gate first: skip all per-call work (uuids, timestamps) when tracing is off.
-      if (!this.enabled) return;
-      if (!this.ingest.shouldSample(input.runId, sampleRate())) return;
+      const parentSpanContext = this.runRoots.get(input.runId)?.context;
+      // Backdate the start so the span's duration reflects the measured generate latency.
+      const startTime = input.latencyMs != null ? new Date(Date.now() - input.latencyMs) : undefined;
 
-      const endTime = new Date().toISOString();
-      const startTime = new Date(Date.parse(endTime) - (input.latencyMs ?? 0)).toISOString();
-      const usage = compactUsage(input.usage);
-
-      // Every research span is a GENERATION — each wraps an LLM call (gate/extract/dedup all hit the
-      // model). generation-create maps model/usage so Langfuse can cost the call; span-create cannot.
-      const body: Record<string, unknown> & { id: string } = {
-        id: `${input.runId}-${input.span}-${crypto.randomUUID()}`,
-        traceId: input.runId,
-        name: input.span,
-        startTime,
-        endTime,
-        // On-infra retention is permitted here (ADR-0017): the worker reads only public papers, never
-        // end-user content, so there is nothing to redact.
+      const attributes: Record<string, unknown> = {
+        // On-infra retention is permitted here (ADR-0017): the worker reads only public papers.
         input: input.input,
         output: input.output,
-        metadata: {
-          latencyMs: input.latencyMs ?? 0,
-          ...(input.metadata ?? {}),
-        },
+        metadata: { latencyMs: input.latencyMs ?? 0, ...(input.metadata ?? {}) },
       };
-      if (input.model) body.model = input.model;
-      if (usage) body.usage = usage;
+      if (input.model) attributes.model = input.model;
+      if (input.usage) {
+        attributes.usageDetails = { input: input.usage.inputTokens, output: input.usage.outputTokens };
+      }
 
-      this.ingest.post('research-span', {
-        batch: [
-          this.traceEvent(input.runId),
-          {
-            id: crypto.randomUUID(),
-            type: 'generation-create',
-            timestamp: endTime,
-            body,
-          },
-        ],
-      });
+      const obs = startObservation(
+        input.span,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        attributes as any,
+        { asType: 'generation', startTime, parentSpanContext },
+      );
+      obs.end();
     } catch (err) {
       this.log.info(`research tracer span threw: ${err}`);
     }
   }
 
-  // The content-free parent trace-create event, identical for every span of a run → repeated emits
-  // upsert one trace. Named "run" (the research worker's unit), mirroring the bot's "turn".
-  private traceEvent(runId: string, metadata?: Record<string, unknown>): {
-    id: string;
-    type: 'trace-create';
-    timestamp: string;
-    body: Record<string, unknown> & { id: string };
-  } {
-    return {
-      id: crypto.randomUUID(),
-      type: 'trace-create',
-      timestamp: new Date().toISOString(),
-      body: { id: runId, name: 'run', ...(metadata ? { metadata } : {}) },
-    };
+  /** Close the run's root observation once the run completes, so it exports and the tree is whole. */
+  endRun(runId: string): void {
+    try {
+      this.runRoots.get(runId)?.end();
+    } catch (err) {
+      this.log.info(`research tracer endRun threw: ${err}`);
+    } finally {
+      this.runRoots.delete(runId);
+    }
   }
 
-  // Flush in-flight ingestion before the process exits so the last spans before a redeploy/SIGTERM
-  // are not lost. Delegates to the kernel, which races the deadline and swallows failures so a flush
-  // error can never block shutdown (ADR-0021). No-op when nothing is in flight (e.g. disabled tracer).
+  /**
+   * Push in-flight spans to Langfuse WITHOUT tearing the provider down — called per run so a long-lived
+   * (singleton) tracer flushes between runs. Deadline-bounded: a Langfuse that accepts the connection but
+   * never responds must not block the worker. Never throws.
+   */
+  async flush(): Promise<void> {
+    await Promise.race([
+      this.tracing.forceFlush(),
+      new Promise<void>((resolve) => setTimeout(resolve, flushTimeoutMs())),
+    ]);
+  }
+
+  // Flush + tear down on process exit. Ends any still-open run roots first so their trees aren't lost.
   async onApplicationShutdown(): Promise<void> {
-    await this.ingest.flush(flushTimeoutMs());
+    for (const runId of [...this.runRoots.keys()]) this.endRun(runId);
+    await this.tracing.shutdown(flushTimeoutMs());
   }
 }

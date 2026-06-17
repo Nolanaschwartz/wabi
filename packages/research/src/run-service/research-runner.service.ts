@@ -134,10 +134,12 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   ]);
 
   // One tracer + one runId for the whole run (every topic's agent hangs under the same parent trace).
-  // The tracer is a CLEAN no-op when Langfuse env is absent — `enabled` is re-read per call inside the
-  // shared kernel, so this never depends on import-time env (CLAUDE.md lazy-config rule). Tracing is
-  // additive: it never alters the run's counts and never throws out of a span (ADR-0021).
-  const tracer = new ResearchTracer(log);
+  // The tracer is a process SINGLETON: building it stands up a full OTEL provider (NodeTracerProvider +
+  // LangfuseSpanProcessor + ContextManager), so rebuilding it per scheduled run wastes resources and
+  // churns the global provider pointer. We build it once (lazily, post-ConfigModule — CLAUDE.md
+  // lazy-config rule) and forceFlush between runs instead of tearing it down. Tracing is additive: it
+  // never alters the run's counts and never throws out of a span (ADR-0021).
+  const tracer = sharedResearchTracer(log);
   const runId = crypto.randomUUID();
 
   let tokensUsed = 0;
@@ -159,6 +161,20 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     },
     tokens: () => tokensUsed,
     topicsRun: () => topicsRun,
-    flushTracing: () => tracer.onApplicationShutdown(),
+    // Close this run's root span and push spans, but DON'T tear the singleton provider down — the next
+    // scheduled run reuses it.
+    flushTracing: async () => {
+      tracer.endRun(runId);
+      await tracer.flush();
+    },
   };
+}
+
+// Process-wide ResearchTracer singleton — built once on first run (after ConfigModule has populated
+// env), reused across scheduled runs so the OTEL provider/processor/ContextManager are not rebuilt and
+// torn down every run.
+let sharedTracer: ResearchTracer | undefined;
+function sharedResearchTracer(log: Logger): ResearchTracer {
+  if (!sharedTracer) sharedTracer = new ResearchTracer(log);
+  return sharedTracer;
 }

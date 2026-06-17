@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { generate } from '@wabi/shared/generate';
+import { generate, type GenerationCallTelemetry } from '@wabi/shared/generate';
 import { JsonLogger } from '../../lib/json-logger';
 
 export type ClassifierResult = 'safe' | 'crisis';
@@ -47,7 +47,18 @@ const MAX_CONTEXT_USER_MESSAGES = 5;
 export class ClassifierService {
   private readonly logger = new JsonLogger(ClassifierService.name);
 
-  async classify(message: string, context?: ClassifierContext): Promise<ClassifierResult> {
+  /**
+   * Classify one message as 'safe' or 'crisis'. The verdict is the contract — fail-CLOSED (ADR-0021).
+   * `onTelemetry`, when supplied, is invoked once with the call's model + token usage on a SUCCESSFUL
+   * generate (never on a transport error — there is no model to report); it lets a tracer attribute the
+   * manual `classify` span without this safety seam depending on the tracing module. It never affects
+   * the verdict.
+   */
+  async classify(
+    message: string,
+    context?: ClassifierContext,
+    onTelemetry?: (telemetry: GenerationCallTelemetry) => void,
+  ): Promise<ClassifierResult> {
     try {
       // generate owns the MECHANISM (lazy provider resolution, the ai client, the call) — ADR-0037 —
       // so the load-order foot-gun that froze this to OpenAI defaults can't recur. The classifier keeps
@@ -55,12 +66,19 @@ export class ClassifierService {
       // reasoning-model result comes back as empty `text` and is handled by the fail-closed branch
       // below, NOT here. retryOnEmpty is deliberately OFF: the safety path fails closed instantly with
       // no added latency.
-      const { text } = await generate('classifier', {
+      const { text, model, usage } = await generate('classifier', {
         system: CLASSIFIER_SYSTEM_PROMPT,
         prompt: this.buildPrompt(message, context),
         temperature: 0,
         maxOutputTokens: CLASSIFIER_MAX_OUTPUT_TOKENS,
       });
+      // Report telemetry for the completed call (model/usage are operational, not personal data). Guarded
+      // so a sink error can never alter the fail-closed verdict.
+      try {
+        onTelemetry?.({ model, usage });
+      } catch {
+        /* never let observability affect the safety verdict */
+      }
 
       const verdict = (text ?? '').trim().toLowerCase();
       // Fail closed: only an explicit, unambiguous "safe" is treated as safe. Empty output (a reasoning

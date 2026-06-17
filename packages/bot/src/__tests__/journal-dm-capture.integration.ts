@@ -92,8 +92,8 @@ describe('Journal DM two-turn capture integration', () => {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
       search: jest.fn().mockResolvedValue([]),
     } as any;
-    const langfuseTracer = { span: jest.fn(), score: jest.fn() } as any;
-    const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement);
+    const langfuseTracer = { span: jest.fn(), score: jest.fn(), traceObservation: jest.fn(), latchCrisis: jest.fn() } as any;
+    const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement, { tracer: {}, score: () => {} } as any);
     const classifier = { classify } as any;
     const intentRouter = { route: intentRoute } as any;
     // tilt/mood spokes aren't exercised here, but the router projects every registered spoke into its

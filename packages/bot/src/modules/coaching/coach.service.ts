@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { generate } from '@wabi/shared/generate';
+import { generate, type GenerateTelemetry } from '@wabi/shared/generate';
 import { JsonLogger } from '../../lib/json-logger';
 
 /**
@@ -34,7 +34,11 @@ export class CoachService {
    * policy (a thrown/empty call yields empty text). All prompt shaping (persona selection, context
    * layout, aftermath tone) lives in buildCoachPrompt (coach-prompt.ts).
    */
-  async generateDetailed(system: string, prompt: string): Promise<CoachGeneration> {
+  async generateDetailed(
+    system: string,
+    prompt: string,
+    telemetry?: GenerateTelemetry,
+  ): Promise<CoachGeneration> {
     try {
       const out = await generate('coach', {
         system,
@@ -42,6 +46,9 @@ export class CoachService {
         temperature: 0.7,
         maxOutputTokens: 2048,
         retryOnEmpty: { temperature: 0.3 },
+        // Below the crisis gate: the AI SDK auto-captures model/usage/latency (and prompt+reply when
+        // recordInputs/Outputs are set) to the isolated Langfuse tracer. Above-gate callers omit this.
+        telemetry,
         log: ({ model, baseUrl, cap }) =>
           this.logger.warn('coach returned empty response after retry', {
             model,

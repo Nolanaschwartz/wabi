@@ -74,7 +74,7 @@ describe('DM dispatch integration', () => {
     } as any;
     const strategyRetrieval = { search: jest.fn().mockResolvedValue([]) } as any;
     const burstCoalescer = new BurstCoalescer();
-    const langfuseTracer = { span: jest.fn(), score: jest.fn() } as any;
+    const langfuseTracer = { span: jest.fn(), score: jest.fn(), traceObservation: jest.fn(), latchCrisis: jest.fn() } as any;
     const accessResolver = { resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }) } as any;
     const memoryStore = {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
@@ -106,6 +106,7 @@ describe('DM dispatch integration', () => {
       langfuseTracer,
       memoryStore,
       habitEngagement,
+      { tracer: {}, score: () => {} } as any,
     );
     // Journal/tilt/mood spokes are unused on this coach-path test (intent coach/0, nothing pending),
     // but the router projects every registered spoke into its catalogue at construction, so each must

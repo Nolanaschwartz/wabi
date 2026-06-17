@@ -17,7 +17,7 @@
     "baseUrl": ".",
     "paths": {
       "@wabi/shared/generate": ["node_modules/@wabi/shared/dist/generate"],
-      "@wabi/shared/langfuse": ["node_modules/@wabi/shared/dist/langfuse"]
+      "@wabi/shared/otel": ["node_modules/@wabi/shared/dist/otel"]
     }
   },
   "include": ["src"],
