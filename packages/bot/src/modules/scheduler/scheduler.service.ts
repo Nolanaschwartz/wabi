@@ -1,7 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { PgBoss } from 'pg-boss';
+import type { JobRegistry } from './job-registry';
+import type { JobDefinition } from './jobs';
+import { Job } from './jobs';
 
 export type JobHandler = (jobs: unknown[]) => Promise<void>;
+
+/** Per-job registration outcome, surfaced on `/health`. A job sits in exactly one bucket. */
+export interface JobStatus {
+  /** Bound to a live worker. */
+  registered: Job[];
+  /** Declared but not bound — the client is degraded (no DB). Not an error; the bot still boots. */
+  degraded: Job[];
+  /** Declared, the client was up, but binding threw. The one bucket an operator must act on. */
+  failed: Job[];
+}
 
 /**
  * The bot's single pg-boss client and job seam. Before this, five services each constructed their
@@ -16,6 +29,43 @@ export type JobHandler = (jobs: unknown[]) => Promise<void>;
 @Injectable()
 export class SchedulerService {
   private boss: PgBoss | null = null;
+  private readonly status: JobStatus = { registered: [], degraded: [], failed: [] };
+
+  /** The outcome of the last `drainRegistry` — what bound, what degraded, what failed. */
+  get jobStatus(): JobStatus {
+    return this.status;
+  }
+
+  /**
+   * Register every job declared in the registry, recording each outcome. Run once at application
+   * bootstrap, AFTER every owner has declared (so it doesn't depend on module init order). Degraded
+   * client ⇒ every job is marked degraded and nothing binds (fail-open). A single job that throws on
+   * bind is marked failed and the rest still register — one bad worker never sinks the others.
+   */
+  async drainRegistry(registry: JobRegistry): Promise<void> {
+    for (const def of registry.all()) {
+      if (!this.boss) {
+        this.status.degraded.push(def.name);
+        continue;
+      }
+      try {
+        await this.bind(def);
+        this.status.registered.push(def.name);
+      } catch {
+        this.status.failed.push(def.name);
+      }
+    }
+  }
+
+  /** Bind one declared job to the live client. Throws on failure so `drainRegistry` can record it. */
+  private async bind(def: JobDefinition): Promise<void> {
+    if (!this.boss) return;
+    await this.boss.createQueue(def.name);
+    if (def.kind === 'cron') {
+      await this.boss.schedule(def.name, def.cron);
+    }
+    await this.boss.work(def.name, def.handler);
+  }
 
   /** True once the shared client has started; false in degraded mode (no DB / start failed). */
   get available(): boolean {

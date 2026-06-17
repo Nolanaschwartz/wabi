@@ -3,7 +3,8 @@ import { Client } from 'discord.js';
 import { prisma } from '@wabi/shared';
 import { CheckInScheduler } from './checkin-timing';
 import { CoachingService } from '../coaching/coaching.service';
-import { SchedulerService } from '../scheduler/scheduler.service';
+import { JobRegistry } from '../scheduler/job-registry';
+import { Job } from '../scheduler/jobs';
 
 const CHECK_IN_CRON = '0 */4 * * *';
 const VALID_TIMEZONES = Intl.supportedValuesOf('timeZone');
@@ -14,12 +15,18 @@ export class CheckInService {
     private readonly scheduler: CheckInScheduler,
     private readonly coachingService: CoachingService,
     private readonly client: Client,
-    private readonly jobs: SchedulerService,
+    private readonly jobs: JobRegistry,
   ) {}
 
-  async init(): Promise<void> {
-    // Register the check-in cron on the shared Scheduler; the client lifecycle is the Scheduler's.
-    await this.jobs.cron('check-in-scheduler', CHECK_IN_CRON, this.handleCheckIns.bind(this));
+  init(): void {
+    // Declare the check-in cron; the Scheduler binds it at bootstrap, lifecycle is the Scheduler's.
+    this.jobs.declare({
+      name: Job.CheckIn,
+      kind: 'cron',
+      cron: CHECK_IN_CRON,
+      owner: 'checkins',
+      handler: this.handleCheckIns.bind(this),
+    });
   }
 
   private async handleCheckIns(): Promise<void> {

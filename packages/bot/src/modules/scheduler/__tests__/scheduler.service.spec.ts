@@ -12,6 +12,8 @@ jest.mock('pg-boss', () => ({
 }));
 
 import { SchedulerService } from '../scheduler.service';
+import { JobRegistry } from '../job-registry';
+import { Job } from '../jobs';
 
 describe('SchedulerService', () => {
   let scheduler: SchedulerService;
@@ -79,5 +81,93 @@ describe('SchedulerService', () => {
     await scheduler.stop();
     expect(mockBoss.stop).toHaveBeenCalledTimes(1);
     expect(scheduler.available).toBe(false);
+  });
+
+  describe('drainRegistry', () => {
+    it('registers every declared job and reports them as registered', async () => {
+      await scheduler.start();
+      const registry = new JobRegistry();
+      const sweepHandler = jest.fn();
+      const demoteHandler = jest.fn();
+      registry.declare({
+        name: Job.SessionSweep,
+        kind: 'cron',
+        cron: '*/5 * * * *',
+        owner: 'session-buffer',
+        handler: sweepHandler,
+      });
+      registry.declare({
+        name: Job.StrategyDemote,
+        kind: 'work',
+        owner: 'strategy-admin',
+        handler: demoteHandler,
+      });
+
+      await scheduler.drainRegistry(registry);
+
+      expect(mockBoss.createQueue).toHaveBeenCalledWith(Job.SessionSweep);
+      expect(mockBoss.schedule).toHaveBeenCalledWith(Job.SessionSweep, '*/5 * * * *');
+      expect(mockBoss.work).toHaveBeenCalledWith(Job.SessionSweep, sweepHandler);
+      expect(mockBoss.createQueue).toHaveBeenCalledWith(Job.StrategyDemote);
+      expect(mockBoss.work).toHaveBeenCalledWith(Job.StrategyDemote, demoteHandler);
+
+      expect(scheduler.jobStatus).toEqual({
+        registered: [Job.SessionSweep, Job.StrategyDemote],
+        degraded: [],
+        failed: [],
+      });
+    });
+
+    it('marks every job degraded and binds nothing when the client is down', async () => {
+      delete process.env.DATABASE_URL;
+      await scheduler.start();
+      const registry = new JobRegistry();
+      registry.declare({
+        name: Job.SessionSweep,
+        kind: 'cron',
+        cron: '*/5 * * * *',
+        owner: 'session-buffer',
+        handler: jest.fn(),
+      });
+
+      await scheduler.drainRegistry(registry);
+
+      expect(mockBoss.createQueue).not.toHaveBeenCalled();
+      expect(scheduler.jobStatus).toEqual({
+        registered: [],
+        degraded: [Job.SessionSweep],
+        failed: [],
+      });
+    });
+
+    it('isolates a job that fails to bind — the rest still register', async () => {
+      await scheduler.start();
+      mockBoss.createQueue.mockImplementation((queue: string) => {
+        if (queue === Job.SessionSweep) throw new Error('boom');
+        return Promise.resolve();
+      });
+      const registry = new JobRegistry();
+      registry.declare({
+        name: Job.SessionSweep,
+        kind: 'cron',
+        cron: '*/5 * * * *',
+        owner: 'session-buffer',
+        handler: jest.fn(),
+      });
+      registry.declare({
+        name: Job.StrategyDemote,
+        kind: 'work',
+        owner: 'strategy-admin',
+        handler: jest.fn(),
+      });
+
+      await scheduler.drainRegistry(registry);
+
+      expect(scheduler.jobStatus).toEqual({
+        registered: [Job.StrategyDemote],
+        degraded: [],
+        failed: [Job.SessionSweep],
+      });
+    });
   });
 });

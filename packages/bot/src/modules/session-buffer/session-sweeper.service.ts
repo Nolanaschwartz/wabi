@@ -3,7 +3,8 @@ import { prisma } from '@wabi/shared';
 import { CoachingSessionService } from './coaching-session.service';
 import { SessionBufferService } from './session-buffer.service';
 import { MemoryStoreService } from '../memory/memory-store.service';
-import { SchedulerService } from '../scheduler/scheduler.service';
+import { JobRegistry } from '../scheduler/job-registry';
+import { Job } from '../scheduler/jobs';
 
 export interface SweepResult {
   sessionsEnded: number;
@@ -11,7 +12,6 @@ export interface SweepResult {
   skipped: number;
 }
 
-const SWEEP_QUEUE = 'session-sweeper';
 const SWEEP_CRON = '*/5 * * * *';
 
 @Injectable()
@@ -20,13 +20,19 @@ export class SessionSweeper implements OnModuleInit {
     private readonly coachingSession: CoachingSessionService,
     private readonly sessionBuffer: SessionBufferService,
     private readonly memoryStore: MemoryStoreService,
-    private readonly scheduler: SchedulerService,
+    private readonly jobs: JobRegistry,
   ) {}
 
-  async onModuleInit() {
-    // Register the sweep cron on the shared Scheduler; the client lifecycle is the Scheduler's.
-    await this.scheduler.cron(SWEEP_QUEUE, SWEEP_CRON, async () => {
-      await this.sweep();
+  onModuleInit() {
+    // Declare the sweep cron; the Scheduler drains the registry and binds it at bootstrap.
+    this.jobs.declare({
+      name: Job.SessionSweep,
+      kind: 'cron',
+      cron: SWEEP_CRON,
+      owner: 'session-buffer',
+      handler: async () => {
+        await this.sweep();
+      },
     });
   }
 

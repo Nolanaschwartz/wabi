@@ -26,6 +26,7 @@ describe('CrisisAftermathService', () => {
   let coachingSession: { quarantine: jest.Mock };
   let scheduler: { work: jest.Mock; sendAfter: jest.Mock; available: boolean };
   let client: { users: { send: jest.Mock } };
+  let jobs: { declare: jest.Mock };
   let followUpHandler: (job: unknown[]) => Promise<void>;
 
   beforeEach(async () => {
@@ -39,16 +40,18 @@ describe('CrisisAftermathService', () => {
       available: true,
     };
     client = { users: { send: jest.fn().mockResolvedValue(undefined) } };
+    jobs = { declare: jest.fn() };
     service = new CrisisAftermathService(
       sessionBuffer,
       coachingSession as any,
       scheduler as any,
       client as any,
       new ContactPolicyService(),
+      jobs as any,
     );
-    await service.init();
-    // init() registers the follow-up worker; capture its handler to exercise the job directly.
-    followUpHandler = scheduler.work.mock.calls[0]?.[1];
+    service.init();
+    // init() declares the follow-up worker; capture its handler to exercise the job directly.
+    followUpHandler = jobs.declare.mock.calls[0]?.[0]?.handler;
   });
 
   it('clears buffer on escalation', async () => {

@@ -54,7 +54,9 @@ describe('StrategyAdminService', () => {
       send: jest.fn().mockResolvedValue('job_1'),
       available: true,
     };
-    service = new StrategyAdminService(trustGate, retrieval, scheduler as any);
+    service = new StrategyAdminService(trustGate, retrieval, scheduler as any, {
+      declare: jest.fn(),
+    } as any);
   });
 
   it('publishes draft when decision is publish', async () => {
@@ -418,7 +420,7 @@ describe('StrategyAdminService.isDuplicate', () => {
     jest.clearAllMocks();
     process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
     retrieval = { search: jest.fn() };
-    svc = new StrategyAdminService({} as any, retrieval as any, {} as any);
+    svc = new StrategyAdminService({} as any, retrieval as any, {} as any, {} as any);
   });
 
   it('is a duplicate when the top match scores at/above threshold', async () => {
@@ -437,7 +439,7 @@ describe('StrategyAdminService.isDuplicate', () => {
 });
 
 describe('StrategyAdminService ledger', () => {
-  const svc = new StrategyAdminService({} as any, { search: jest.fn() } as any, {} as any);
+  const svc = new StrategyAdminService({} as any, { search: jest.fn() } as any, {} as any, {} as any);
   beforeEach(() => jest.clearAllMocks());
 
   it('hasSeen returns true when a row exists', async () => {
@@ -475,7 +477,7 @@ describe('StrategyAdminService.ingestCandidate', () => {
     process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
     trustGate = { evaluate: jest.fn() };
     retrieval = { search: jest.fn() };
-    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any);
+    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any, {} as any);
     jest.spyOn(svc, 'markProcessed').mockResolvedValue();
   });
 
