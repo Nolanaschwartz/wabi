@@ -96,11 +96,21 @@ describe('Journal DM two-turn capture integration', () => {
     const coachHandler = new CoachHandler(coach, sessionBuffer, langfuseTracer, memoryStore, habitEngagement);
     const classifier = { classify } as any;
     const intentRouter = { route: intentRoute } as any;
+    // tilt/mood spokes aren't exercised here, but the router projects every registered spoke into its
+    // catalogue at construction, so each must satisfy the Spoke contract (intent/description/tools/defaultTool).
     const tiltDmHandler = {
+      intent: 'tilt',
+      description: 'tilt',
+      tools: [],
+      defaultTool: 'offer_session',
       invoke: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
       resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
     } as any;
     const moodDmHandler = {
+      intent: 'mood',
+      description: 'mood',
+      tools: [],
+      defaultTool: 'log_mood',
       invoke: jest.fn().mockResolvedValue({ kind: 'handled' }),
       resume: jest.fn().mockResolvedValue({ kind: 'handled' }),
     } as any;

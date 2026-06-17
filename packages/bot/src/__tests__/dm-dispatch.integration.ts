@@ -107,15 +107,38 @@ describe('DM dispatch integration', () => {
       memoryStore,
       habitEngagement,
     );
-    // Journal handler/session unused on this coach-path test (intent coach/0, nothing pending) — mock.
-    const journalDmHandler = { handle: jest.fn().mockResolvedValue(undefined) } as any;
+    // Journal/tilt/mood spokes are unused on this coach-path test (intent coach/0, nothing pending),
+    // but the router projects every registered spoke into its catalogue at construction, so each must
+    // still satisfy the Spoke contract (intent/description/tools/defaultTool + invoke/resume).
+    const journalDmHandler = {
+      intent: 'journal',
+      description: 'journal',
+      tools: [],
+      defaultTool: 'give_prompt',
+      invoke: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+    } as any;
     const spokeSession = {
       active: jest.fn().mockResolvedValue(null),
       consume: jest.fn().mockResolvedValue(null),
       clear: jest.fn().mockResolvedValue(undefined),
     } as any;
-    const tiltDmHandler = { handle: jest.fn().mockResolvedValue(false) } as any;
-    const moodDmHandler = { promptForRating: jest.fn(), capture: jest.fn() } as any;
+    const tiltDmHandler = {
+      intent: 'tilt',
+      description: 'tilt',
+      tools: [],
+      defaultTool: 'offer_session',
+      invoke: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+    } as any;
+    const moodDmHandler = {
+      intent: 'mood',
+      description: 'mood',
+      tools: [],
+      defaultTool: 'log_mood',
+      invoke: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+      resume: jest.fn().mockResolvedValue({ kind: 'fallthrough' }),
+    } as any;
     const dmRouter = new DmRouterService(
       coachHandler,
       journalDmHandler,
