@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { Newsreader, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
+import AppNav from "@/components/app-nav";
 
 // Newsreader — display & headings (warm literary serif)
 const newsreader = Newsreader({
@@ -53,6 +54,7 @@ export default function RootLayout({
       className={`${newsreader.variable} ${hanken.variable} ${jetbrains.variable}`}
     >
       <body className="bg-ink-0 text-bone-0 font-sans antialiased">
+        <AppNav />
         {children}
       </body>
     </html>
