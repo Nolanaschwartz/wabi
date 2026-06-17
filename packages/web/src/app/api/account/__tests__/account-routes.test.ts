@@ -197,7 +197,7 @@ describe('account delete (whole account) route', () => {
       }),
     );
     expect(lucia.invalidateSession).toHaveBeenCalledWith('sess_1');
-    expect(res.cookies.get('auth_session')?.value).toBe('');
+    expect((res as any).cookies.get('auth_session')?.value).toBe('');
   });
 
   it('does NOT invalidate the session or clear the cookie when the bot fails', async () => {
