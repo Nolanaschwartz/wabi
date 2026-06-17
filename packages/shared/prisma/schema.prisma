@@ -181,3 +181,32 @@ model ProcessedSource {
   firstSeenAt DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+// Research worker config singleton (ADR-0034). Owned exclusively by the always-on research
+// service; the bot never reads or writes it. One row, id="singleton". Holds the schedule and the
+// run bounds; Int defaults mirror the RESEARCH_MAX_* env defaults in packages/research/src/config.ts.
+// DB is the source of truth after first boot; the env defaults demote to bootstrap seeds only.
+model ResearchConfig {
+  id                String   @id @default("singleton")
+  scheduleCron      String?               // null = unscheduled
+  scheduleEnabled   Boolean  @default(false)
+  maxTopicsPerRun   Int      @default(5)
+  maxPapersPerTopic Int      @default(8)
+  maxDiscoverySteps Int      @default(2)
+  maxDraftsPerTopic Int      @default(3)
+  maxDraftsPerRun   Int      @default(10)
+  agentTimeoutMs    Int      @default(90000)
+  runTimeoutMs      Int      @default(600000)
+  tokenBudget       Int      @default(200000)
+  updatedAt         DateTime @updatedAt
+}
+
+// Editable research seed topics (ADR-0034). Replaces the hardcoded SEED_TOPICS list; seeded from
+// it on first boot when the table is empty. Owned exclusively by the research worker.
+model ResearchTopic {
+  id        String   @id @default(cuid())
+  text      String   @unique
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
