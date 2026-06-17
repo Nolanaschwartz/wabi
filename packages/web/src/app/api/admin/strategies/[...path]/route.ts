@@ -9,7 +9,9 @@ import { isOperator } from "@/lib/admin";
  * read server-side only and never reaches the browser.
  */
 function botBaseUrl(): string {
-	return process.env.BOT_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+	// The bot binds :3001 (web owns :3000). A :3000 default would forward to web itself → 404/redirect
+	// → an empty strategy list. Mirrors the research proxy's :3002 default.
+	return process.env.BOT_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 }
 
 /** A denial response (401 unauthenticated / 403 non-operator), or null if the caller may proceed. */

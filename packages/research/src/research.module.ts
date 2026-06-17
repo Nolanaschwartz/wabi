@@ -6,6 +6,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
 import { ResearchScheduleService } from './schedule-service/research-schedule.service';
 import { ResearchRunService } from './run-service/research-run.service';
 import { ResearchRunnerService } from './run-service/research-runner.service';
+import { defaultLogger } from './util/logger';
 
 /**
  * The research worker's feature module (ADR-0034). Owns config persistence, the admin HTTP surface,
@@ -26,7 +27,9 @@ import { ResearchRunnerService } from './run-service/research-runner.service';
     AdminGuard,
     // The runner takes an optional injectable-deps bag (a plain interface, no Nest token), so it is
     // constructed via a factory with production defaults rather than Nest's reflective resolution.
-    { provide: ResearchRunnerService, useFactory: () => new ResearchRunnerService() },
+    // Wire the real stderr logger (gated by RESEARCH_LOG_LEVEL); WITHOUT this the runner falls back
+    // to noopLogger and the entire DI-driven run path (manual "Run now" + scheduled) is silent.
+    { provide: ResearchRunnerService, useFactory: () => new ResearchRunnerService({ log: defaultLogger() }) },
     ResearchRunService,
     ResearchScheduleService,
   ],
