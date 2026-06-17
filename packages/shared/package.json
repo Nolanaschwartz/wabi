@@ -17,10 +17,6 @@
       "types": "./dist/generate.d.ts",
       "default": "./dist/generate.js"
     },
-    "./langfuse": {
-      "types": "./dist/langfuse.d.ts",
-      "default": "./dist/langfuse.js"
-    },
     "./otel": {
       "types": "./dist/otel.d.ts",
       "default": "./dist/otel.js"
