@@ -1,22 +1,16 @@
-import { generateText } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+// The router is now a caller of @wabi/shared/generate: it builds its catalogue system prompt, calls
+// generate('router', …), then keeps its DOMAIN logic — the JSON parse and catalogue validation — and
+// its local fail-SOFT policy (any transport throw, empty output, unparseable JSON, unknown label, or
+// out-of-range confidence resolves to coach/0). The MECHANISM (provider resolution, ai client, the
+// call, lazy re-read of env) now lives in generate, so it is no longer asserted here.
+jest.mock('@wabi/shared/generate', () => ({ generate: jest.fn() }));
+
 import { IntentRouterService, type SpokeCatalogue } from '../intent-router.service';
 
-jest.mock('ai', () => ({
-  generateText: jest.fn(),
-}));
+const { generate } = require('@wabi/shared/generate') as { generate: jest.Mock };
 
-jest.mock('@ai-sdk/openai', () => ({
-  createOpenAI: jest.fn(() => (model: any) => ({ _model: model })),
-}));
-
-jest.mock('@wabi/shared', () => ({
-  getProvider: jest.fn(() => ({
-    baseUrl: 'http://localhost:11434/v1',
-    model: 'test-router',
-    apiKey: 'test-key',
-  })),
-}));
+// generate returns { text, usage?, model, latencyMs }; the router reads only text.
+const reply = (text: string) => ({ text, model: 'test-router', latencyMs: 1 });
 
 // The catalogue the hub passes in — the single source the router prompts from and validates against.
 const CATALOGUE: SpokeCatalogue = [
@@ -45,9 +39,7 @@ describe('IntentRouterService', () => {
   const route = (batch: string) => service.route(batch, CATALOGUE);
 
   it('parses a wellness-verb intent and confidence from the model', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"journal","confidence":0.82}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.82}'));
 
     const result = await route('want to journal about tonight');
 
@@ -55,9 +47,7 @@ describe('IntentRouterService', () => {
   });
 
   it('parses the journal tool sub-intent when the model asks for a prompt (give_prompt)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"journal","confidence":0.9,"tool":"give_prompt"}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.9,"tool":"give_prompt"}'));
 
     const result = await route('i need a journal entry prompt');
 
@@ -65,9 +55,7 @@ describe('IntentRouterService', () => {
   });
 
   it('parses the journal tool sub-intent when the model writes an entry (save_entry)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"journal","confidence":0.88,"tool":"save_entry"}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.88,"tool":"save_entry"}'));
 
     const result = await route('journal: rough ranked night');
 
@@ -75,9 +63,7 @@ describe('IntentRouterService', () => {
   });
 
   it('parses the journal tool sub-intent when the model reads back an entry (get_entry)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"journal","confidence":0.84,"tool":"get_entry"}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.84,"tool":"get_entry"}'));
 
     const result = await route('what did i journal yesterday');
 
@@ -85,9 +71,7 @@ describe('IntentRouterService', () => {
   });
 
   it('parses a tool for a non-journal intent too (tools are uniform across spokes)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"mood","confidence":0.9,"tool":"log_mood"}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"mood","confidence":0.9,"tool":"log_mood"}'));
 
     const result = await route('log my mood');
 
@@ -95,9 +79,7 @@ describe('IntentRouterService', () => {
   });
 
   it('ignores an unknown tool value (verdict carries no tool)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"journal","confidence":0.7,"tool":"frobnicate"}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.7,"tool":"frobnicate"}'));
 
     const result = await route('something');
 
@@ -105,9 +87,7 @@ describe('IntentRouterService', () => {
   });
 
   it('ignores a tool that belongs to a different intent (cross-intent tool dropped)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"coach","confidence":0.9,"tool":"give_prompt"}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"coach","confidence":0.9,"tool":"give_prompt"}'));
 
     const result = await route('just venting');
 
@@ -115,9 +95,7 @@ describe('IntentRouterService', () => {
   });
 
   it('passes the confidence through verbatim', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"tilt","confidence":0.41}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"tilt","confidence":0.41}'));
 
     const result = await route('teammates keep feeding');
 
@@ -126,9 +104,7 @@ describe('IntentRouterService', () => {
   });
 
   it('tolerates JSON wrapped in surrounding prose', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: 'Sure! {"intent":"mood","confidence":0.6} hope that helps',
-    });
+    generate.mockResolvedValue(reply('Sure! {"intent":"mood","confidence":0.6} hope that helps'));
 
     const result = await route('feeling kind of low today');
 
@@ -136,7 +112,7 @@ describe('IntentRouterService', () => {
   });
 
   it('generates the system prompt from the catalogue — a new tool surfaces with no other edit', async () => {
-    (generateText as jest.Mock).mockResolvedValue({ text: '{"intent":"coach","confidence":0.9}' });
+    generate.mockResolvedValue(reply('{"intent":"coach","confidence":0.9}'));
     const withNewTool: SpokeCatalogue = [
       ...CATALOGUE,
       {
@@ -148,29 +124,29 @@ describe('IntentRouterService', () => {
 
     await service.route('hey', withNewTool);
 
-    const system = (generateText as jest.Mock).mock.calls[0][0].system as string;
+    const system = generate.mock.calls[0][1].system as string;
     expect(system).toContain('"mood_history"');
     expect(system).toContain('show their recent mood trend');
     // Intent descriptions are generated too, not hand-maintained.
     expect(system).toContain('calm frustration');
   });
 
-  it('resolves the provider lazily on every call (never cached at import)', async () => {
-    const { getProvider } = jest.requireMock('@wabi/shared');
-    (generateText as jest.Mock).mockResolvedValue({ text: '{"intent":"coach","confidence":0.9}' });
+  it('calls generate with role "router", temperature 0, the 256 cap, and no retry-on-empty', async () => {
+    generate.mockResolvedValue(reply('{"intent":"coach","confidence":0.9}'));
 
     await route('hey');
-    await route('hey again');
 
-    // One resolve per call — config is re-read so a late-loaded ROUTER_* env is honoured.
-    expect(getProvider).toHaveBeenCalledTimes(2);
-    expect(getProvider).toHaveBeenCalledWith('router');
+    expect(generate.mock.calls[0][0]).toBe('router');
+    const opts = generate.mock.calls[0][1];
+    expect(opts.temperature).toBe(0);
+    expect(opts.maxOutputTokens).toBe(256);
+    expect(opts.retryOnEmpty).toBeUndefined();
+    expect(typeof opts.system).toBe('string');
+    expect(typeof opts.prompt).toBe('string');
   });
 
   it('fails soft to coach/0 on an unknown intent label', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: '{"intent":"billing","confidence":0.99}',
-    });
+    generate.mockResolvedValue(reply('{"intent":"billing","confidence":0.99}'));
 
     const result = await route('cancel my subscription');
 
@@ -178,7 +154,15 @@ describe('IntentRouterService', () => {
   });
 
   it('fails soft to coach/0 on unparseable output', async () => {
-    (generateText as jest.Mock).mockResolvedValue({ text: 'no json here' });
+    generate.mockResolvedValue(reply('no json here'));
+
+    const result = await route('anything');
+
+    expect(result).toEqual({ intent: 'coach', confidence: 0 });
+  });
+
+  it('fails soft to coach/0 on empty output (an empty text flows through the unparseable branch)', async () => {
+    generate.mockResolvedValue(reply(''));
 
     const result = await route('anything');
 
@@ -186,15 +170,15 @@ describe('IntentRouterService', () => {
   });
 
   it('fails soft to coach/0 when confidence is missing or out of range', async () => {
-    (generateText as jest.Mock).mockResolvedValue({ text: '{"intent":"journal"}' });
+    generate.mockResolvedValue(reply('{"intent":"journal"}'));
     expect(await route('x')).toEqual({ intent: 'coach', confidence: 0 });
 
-    (generateText as jest.Mock).mockResolvedValue({ text: '{"intent":"journal","confidence":1.5}' });
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":1.5}'));
     expect(await route('x')).toEqual({ intent: 'coach', confidence: 0 });
   });
 
-  it('fails soft to coach/0 on a provider/network error (never throws)', async () => {
-    (generateText as jest.Mock).mockRejectedValue(new Error('network error'));
+  it('fails soft to coach/0 on a transport error from generate (never throws)', async () => {
+    generate.mockRejectedValue(new Error('network error'));
 
     const result = await route('anything');
 

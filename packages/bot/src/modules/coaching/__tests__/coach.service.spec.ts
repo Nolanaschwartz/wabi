@@ -1,22 +1,24 @@
-import { generateText } from 'ai';
-import { createOpenAI } from '@ai-sdk/openai';
+// coach is now a caller of @wabi/shared/generate: build {system, prompt} -> generate -> map result.
+// The MECHANISM (lazy provider resolution, the ai client, the generateText call, retry-on-empty, and
+// summing usage+latency across attempts) moved into generate; what stays here and is tested is coach's
+// DOMAIN shaping — it OPTS IN to retryOnEmpty at the lower temperature — and its fail policy
+// (transport throw / empty -> empty text), plus the CoachGeneration metadata it surfaces.
+jest.mock('@wabi/shared/generate', () => ({ generate: jest.fn() }));
+
 import { CoachService } from '../coach.service';
 
-jest.mock('ai', () => ({
-  generateText: jest.fn(),
-}));
+const { generate } = require('@wabi/shared/generate') as { generate: jest.Mock };
 
-jest.mock('@ai-sdk/openai', () => ({
-  createOpenAI: jest.fn(() => (model: any) => ({ _model: model })),
-}));
-
-jest.mock('@wabi/shared', () => ({
-  getProvider: jest.fn(() => ({
-    baseUrl: 'http://localhost:11434/v1',
-    model: 'test-coach',
-    apiKey: 'test-key',
-  })),
-}));
+// generate returns { text, usage, model, latencyMs }; coach maps text/model/usage/latencyMs through.
+const reply = (
+  text: string,
+  extra: { usage?: { inputTokens?: number; outputTokens?: number }; model?: string; latencyMs?: number } = {},
+) => ({
+  text,
+  usage: extra.usage,
+  model: extra.model ?? 'test-coach',
+  latencyMs: extra.latencyMs ?? 0,
+});
 
 describe('CoachService', () => {
   let service: CoachService;
@@ -27,71 +29,83 @@ describe('CoachService', () => {
   });
 
   it('generates coaching reply', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: "That sounds tough. Take a deep breath — you'll find your footing.",
-    });
+    generate.mockResolvedValue(reply("That sounds tough. Take a deep breath — you'll find your footing."));
 
     const result = await service.generate('system', 'I keep losing and I feel like giving up');
     expect(result).toBe("That sounds tough. Take a deep breath — you'll find your footing.");
   });
 
-  it('returns empty string on API error', async () => {
-    (generateText as jest.Mock).mockRejectedValue(new Error('500'));
+  it('calls generate with the coach role, system prompt, 2048 cap, temp 0.7 and retryOnEmpty at 0.3', async () => {
+    generate.mockResolvedValue(reply('ok'));
 
-    const result = await service.generate('system', 'test');
-    expect(result).toBe('');
+    await service.generate('system text', 'prompt text');
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate).toHaveBeenCalledWith(
+      'coach',
+      expect.objectContaining({
+        system: 'system text',
+        prompt: 'prompt text',
+        temperature: 0.7,
+        maxOutputTokens: 2048,
+        retryOnEmpty: { temperature: 0.3 },
+      }),
+    );
   });
 
-  it('retries on empty response with lower temperature', async () => {
-    (generateText as jest.Mock)
-      .mockResolvedValueOnce({ text: '   ' })
-      .mockResolvedValueOnce({ text: 'Retry works.' });
+  it('does not retry: generate owns retry-on-empty (single call even when the model returned empty)', async () => {
+    // generate has already done any retry internally; coach calls it once regardless of outcome.
+    generate.mockResolvedValue(reply('Retry works.'));
 
     const result = await service.generate('system', 'test');
 
     expect(result).toBe('Retry works.');
-    expect(generateText).toHaveBeenCalledTimes(2);
-    expect(generateText).toHaveBeenLastCalledWith(
-      expect.objectContaining({ temperature: 0.3 }),
-    );
+    expect(generate).toHaveBeenCalledTimes(1);
   });
 
-  it('returns empty after failed retry', async () => {
-    (generateText as jest.Mock).mockResolvedValue({ text: '' });
+  it('returns empty string when generate throws on transport error', async () => {
+    generate.mockRejectedValue(new Error('500'));
 
     const result = await service.generate('system', 'test');
-
     expect(result).toBe('');
-    expect(generateText).toHaveBeenCalledTimes(2);
   });
 
-  it('reports model id and token usage from the provider response (generateDetailed)', async () => {
-    (generateText as jest.Mock).mockResolvedValue({
-      text: 'hello',
-      usage: { inputTokens: 12, outputTokens: 34 },
-    });
+  it('returns empty string when generate returns empty text (after its own retry)', async () => {
+    generate.mockResolvedValue(reply(''));
+
+    const result = await service.generate('system', 'test');
+    expect(result).toBe('');
+  });
+
+  it('reports model id, token usage and latency from generate (generateDetailed)', async () => {
+    generate.mockResolvedValue(
+      reply('hello', { usage: { inputTokens: 12, outputTokens: 34 }, model: 'test-coach', latencyMs: 42 }),
+    );
 
     const result = await service.generateDetailed('system', 'test');
 
     expect(result.text).toBe('hello');
     expect(result.model).toBe('test-coach');
     expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 34 });
+    expect(result.latencyMs).toBe(42);
   });
 
-  it('sums token usage across the first attempt and the retry (no tokens lost)', async () => {
-    (generateText as jest.Mock)
-      .mockResolvedValueOnce({ text: '   ', usage: { inputTokens: 50, outputTokens: 0 } })
-      .mockResolvedValueOnce({ text: 'Retry works.', usage: { inputTokens: 30, outputTokens: 20 } });
+  it('surfaces usage and latency summed across both attempts when generate retried', async () => {
+    // generate sums the first attempt's billed tokens + retry tokens, and the latency of both, before
+    // returning. coach reflects those summed values straight through (it no longer does any summing).
+    generate.mockResolvedValue(
+      reply('Retry works.', { usage: { inputTokens: 80, outputTokens: 20 }, latencyMs: 130 }),
+    );
 
     const result = await service.generateDetailed('system', 'test');
 
     expect(result.text).toBe('Retry works.');
-    // First attempt billed 50 input tokens before returning whitespace; those must not vanish.
     expect(result.usage).toEqual({ inputTokens: 80, outputTokens: 20 });
+    expect(result.latencyMs).toBe(130);
   });
 
-  it('reports the model id with usage absent when the provider omits token counts', async () => {
-    (generateText as jest.Mock).mockResolvedValue({ text: 'hello' });
+  it('reports the model id with usage absent when generate omits token counts', async () => {
+    generate.mockResolvedValue(reply('hello', { usage: undefined, model: 'test-coach' }));
 
     const result = await service.generateDetailed('system', 'test');
 
@@ -100,28 +114,22 @@ describe('CoachService', () => {
     expect(result.usage).toBeUndefined();
   });
 
-  it('reports the model id even when generation fails (empty text, no usage)', async () => {
-    (generateText as jest.Mock).mockRejectedValue(new Error('500'));
+  it('yields empty text with no usage when generate throws (fail policy unchanged)', async () => {
+    // generate throws before it can resolve a model; coach no longer caches the provider, so the
+    // failed-turn generation carries no model/usage. Fail policy is what matters: empty text.
+    generate.mockRejectedValue(new Error('500'));
 
     const result = await service.generateDetailed('system', 'test');
 
     expect(result.text).toBe('');
-    expect(result.model).toBe('test-coach');
     expect(result.usage).toBeUndefined();
   });
 
-  // The coach model (qwopus-3.6) is a reasoning model: a 500-token budget got truncated
-  // mid-sentence and sometimes left content empty (all budget spent reasoning). Both the initial
-  // attempt and the retry need enough room to finish reasoning and emit a full <400-char reply.
-  it('requests a large enough output budget on every attempt', async () => {
-    (generateText as jest.Mock)
-      .mockResolvedValueOnce({ text: '' })
-      .mockResolvedValueOnce({ text: 'ok' });
+  it('requests a 2048 output budget (large enough for the reasoning model on every attempt)', async () => {
+    generate.mockResolvedValue(reply('ok'));
 
     await service.generate('system', 'test');
 
-    for (const call of (generateText as jest.Mock).mock.calls) {
-      expect(call[0].maxOutputTokens).toBeGreaterThanOrEqual(2048);
-    }
+    expect(generate).toHaveBeenCalledWith('coach', expect.objectContaining({ maxOutputTokens: 2048 }));
   });
 });

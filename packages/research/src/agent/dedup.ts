@@ -1,6 +1,4 @@
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { triageMaxTokens } from '../config';
 import { Candidate } from '../types';
 
@@ -40,10 +38,10 @@ export async function isDuplicateInRun(candidate: Candidate, kept: Candidate[]):
   if (bestSim <= LOW) return { duplicate: false, tokens: 0 };
 
   try {
-    const cfg = getProvider('research-triage');
-    const openai = createOpenAI({ baseURL: cfg.baseUrl, apiKey: cfg.apiKey });
-    const { text, usage } = await generateText({
-      model: openai(cfg.model),
+    // generate owns the mechanism (lazy provider resolution, the client, the call); dedup keeps its
+    // role, its cap, and its fail policy. No retry-on-empty — an empty/starved reply maps to not-a-
+    // duplicate below, same as a transport error, so a second attempt buys nothing on this path.
+    const { text, usage } = await generate('research-triage', {
       prompt:
         `Are these two coaching techniques essentially the same? Answer only "same" or "different".\n` +
         `A: ${sig(candidate)}\nB: ${sig(best)}`,

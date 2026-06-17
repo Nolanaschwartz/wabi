@@ -1,28 +1,22 @@
 import { Injectable } from '@nestjs/common';
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider, type ProviderConfig } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { JsonLogger } from '../../lib/json-logger';
-import { compactUsage } from '../../lib/usage';
 
 /**
- * The coach model's reply plus the cost/identity signal for the generation: which model produced it
- * and how many tokens it used. `usage` is present only when the provider reports it — never fabricated.
+ * The coach model's reply plus the cost/identity signal for the generation: which model produced it,
+ * how many tokens it used, and how long it took. `usage` is present only when the provider reports it
+ * — never fabricated. `latencyMs` is summed across attempts by generate and carried for span timing.
  */
 export interface CoachGeneration {
   text: string;
   model: string;
   usage?: { inputTokens?: number; outputTokens?: number };
+  latencyMs: number;
 }
 
 @Injectable()
 export class CoachService {
   private readonly logger = new JsonLogger(CoachService.name);
-  private config: ProviderConfig;
-
-  constructor() {
-    this.config = getProvider('coach');
-  }
 
   /**
    * Run the coach model against an already-assembled {system, prompt} and return only the reply text.
@@ -33,78 +27,36 @@ export class CoachService {
   }
 
   /**
-   * Run the coach model and return the reply alongside its model id and token usage. This service is
-   * the model adapter only — retries, output budget, error-to-empty-string. All prompt shaping
-   * (persona selection, context layout, aftermath tone) lives in buildCoachPrompt (coach-prompt.ts).
+   * Run the coach model and return the reply alongside its model id, token usage, and latency. The
+   * mechanism — lazy provider resolution, the client, the call, retry-on-empty, summing usage+latency
+   * across attempts — lives in @wabi/shared/generate. This service keeps only coach's shaping (it OPTS
+   * IN to retryOnEmpty: a blank reply gets one second attempt at the lower temperature) and its fail
+   * policy (a thrown/empty call yields empty text). All prompt shaping (persona selection, context
+   * layout, aftermath tone) lives in buildCoachPrompt (coach-prompt.ts).
    */
   async generateDetailed(system: string, prompt: string): Promise<CoachGeneration> {
-    const openai = createOpenAI({
-      baseURL: this.config.baseUrl,
-      apiKey: this.config.apiKey,
-    });
-
     try {
-      const first = await generateText({
-        model: openai(this.config.model),
+      const out = await generate('coach', {
         system,
         prompt,
         temperature: 0.7,
         maxOutputTokens: 2048,
+        retryOnEmpty: { temperature: 0.3 },
+        log: ({ model, baseUrl, cap }) =>
+          this.logger.warn('coach returned empty response after retry', {
+            model,
+            baseUrl,
+            cap,
+            contextLength: prompt.length,
+          }),
       });
-
-      let result = first.text.trim();
-      // Accumulate usage across every attempt: the first call can burn tokens then return whitespace,
-      // and dropping its usage on retry under-counts the turn's real (and billed) cost.
-      const usageParts: (TokenUsage | undefined)[] = [first.usage];
-      if (!result) {
-        this.logger.warn('coach returned empty response, retrying', {
-          model: this.config.model,
-          baseUrl: this.config.baseUrl,
-          contextLength: prompt.length,
-        });
-
-        const retry = await generateText({
-          model: openai(this.config.model),
-          system,
-          prompt,
-          temperature: 0.3,
-          maxOutputTokens: 2048,
-        });
-        result = retry.text.trim();
-        usageParts.push(retry.usage);
-      }
-      if (!result) {
-        this.logger.warn('coach returned empty response after retry', {
-          model: this.config.model,
-          baseUrl: this.config.baseUrl,
-          contextLength: prompt.length,
-        });
-      }
-      return { text: result, model: this.config.model, usage: sumUsage(usageParts) };
+      return { text: out.text, model: out.model, usage: out.usage, latencyMs: out.latencyMs };
     } catch (err) {
       this.logger.error('coach generate failed', {
-        model: this.config.model,
-        baseUrl: this.config.baseUrl,
         error: err instanceof Error ? err.message : String(err),
         contextLength: prompt.length,
       });
-      return { text: '', model: this.config.model };
+      return { text: '', model: '', latencyMs: 0 };
     }
   }
-}
-
-type TokenUsage = { inputTokens?: number; outputTokens?: number };
-
-// Sum the token counts across every generate attempt, then drop any that no attempt reported. A count
-// of 0 is real and kept; a field no attempt returned stays absent (never coerced to zero).
-function sumUsage(parts: (TokenUsage | undefined)[]): TokenUsage | undefined {
-  let inputTokens: number | undefined;
-  let outputTokens: number | undefined;
-  for (const part of parts) {
-    if (part && typeof part.inputTokens === 'number') inputTokens = (inputTokens ?? 0) + part.inputTokens;
-    if (part && typeof part.outputTokens === 'number') outputTokens = (outputTokens ?? 0) + part.outputTokens;
-  }
-  return compactUsage({ inputTokens, outputTokens }, { input: 'inputTokens', output: 'outputTokens' }) as
-    | TokenUsage
-    | undefined;
 }

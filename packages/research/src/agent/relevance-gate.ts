@@ -1,6 +1,4 @@
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { triageMaxTokens } from '../config';
 
 export interface GateResult { keep: boolean; tokens: number }
@@ -11,10 +9,10 @@ export interface GateResult { keep: boolean; tokens: number }
  * as a rejection (doing so silently dropped every paper against the local model). */
 export async function relevanceGate(abstract: string): Promise<GateResult> {
   try {
-    const cfg = getProvider('research-triage');
-    const openai = createOpenAI({ baseURL: cfg.baseUrl, apiKey: cfg.apiKey });
-    const { text, usage } = await generateText({
-      model: openai(cfg.model),
+    // generate owns the mechanism (lazy provider resolution, the client, the call); the gate keeps its
+    // role, its cap, and its fail-OPEN policy. No retry-on-empty — an empty/starved reply maps to keep
+    // below, same as a transport error, so a second attempt buys nothing on this high-volume path.
+    const { text, usage } = await generate('research-triage', {
       prompt:
         `Does this abstract describe a concrete behavioral or psychological coping/wellbeing ` +
         `technique that could inform a coaching strategy? Answer only "yes" or "no".\n\n` +
