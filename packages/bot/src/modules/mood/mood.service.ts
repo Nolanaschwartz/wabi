@@ -1,13 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { prisma } from '@wabi/shared';
-
-const MOOD_EMOJIS: Record<number, string> = {
-  1: '😞',
-  2: '😔',
-  3: '😐',
-  4: '🙂',
-  5: '😊',
-};
+import { prisma, ratingToEmoji } from '@wabi/shared';
 
 export interface MoodLog {
   rating: number;
@@ -53,7 +45,7 @@ export class MoodService {
   }
 
   static ratingToEmoji(rating: number): string {
-    return MOOD_EMOJIS[rating] ?? '😐';
+    return ratingToEmoji(rating);
   }
 
   static isLowMood(rating: number): boolean {

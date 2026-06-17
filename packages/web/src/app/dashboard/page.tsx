@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { validateRequest } from '@/lib/session';
 import { prisma, decideAccess } from '@wabi/shared';
-import { buildMoodSeries } from '@/lib/mood-series';
+import { buildMoodSeries, buildMonthGrid, localDateString } from '@/lib/mood-series';
 import DashboardView from './dashboard-view';
 
 // The chart shows the last 30 *local* days; we fetch 31 so timezone bucketing at
@@ -42,8 +42,16 @@ export default async function DashboardPage() {
     prisma.user.findUnique({ where: { id: user.id } }),
   ]);
 
+  const timezone = dbUser?.timezone ?? 'UTC';
+
   // Daily-average mood over the last 30 local days, bucketed in the user's timezone.
-  const moodSeries = buildMoodSeries(moodWindow, dbUser?.timezone ?? 'UTC', CHART_WINDOW_DAYS, now);
+  const moodSeries = buildMoodSeries(moodWindow, timezone, CHART_WINDOW_DAYS, now);
+
+  // Seed the calendar's current month from the same 31-day window (it fully covers
+  // this month up to today), so the default view paints with no extra query.
+  const today = localDateString(now, timezone);
+  const [calendarYear, calendarMonth] = today.split('-').map(Number);
+  const moodGrid = buildMonthGrid(moodWindow, timezone, calendarYear, calendarMonth);
 
   // Derive billing display from the SAME shared decision the bot gates on (decideAccess), so the
   // dashboard and the coaching gate can never disagree — e.g. a lapsed trial reads "Not subscribed"
@@ -60,6 +68,10 @@ export default async function DashboardPage() {
       user={user}
       moods={moods}
       moodSeries={moodSeries}
+      moodGrid={moodGrid}
+      calendarYear={calendarYear}
+      calendarMonth={calendarMonth}
+      today={today}
       playtimes={playtimes}
       streak={streak}
       billing={billing}
