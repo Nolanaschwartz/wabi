@@ -31,6 +31,7 @@ describe('StrategyAdminController', () => {
       getPublishedDrafts: jest.fn(),
       approveDraft: jest.fn(),
       rejectDraft: jest.fn(),
+      removePublished: jest.fn(),
       submitDraft: jest.fn(),
       recordNegativeFeedback: jest.fn(),
       setEvidenceLevel: jest.fn(),
@@ -66,6 +67,13 @@ describe('StrategyAdminController', () => {
     const res = await controller.reject('1');
     expect(res?.status).toBe('quarantined');
     expect(service.rejectDraft).toHaveBeenCalledWith('1');
+  });
+
+  it('removes a published draft by id', async () => {
+    service.removePublished.mockResolvedValue({ id: '1', status: 'quarantined' } as any);
+    const res = await controller.remove('1');
+    expect(res?.status).toBe('quarantined');
+    expect(service.removePublished).toHaveBeenCalledWith('1');
   });
 
   it('adjusts evidence level by id', async () => {

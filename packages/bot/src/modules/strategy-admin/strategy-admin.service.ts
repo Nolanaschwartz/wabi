@@ -201,6 +201,28 @@ export class StrategyAdminService {
     return this.toDraft(updated);
   }
 
+  /**
+   * Operator-initiated removal of a strategy from the live shared library: published -> quarantined,
+   * plus removal from the Qdrant index. Mirrors rejectDraft (which guards pending-review) but for the
+   * published state, so a stale/replayed request can't quarantine a draft that isn't actually live
+   * (ADR-0012 lifecycle). Soft delete — the row is retained as quarantined, never hard-deleted, so the
+   * action is auditable and the hourly reconcile sweep keeps it out of the index.
+   */
+  async removePublished(id: string): Promise<StrategyDraft | null> {
+    const existing = await prisma.strategyDraft.findUnique({ where: { id } });
+    if (!existing || existing.status !== 'published') return null;
+
+    const updated = await prisma.strategyDraft.update({
+      where: { id },
+      data: { status: 'quarantined' },
+    }).catch(() => null);
+
+    if (!updated) return null;
+
+    await this.retrieval.delete(id);
+    return this.toDraft(updated);
+  }
+
   async setEvidenceLevel(id: string, evidence: string): Promise<StrategyDraft | null> {
     const updated = await prisma.strategyDraft.update({
       where: { id },

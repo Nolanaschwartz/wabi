@@ -40,6 +40,12 @@ export class StrategyAdminController {
     return this.admin.rejectDraft(id);
   }
 
+  @Post(':id/remove')
+  @HttpCode(HttpStatus.OK)
+  async remove(@Param('id') id: string) {
+    return this.admin.removePublished(id);
+  }
+
   @Post(':id/evidence')
   @HttpCode(HttpStatus.OK)
   async setEvidence(@Param('id') id: string, @Body('evidence') evidence: string) {
