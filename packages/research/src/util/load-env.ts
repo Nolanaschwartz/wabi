@@ -22,12 +22,27 @@ export function loadDotenv(startDir: string = process.cwd()): string | null {
     return null;
   }
   for (const line of raw.split('\n')) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (!m || line.trimStart().startsWith('#')) continue;
+    if (line.trimStart().startsWith('#')) continue;
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    if (!m) continue;
     const [, key, rawVal] = m;
-    if (process.env[key] === undefined) process.env[key] = rawVal.replace(/^["']|["']$/g, '');
+    if (process.env[key] === undefined) process.env[key] = parseValue(rawVal);
   }
   return path;
+}
+
+/**
+ * Parse a raw `.env` RHS the way dotenv does: a quoted value is taken verbatim (quotes stripped);
+ * an unquoted value has any inline ` # comment` stripped and is trimmed. Without this, a line copied
+ * from .env.example like `NCBI_API_KEY=   # optional ...` yields the COMMENT as the value, which then
+ * gets sent as `&api_key=# optional ...` and 400s.
+ */
+function parseValue(rawVal: string): string {
+  const quoted = rawVal.match(/^(['"])([\s\S]*?)\1\s*$/);
+  if (quoted) return quoted[2];
+  const cut = rawVal.replace(/\s+#.*$/, ''); // inline comment (must be whitespace-preceded)
+  const v = cut.trimEnd();
+  return v.startsWith('#') ? '' : v;
 }
 
 /** Walk up the directory tree from `start` looking for `name`; return its full path or null. */

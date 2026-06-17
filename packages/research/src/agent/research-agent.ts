@@ -41,8 +41,10 @@ export class ResearchAgent {
     const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
     this.log.info('topic start', { topic });
-    const pmids = await this.deps.pubmed.search(topic, this.bounds.maxPapersPerTopic).catch(() => []);
-    const medPapers = await this.deps.medrxiv.search(topic, this.bounds.maxPapersPerTopic).catch(() => []);
+    const pmids = await this.deps.pubmed.search(topic, this.bounds.maxPapersPerTopic)
+      .catch((e) => { this.log.info('pubmed search failed', { topic, err: (e as Error)?.message ?? String(e) }); return []; });
+    const medPapers = await this.deps.medrxiv.search(topic, this.bounds.maxPapersPerTopic)
+      .catch((e) => { this.log.info('medrxiv search failed', { topic, err: (e as Error)?.message ?? String(e) }); return []; });
     const queue: Array<{ kind: SourceKind; id: string; paper?: Paper }> = [
       ...pmids.map((id) => ({ kind: 'pubmed' as const, id })),
       ...medPapers.map((p) => ({ kind: 'medrxiv' as const, id: p.sourceId, paper: p })),

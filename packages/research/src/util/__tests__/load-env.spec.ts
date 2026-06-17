@@ -10,7 +10,7 @@ describe('loadDotenv', () => {
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'wabi-env-')); });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
-    for (const k of ['FOO', 'WITH_SPACES', 'PRESET', 'WABI_ENV_FILE']) delete process.env[k];
+    for (const k of ['FOO', 'WITH_SPACES', 'PRESET', 'WABI_ENV_FILE', 'NCBI_API_KEY']) delete process.env[k];
     if (saved.WABI_ENV_FILE !== undefined) process.env.WABI_ENV_FILE = saved.WABI_ENV_FILE;
   });
 
@@ -33,6 +33,20 @@ describe('loadDotenv', () => {
 
   it('returns null when no .env exists up the tree', () => {
     expect(loadDotenv(dir)).toBeNull();
+  });
+
+  it('strips an inline # comment from an unquoted value (dotenv semantics)', () => {
+    // A line copied verbatim from .env.example, e.g. `NCBI_API_KEY=   # optional; raises cap`.
+    writeFileSync(join(dir, '.env'), 'NCBI_API_KEY=   # optional; raises NCBI rate cap\nFOO=bar # trailing note\n');
+    loadDotenv(dir);
+    expect(process.env.NCBI_API_KEY).toBe('');
+    expect(process.env.FOO).toBe('bar');
+  });
+
+  it('keeps a # that is inside a quoted value', () => {
+    writeFileSync(join(dir, '.env'), 'FOO="a#b c"\n');
+    loadDotenv(dir);
+    expect(process.env.FOO).toBe('a#b c');
   });
 
   it('honors WABI_ENV_FILE over the walk-up search', () => {

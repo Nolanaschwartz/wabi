@@ -52,6 +52,19 @@ describe('ResearchAgent', () => {
     expect(msgs).toContain('topic done');
   });
 
+  it('logs a swallowed pubmed search failure instead of hiding it as zero results', async () => {
+    const log = { info: jest.fn(), debug: jest.fn() };
+    const deps = baseDeps({
+      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockRejectedValue(new Error('PubMed HTTP 400')) } as any,
+    });
+    const agent = new ResearchAgent(deps, bounds, log);
+    const { summary } = await agent.run('topic');
+    expect(summary.searched).toBe(0);
+    const fail = log.info.mock.calls.find((c) => c[0] === 'pubmed search failed');
+    expect(fail).toBeTruthy();
+    expect(fail![1]).toMatchObject({ err: 'PubMed HTTP 400' });
+  });
+
   it('skips papers already seen, before gate/extract', async () => {
     const deps = baseDeps({ seen: jest.fn().mockResolvedValue(true) });
     const agent = new ResearchAgent(deps, bounds);
