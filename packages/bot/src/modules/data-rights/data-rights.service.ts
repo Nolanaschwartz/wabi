@@ -3,6 +3,7 @@ import { prisma, Prisma } from '@wabi/shared';
 import { MemoryStoreService } from '../memory/memory-store.service';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
 import { UserService } from '../user/user.service';
+import { StripeService } from '../billing/stripe.service';
 
 /**
  * Generate a Prisma-backed data source entry from a model name and field mapper. Pass the model's
@@ -60,6 +61,7 @@ export class DataRightsService {
     private readonly userService: UserService,
     private readonly memoryStore: MemoryStoreService,
     private readonly sessionBuffer: SessionBufferService,
+    private readonly stripe: StripeService,
   ) {
     this.sources = [
       prismaSource<Prisma.MoodGetPayload<{}>>('moods', 'Mood', (m) => ({
@@ -135,6 +137,14 @@ export class DataRightsService {
       .filter((m): m is Prisma.ModelName => m != null);
   }
 
+  /**
+   * The models the account-deletion path removes: the child-data sources plus the User identity row
+   * (deleted directly in `deleteAccount`). Asserted complete against the schema in a test.
+   */
+  accountCoveredModels(): Prisma.ModelName[] {
+    return [...this.coveredModels(), 'User'];
+  }
+
   async export(discordId: string): Promise<string> {
     const exportable = this.sources.filter((s) => s.key && s.read);
 
@@ -166,8 +176,46 @@ export class DataRightsService {
       }
     });
 
-    // External stores (Mem0, Redis) run after the tx commits. Attempt every one even if an earlier
-    // fails, then surface which stores were left behind.
+    await this.purgeExternalStores(discordId);
+  }
+
+  /**
+   * Delete the person's account entirely: cancel billing, erase all data AND the User identity row,
+   * then purge external stores. Ordering fails toward "not billing, not orphaned":
+   *
+   *   1. Cancel + delete the Stripe customer FIRST. A failure here aborts with nothing deleted — the
+   *      person stays fully intact rather than erased-but-still-billed. (No customer / unconfigured
+   *      Stripe is a graceful no-op, not a failure — see StripeService.)
+   *   2. Atomic Postgres tx: the same child-data deletes as `delete()`, PLUS the User row. Removing
+   *      the User row cascades to the lucia Session rows (Session.userId -> User.id, onDelete:
+   *      Cascade), invalidating the web session server-side.
+   *   3. Best-effort external purge (Mem0, Redis), surfacing any store left behind.
+   *
+   * Unlike `delete()`, this does NOT keep the account — it is the "delete my account" path.
+   */
+  async deleteAccount(discordId: string): Promise<void> {
+    const user = await prisma.user.findUnique({
+      where: { discordId },
+      select: { stripeCustomerId: true },
+    });
+    await this.stripe.deleteCustomer(user?.stripeCustomerId);
+
+    await prisma.$transaction(async (tx) => {
+      for (const s of this.sources) {
+        if (s.delTx) await s.delTx(tx, discordId);
+      }
+      await tx.user.deleteMany({ where: { discordId } });
+    });
+
+    await this.purgeExternalStores(discordId);
+  }
+
+  /**
+   * Delete the external (non-Postgres) stores after the tx commits. Attempt every one even if an
+   * earlier fails, then surface which stores were left behind so the caller never reports a clean
+   * deletion that wasn't (ADR-0011).
+   */
+  private async purgeExternalStores(discordId: string): Promise<void> {
     const failures: string[] = [];
     for (const s of this.sources) {
       if (!s.delExternal) continue;

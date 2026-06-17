@@ -33,4 +33,23 @@ describe('DataRightsApiController', () => {
 
     await expect(controller.deleteData({ discordId: 'disc_123' })).rejects.toThrow('mem0 down');
   });
+
+  it('deletes the whole account, keyed by discordId', async () => {
+    const service = { deleteAccount: jest.fn().mockResolvedValue(undefined) } as any;
+    const controller = new DataRightsApiController(service);
+
+    const res = await controller.deleteAccount({ discordId: 'disc_123' });
+
+    expect(service.deleteAccount).toHaveBeenCalledWith('disc_123');
+    expect(res).toEqual({ ok: true });
+  });
+
+  it('lets an account-deletion failure propagate (e.g. Stripe down) instead of faking success', async () => {
+    const service = {
+      deleteAccount: jest.fn().mockRejectedValue(new Error('stripe down')),
+    } as any;
+    const controller = new DataRightsApiController(service);
+
+    await expect(controller.deleteAccount({ discordId: 'disc_123' })).rejects.toThrow('stripe down');
+  });
 });

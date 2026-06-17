@@ -6,9 +6,10 @@ import { DataRightsApiGuard } from './data-rights-api.guard';
 import { MemoryModule } from '../memory/memory.module';
 import { SessionBufferModule } from '../session-buffer/session-buffer.module';
 import { UserModule } from '../user/user.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
-  imports: [MemoryModule, SessionBufferModule, UserModule],
+  imports: [MemoryModule, SessionBufferModule, UserModule, BillingModule],
   controllers: [DataRightsApiController],
   providers: [DataRightsService, DataRightsController, DataRightsApiGuard],
   exports: [DataRightsService],

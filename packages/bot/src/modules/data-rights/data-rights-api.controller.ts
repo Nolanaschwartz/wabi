@@ -36,4 +36,15 @@ export class DataRightsApiController {
     await this.dataRights.delete(discordId);
     return { ok: true };
   }
+
+  /**
+   * Delete the person's account entirely: cancel Stripe, hard-delete the User row (cascading the
+   * lucia sessions) and purge all data. A failure propagates (→ 500) so the web never reports a
+   * clean deletion that didn't complete; the web also clears the session cookie on success.
+   */
+  @Post('delete')
+  async deleteAccount(@Body() { discordId }: DataRightsRequest): Promise<{ ok: true }> {
+    await this.dataRights.deleteAccount(discordId);
+    return { ok: true };
+  }
 }
