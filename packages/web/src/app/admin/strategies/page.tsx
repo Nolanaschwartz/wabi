@@ -8,8 +8,11 @@ interface Strategy {
   technique: string;
   source: string;
   evidence: string;
+  sourceText: string | null;
+  sourceUrl: string;
   trustLevel: string;
   status: string;
+  negativeCount: number;
 }
 
 const card = 'rounded-lg border border-ink-3 bg-ink-1 p-6';
@@ -123,6 +126,57 @@ export default function StrategyAdminPage() {
                   Reject
                 </button>
               </div>
+
+              <details className="group mt-4 border-t border-ink-2 pt-4">
+                <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-bone-2 transition-colors duration-200 ease-calm hover:text-bone-0 [&::-webkit-details-marker]:hidden">
+                  <span
+                    aria-hidden
+                    className="inline-block transition-transform duration-200 ease-calm group-open:rotate-90"
+                  >
+                    &#9656;
+                  </span>
+                  Full text &amp; metadata
+                </summary>
+
+                <div className="mt-4 space-y-4">
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                    <dt className={metaLabel}>Source</dt>
+                    <dd className="text-bone-1">{d.source}</dd>
+                    <dt className={metaLabel}>Trust</dt>
+                    <dd className="text-bone-1">{d.trustLevel}</dd>
+                    <dt className={metaLabel}>Status</dt>
+                    <dd className="text-bone-1">{d.status}</dd>
+                    <dt className={metaLabel}>Negatives</dt>
+                    <dd className={d.negativeCount > 0 ? 'text-warn' : 'text-bone-1'}>
+                      {d.negativeCount}
+                    </dd>
+                    <dt className={metaLabel}>Link</dt>
+                    <dd>
+                      <a
+                        href={d.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="break-all text-copper underline-offset-4 transition-colors duration-200 ease-calm hover:text-copper-bright hover:underline"
+                      >
+                        {d.sourceUrl}
+                      </a>
+                    </dd>
+                    <dt className={metaLabel}>ID</dt>
+                    <dd className="break-all font-mono text-xs text-bone-2">{d.id}</dd>
+                  </dl>
+
+                  <div>
+                    <p className={`mb-1.5 ${metaLabel}`}>Source text</p>
+                    {d.sourceText ? (
+                      <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md border border-ink-3 bg-ink-2 p-3 text-sm leading-relaxed text-bone-1">
+                        {d.sourceText}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-bone-3">No source text captured.</p>
+                    )}
+                  </div>
+                </div>
+              </details>
             </div>
           ))}
         </div>
