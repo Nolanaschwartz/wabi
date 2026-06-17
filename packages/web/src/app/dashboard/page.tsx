@@ -1,7 +1,14 @@
 import { redirect } from 'next/navigation';
 import { validateRequest } from '@/lib/session';
 import { prisma, decideAccess } from '@wabi/shared';
+import { buildMoodSeries } from '@/lib/mood-series';
 import DashboardView from './dashboard-view';
+
+// The chart shows the last 30 *local* days; we fetch 31 so timezone bucketing at
+// the window edge can never drop a valid day.
+const CHART_WINDOW_DAYS = 30;
+const FETCH_WINDOW_DAYS = CHART_WINDOW_DAYS + 1;
+const DAY_MS = 86_400_000;
 
 export default async function DashboardPage() {
   const { user } = await validateRequest();
@@ -10,11 +17,19 @@ export default async function DashboardPage() {
     redirect('/api/auth/discord');
   }
 
-  const [moods, playtimes, streak, dbUser] = await Promise.all([
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - FETCH_WINDOW_DAYS * DAY_MS);
+
+  const [moods, moodWindow, playtimes, streak, dbUser] = await Promise.all([
     prisma.mood.findMany({
       where: { userId: user.discordId },
       orderBy: { createdAt: 'desc' },
       take: 30,
+    }),
+    prisma.mood.findMany({
+      where: { userId: user.discordId, createdAt: { gte: windowStart } },
+      orderBy: { createdAt: 'asc' },
+      select: { rating: true, createdAt: true },
     }),
     prisma.playtimeLog.findMany({
       where: { userId: user.discordId },
@@ -26,6 +41,9 @@ export default async function DashboardPage() {
     }),
     prisma.user.findUnique({ where: { id: user.id } }),
   ]);
+
+  // Daily-average mood over the last 30 local days, bucketed in the user's timezone.
+  const moodSeries = buildMoodSeries(moodWindow, dbUser?.timezone ?? 'UTC', CHART_WINDOW_DAYS, now);
 
   // Derive billing display from the SAME shared decision the bot gates on (decideAccess), so the
   // dashboard and the coaching gate can never disagree — e.g. a lapsed trial reads "Not subscribed"
@@ -41,6 +59,7 @@ export default async function DashboardPage() {
     <DashboardView
       user={user}
       moods={moods}
+      moodSeries={moodSeries}
       playtimes={playtimes}
       streak={streak}
       billing={billing}

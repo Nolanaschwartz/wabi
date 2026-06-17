@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import MoodChart from './MoodChart';
+import type { MoodDayPoint } from '@/lib/mood-series';
 
 interface BillingState {
   hasActiveAccess: boolean;
@@ -11,6 +13,7 @@ interface BillingState {
 interface DashboardViewProps {
   user: { discordId: string; email: string | null };
   moods: Array<{ rating: number; emoji: string; createdAt: Date }>;
+  moodSeries: MoodDayPoint[];
   playtimes: Array<{ duration: number; createdAt: Date }>;
   streak: number;
   billing: BillingState;
@@ -83,8 +86,13 @@ function BillingPanel({ billing }: { billing: BillingState }) {
   );
 }
 
-export default function DashboardView({ user, moods, playtimes, streak, billing }: DashboardViewProps) {
+export default function DashboardView({ user, moods, moodSeries, playtimes, streak, billing }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<'mood' | 'playtime' | 'streak'>('mood');
+  const [moodWindow, setMoodWindow] = useState<7 | 30>(7);
+
+  // Both windows derive from the single 30-day series the server already sent —
+  // switching never refetches.
+  const chartSeries = moodWindow === 7 ? moodSeries.slice(-7) : moodSeries;
 
   const tab = (id: typeof activeTab, label: string) => (
     <button
@@ -150,6 +158,22 @@ export default function DashboardView({ user, moods, playtimes, streak, billing 
           <div className="p-6">
             {activeTab === 'mood' && (
               <div className="space-y-3">
+                <div className="flex justify-end gap-1">
+                  {([7, 30] as const).map((w) => (
+                    <button
+                      key={w}
+                      onClick={() => setMoodWindow(w)}
+                      className={`rounded-md px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] transition-colors duration-200 ease-calm ${
+                        moodWindow === w
+                          ? 'bg-ink-2 text-copper'
+                          : 'text-bone-2 hover:text-bone-0'
+                      }`}
+                    >
+                      {w}d
+                    </button>
+                  ))}
+                </div>
+                <MoodChart data={chartSeries} />
                 {moods.map((mood, idx) => (
                   <div
                     key={idx}
