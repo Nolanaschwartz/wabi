@@ -17,6 +17,7 @@
     "@nestjs/platform-express": "^11.1.24",
     "@wabi/shared": "workspace:*",
     "ai": "^6.0.197",
+    "pg-boss": "^12.18.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
   },

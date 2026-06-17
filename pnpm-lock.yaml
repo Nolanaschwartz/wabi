@@ -113,6 +113,9 @@ importers:
       ai:
         specifier: ^6.0.197
         version: 6.0.197(zod@4.4.3)
+      pg-boss:
+        specifier: ^12.18.2
+        version: 12.18.2
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -16,6 +17,8 @@ import {
   ResearchBounds,
   ResearchConfigService,
 } from '../config-service/research-config.service';
+import { ResearchScheduleService } from '../schedule-service/research-schedule.service';
+import { isValidCron } from '../cron-compile/cron-compile';
 
 /**
  * Admin HTTP surface for the research worker (ADR-0034). All routes are behind the timing-safe
@@ -25,11 +28,36 @@ import {
 @Controller('admin/research')
 @UseGuards(AdminGuard)
 export class ResearchAdminController {
-  constructor(private readonly config: ResearchConfigService) {}
+  constructor(
+    private readonly config: ResearchConfigService,
+    private readonly schedule: ResearchScheduleService,
+  ) {}
 
   @Get('config')
   async getConfig() {
     return this.config.getConfig();
+  }
+
+  /**
+   * Set the schedule (issue 04, ADR-0034). A malformed cron is rejected with 400 HERE, before
+   * anything is persisted or written to pg-boss — so an operator never saves a schedule that
+   * silently never fires. On a valid cron (or an empty/null cron meaning "unscheduled") we persist
+   * `scheduleCron` + `scheduleEnabled`, then re-assert pg-boss via the schedule service. Returns the
+   * updated config.
+   */
+  @Put('schedule')
+  @HttpCode(HttpStatus.OK)
+  async updateSchedule(@Body() body: { cron: string | null; enabled: boolean }) {
+    const cron = body.cron && body.cron.trim() !== '' ? body.cron.trim() : null;
+    if (cron !== null && !isValidCron(cron)) {
+      throw new BadRequestException({
+        status: 'invalid-cron',
+        message: `Invalid cron expression: ${cron}`,
+      });
+    }
+    const updated = await this.config.updateSchedule(cron, body.enabled);
+    await this.schedule.apply({ scheduleCron: cron, scheduleEnabled: body.enabled });
+    return updated;
   }
 
   /**

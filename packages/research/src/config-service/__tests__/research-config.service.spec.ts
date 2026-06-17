@@ -250,6 +250,33 @@ describe('ResearchConfigService', () => {
     });
   });
 
+  describe('updateSchedule', () => {
+    it('persists cron + enabled to the singleton', async () => {
+      const updated = { id: 'singleton', scheduleCron: '0 3 * * *', scheduleEnabled: true };
+      prismaMock.researchConfig.update.mockResolvedValue(updated);
+
+      const result = await service.updateSchedule('0 3 * * *', true);
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { scheduleCron: '0 3 * * *', scheduleEnabled: true },
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it('persists a null cron (unscheduled) and disabled', async () => {
+      const updated = { id: 'singleton', scheduleCron: null, scheduleEnabled: false };
+      prismaMock.researchConfig.update.mockResolvedValue(updated);
+
+      await service.updateSchedule(null, false);
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { scheduleCron: null, scheduleEnabled: false },
+      });
+    });
+  });
+
   describe('deleteTopic', () => {
     it('removes the topic', async () => {
       prismaMock.researchTopic.delete.mockResolvedValue({ id: 't1', text: 'a', enabled: true });

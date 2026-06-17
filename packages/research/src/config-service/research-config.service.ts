@@ -157,6 +157,18 @@ export class ResearchConfigService implements OnModuleInit {
     return prisma.researchConfig.update({ where: { id: SINGLETON_ID }, data });
   }
 
+  /**
+   * Persists the schedule (cron + enabled) to the singleton (issue 04, ADR-0034). The cron's
+   * well-formedness is validated by ResearchScheduleService/cron-compile BEFORE this is reached —
+   * this method is pure persistence. A null cron means "unscheduled".
+   */
+  async updateSchedule(cron: string | null, enabled: boolean): Promise<unknown> {
+    return prisma.researchConfig.update({
+      where: { id: SINGLETON_ID },
+      data: { scheduleCron: cron, scheduleEnabled: enabled },
+    });
+  }
+
   /** Removes a topic outright. */
   async deleteTopic(id: string): Promise<unknown> {
     return prisma.researchTopic.delete({ where: { id } });
