@@ -47,14 +47,20 @@ Shared/db (from `packages/shared`): `db:migrate:dev` (create+apply migration), `
 
 ## Architecture essentials
 
-Three workspace packages (`packages/*`); there is no `apps/`:
+Four workspace packages (`packages/*`); there is no `apps/`:
 - **`@wabi/bot`** — NestJS 11 + necord over discord.js v14. The heart of the system: Discord gateway, the crisis→coaching pipeline, the Stripe webhook controller, and the pg-boss worker/scheduler. Must be always-on; never serverless (ADR-0019/0020).
-- **`@wabi/web`** — Next.js 15 App Router. Landing, Discord OAuth + consent + trial + `User` creation, Stripe checkout, dashboard, `/admin/drafts` strategy review. Sessions via lucia.
-- **`@wabi/shared`** — plain TypeScript: Prisma client + generated types, constants, and the swappable-provider + access resolvers. Imported by both other packages.
+- **`@wabi/web`** — Next.js 15 App Router. Landing, Discord OAuth + consent + trial + `User` creation, Stripe checkout, dashboard, `/admin/strategies` strategy review. Sessions via lucia.
+- **`@wabi/shared`** — plain TypeScript: Prisma client + generated types, constants, and the swappable-provider + access resolvers. Imported by the other packages.
+- **`@wabi/research`** — standalone TypeScript worker (not NestJS). Mines PubMed/medRxiv for evidence-based techniques and submits `StrategyDraft`s to the bot's strategy-admin API for human review (ADR-0012); never writes the DB directly. Run via `pnpm -F research start` (`ts-node src/run.ts`, `--topic` for one topic). Loads the root `.env` itself (no Nest `ConfigModule`) — providers via `RESEARCH_*` / `RESEARCH_TRIAGE_*` (fallback `CLASSIFIER_*`). See `packages/research/README.md`.
 
 ### Bot module layout
 
-`packages/bot/src/modules/<feature>/` is a NestJS module per feature (coaching, crisis, memory, billing, mood, tilt, journal, playtime, streaks, xp, checkins, welcome, data-rights, strategy-admin, strategy-retrieval, session-buffer, burst-coalescer, crisis-aftermath, langfuse, health, echo). Each owns its `.module.ts`, services, and `__tests__/`. They are wired in `app.module.ts`. `src/lib/` holds cross-module helpers (sentry, setup-link).
+`packages/bot/src/modules/<feature>/` is a NestJS module per feature. Each owns its `.module.ts`, services, and `__tests__/`. They are wired in `app.module.ts`. `src/lib/` holds cross-module helpers (sentry, setup-link). The modules, grouped by role:
+- **Safety & coaching** — `crisis`, `crisis-aftermath`, `coaching`, `intent-router`, `memory`, `strategy-retrieval`
+- **Inner-state logging** — `mood`, `tilt`, `journal`, `playtime`, `inner-state-logger`, `checkins`
+- **Gamification** — `streaks`, `xp`, `habit-engagement`
+- **Accounts & billing** — `user`, `billing` (Stripe webhook controller), `welcome`, `data-rights`, `contact-policy`
+- **Infrastructure** — `session-buffer` (Redis), `burst-coalescer`, `scheduler` (pg-boss), `strategy-admin` (admin API the research worker submits drafts to), `langfuse`, `health`, `help`, `echo`, `spoke-session`
 
 ### Data stores (ADR-0009 — self-hosted, swappable)
 
