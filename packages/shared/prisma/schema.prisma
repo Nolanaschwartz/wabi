@@ -171,3 +171,13 @@ model StrategyDraft {
   @@index([trustLevel])
   @@index([negativeCount])
 }
+
+// Source-level idempotency ledger for the research pipeline (ADR-0033). ID-only — never any
+// paper content or personal data. Written by the bot at ingest; read by the worker via GET seen.
+model ProcessedSource {
+  sourceId    String   @id          // "PMID:12345" | "doi:10.1101/2024.01.01.24300000"
+  source      String                // 'pubmed' | 'medrxiv'
+  lastStatus  String                // 'submitted' | 'deduped' | 'rejected'
+  firstSeenAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

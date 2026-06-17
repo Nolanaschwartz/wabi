@@ -1,13 +1,32 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { prisma } from '@wabi/shared';
 import { StrategyTrustGate, StrategyDraft, EvaluationDecision } from './strategy-trust-gate';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
 
+export interface IngestCandidate {
+  id?: string;
+  title: string;
+  technique: string;
+  source: string;
+  evidence: string;
+  sourceText?: string;
+  sourceUrl: string;
+  sourceId: string;
+  sourceKind: string;
+}
+
 const DEMOTE_QUEUE = 'strategy-demote';
 const RECONCILE_QUEUE = 'strategy-reconcile';
 // Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
 const RECONCILE_CRON = '0 * * * *';
+
+// Cosine similarity at/above this counts a candidate as already-present (ADR-0012 dedup).
+// Resolved lazily per call — never cache env-derived config (CLAUDE.md).
+function dedupThreshold(): number {
+  return parseFloat(process.env.RESEARCH_DEDUP_THRESHOLD || '0.95');
+}
 
 @Injectable()
 export class StrategyAdminService {
@@ -51,6 +70,70 @@ export class StrategyAdminService {
     });
 
     return this.toDraft(persisted);
+  }
+
+  /** True when the published library already contains a near-identical strategy. Queries the same
+   * "title: technique" string the index is built from (publishToQdrant), so query and corpus match. */
+  async isDuplicate(title: string, technique: string): Promise<boolean> {
+    const [top] = await this.retrieval.search(`${title}: ${technique}`, 1);
+    return !!top && typeof top.score === 'number' && top.score >= dedupThreshold();
+  }
+
+  /** Source-level idempotency: has this paper been processed on any prior run? (ADR-0033) */
+  async hasSeen(sourceId: string): Promise<boolean> {
+    const row = await prisma.processedSource.findUnique({ where: { sourceId } });
+    return row !== null;
+  }
+
+  /** Record a terminal ingest outcome for a source. Upsert keeps firstSeenAt, refreshes lastStatus. */
+  async markProcessed(
+    sourceId: string,
+    source: string,
+    status: 'submitted' | 'deduped' | 'rejected',
+  ): Promise<void> {
+    await prisma.processedSource.upsert({
+      where: { sourceId },
+      create: { sourceId, source, lastStatus: status },
+      update: { lastStatus: status },
+    });
+  }
+
+  /**
+   * Ingest one research candidate (ADR-0033). Layered: library dedup → trust gate (which, for
+   * research-agent, runs safety+faithfulness but can only queue or reject) → ledger record. The
+   * trust level is forced to 'research-agent' here so this endpoint can never auto-publish.
+   */
+  async ingestCandidate(
+    c: IngestCandidate,
+  ): Promise<{ status: 'submitted' | 'deduped' | 'rejected'; draftId?: string }> {
+    if (await this.isDuplicate(c.title, c.technique)) {
+      await this.markProcessed(c.sourceId, c.sourceKind, 'deduped');
+      return { status: 'deduped' };
+    }
+
+    const draft: StrategyDraft = {
+      id: c.id ?? randomUUID(),
+      title: c.title,
+      technique: c.technique,
+      source: c.source,
+      evidence: c.evidence,
+      sourceText: c.sourceText,
+      sourceUrl: c.sourceUrl,
+      trustLevel: 'research-agent',
+      status: 'draft',
+    };
+
+    // Evaluate up front so a safety/faithfulness rejection never persists (a reviewer must not see
+    // a failed draft). On non-reject, submitDraft re-evaluates and persists as pending-review.
+    const decision = await this.trustGate.evaluate(draft);
+    if (decision.decision === 'reject') {
+      await this.markProcessed(c.sourceId, c.sourceKind, 'rejected');
+      return { status: 'rejected' };
+    }
+
+    const persisted = await this.submitDraft(draft);
+    await this.markProcessed(c.sourceId, c.sourceKind, 'submitted');
+    return { status: 'submitted', draftId: persisted.id };
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {

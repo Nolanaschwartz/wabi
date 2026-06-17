@@ -112,4 +112,11 @@ describe('strategy retrieval integration', () => {
     // Restore the delegating mock for any subsequent work.
     installEmbedMock();
   }, 30000);
+
+  it('exposes a similarity score on results', async () => {
+    await retrieval.upsert(randomUUID(), 'Box Breathing for anxiety', 'RCT meta-analysis');
+    const results = await searchWithRetry(retrieval, 'reset anxiety');
+    expect(typeof results[0].score).toBe('number');
+    expect(results[0].score).toBeGreaterThan(0.5);
+  }, 30000);
 });

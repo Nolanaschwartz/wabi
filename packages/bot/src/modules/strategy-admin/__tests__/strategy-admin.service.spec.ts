@@ -11,6 +11,10 @@ jest.mock('@wabi/shared', () => ({
       findUnique: jest.fn(),
       update: jest.fn(),
     },
+    processedSource: {
+      findUnique: jest.fn(),
+      upsert: jest.fn(),
+    },
   },
 }));
 
@@ -403,5 +407,101 @@ describe('StrategyAdminService', () => {
     (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue(null);
     await service.recordNegativeFeedback('999');
     expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('StrategyAdminService.isDuplicate', () => {
+  let svc: StrategyAdminService;
+  let retrieval: { search: jest.Mock };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
+    retrieval = { search: jest.fn() };
+    svc = new StrategyAdminService({} as any, retrieval as any, {} as any);
+  });
+
+  it('is a duplicate when the top match scores at/above threshold', async () => {
+    retrieval.search.mockResolvedValue([{ id: 'a', content: 'x', evidence: 'y', score: 0.97 }]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(true);
+    expect(retrieval.search).toHaveBeenCalledWith('PMR: tense and release', 1);
+  });
+  it('is not a duplicate below threshold', async () => {
+    retrieval.search.mockResolvedValue([{ id: 'a', content: 'x', evidence: 'y', score: 0.4 }]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(false);
+  });
+  it('is not a duplicate when the library is empty', async () => {
+    retrieval.search.mockResolvedValue([]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(false);
+  });
+});
+
+describe('StrategyAdminService ledger', () => {
+  const svc = new StrategyAdminService({} as any, { search: jest.fn() } as any, {} as any);
+  beforeEach(() => jest.clearAllMocks());
+
+  it('hasSeen returns true when a row exists', async () => {
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue({ sourceId: 'PMID:1' });
+    expect(await svc.hasSeen('PMID:1')).toBe(true);
+  });
+  it('hasSeen returns false when absent', async () => {
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue(null);
+    expect(await svc.hasSeen('PMID:9')).toBe(false);
+  });
+  it('markProcessed upserts the ledger row', async () => {
+    await svc.markProcessed('PMID:1', 'pubmed', 'submitted');
+    expect(prisma.processedSource.upsert).toHaveBeenCalledWith({
+      where: { sourceId: 'PMID:1' },
+      create: { sourceId: 'PMID:1', source: 'pubmed', lastStatus: 'submitted' },
+      update: { lastStatus: 'submitted' },
+    });
+  });
+});
+
+describe('StrategyAdminService.ingestCandidate', () => {
+  let svc: StrategyAdminService;
+  let trustGate: { evaluate: jest.Mock };
+  let retrieval: { search: jest.Mock };
+
+  const candidate = {
+    title: 'PMR', technique: 'tense and release', source: 'PubMed',
+    evidence: 'peer-reviewed: RCT', sourceText: 'progressive muscle relaxation reduced anxiety',
+    sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345',
+    sourceId: 'PMID:12345', sourceKind: 'pubmed',
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
+    trustGate = { evaluate: jest.fn() };
+    retrieval = { search: jest.fn() };
+    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any);
+    jest.spyOn(svc, 'markProcessed').mockResolvedValue();
+  });
+
+  it('returns deduped and records the ledger when a near-duplicate exists', async () => {
+    retrieval.search.mockResolvedValue([{ id: 'a', content: '', evidence: '', score: 0.99 }]);
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res.status).toBe('deduped');
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'deduped');
+  });
+  it('returns rejected (and does not persist) when the trust gate rejects', async () => {
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'reject', reason: 'Failed safety filter' });
+    jest.spyOn(svc, 'submitDraft');
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res.status).toBe('rejected');
+    expect(svc.submitDraft).not.toHaveBeenCalled();
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'rejected');
+  });
+  it('submits a novel, safe candidate as a queued draft and forces research-agent trust', async () => {
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    jest.spyOn(svc, 'submitDraft').mockResolvedValue({ id: 'draft-1', status: 'pending-review' } as any);
+    const res = await svc.ingestCandidate(candidate as any);
+    expect(res).toEqual({ status: 'submitted', draftId: 'draft-1' });
+    const submitted = (svc.submitDraft as jest.Mock).mock.calls[0][0];
+    expect(submitted.trustLevel).toBe('research-agent');
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'submitted');
   });
 });

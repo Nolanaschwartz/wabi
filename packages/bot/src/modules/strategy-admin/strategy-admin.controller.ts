@@ -1,5 +1,16 @@
-import { Controller, Get, Post, Body, Param, HttpCode, HttpStatus, UseGuards } from '@nestjs/common';
-import { StrategyAdminService } from './strategy-admin.service';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+  ConflictException,
+} from '@nestjs/common';
+import { StrategyAdminService, IngestCandidate } from './strategy-admin.service';
 import { AdminGuard } from './admin.guard';
 
 @Controller('admin/strategies')
@@ -33,5 +44,21 @@ export class StrategyAdminController {
   @HttpCode(HttpStatus.OK)
   async setEvidence(@Param('id') id: string, @Body('evidence') evidence: string) {
     return this.admin.setEvidenceLevel(id, evidence);
+  }
+
+  @Post('ingest')
+  @HttpCode(HttpStatus.CREATED)
+  async ingest(@Body() body: IngestCandidate) {
+    const result = await this.admin.ingestCandidate(body);
+    if (result.status === 'deduped') {
+      // 409 so the worker can count it as a near-duplicate without treating it as an error.
+      throw new ConflictException({ status: 'deduped' });
+    }
+    return result;
+  }
+
+  @Get('seen')
+  async seen(@Query('sourceId') sourceId: string) {
+    return { seen: await this.admin.hasSeen(sourceId) };
   }
 }

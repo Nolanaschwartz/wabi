@@ -13,6 +13,7 @@ export interface StrategyPoint {
   content: string;
   evidence: string;
   effectivenessScore?: number;
+  score?: number;
 }
 
 @Injectable()
@@ -65,6 +66,7 @@ export class StrategyRetrievalService {
         content: (point.payload?.content as string) ?? '',
         evidence: (point.payload?.evidence as string) ?? '',
         effectivenessScore: point.payload?.effectivenessScore as number,
+        score: point.score as number,
       }));
     } catch {
       return [];
