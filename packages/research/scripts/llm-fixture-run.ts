@@ -17,6 +17,7 @@ import { isDuplicateInRun } from '../src/agent/dedup';
 import { PubMedTool } from '../src/sources/pubmed';
 import { MedrxivTool } from '../src/sources/medrxiv';
 import { loadBounds } from '../src/config';
+import { defaultLogger } from '../src/util/logger';
 
 const ROOT_ENV = join(__dirname, '../../../.env');
 const FIX = join(__dirname, '../src/sources/__tests__/fixtures');
@@ -99,9 +100,12 @@ async function main(): Promise<void> {
   console.log(`[harness] topic="${topic}"  research=${process.env.RESEARCH_BASE_URL} (${process.env.RESEARCH_MODEL})`);
   console.log(`[harness] triage=${process.env.RESEARCH_TRIAGE_BASE_URL || process.env.CLASSIFIER_BASE_URL} (${process.env.RESEARCH_TRIAGE_MODEL || process.env.CLASSIFIER_MODEL})`);
 
+  // Show every step by default for the harness; override with RESEARCH_LOG_LEVEL.
+  if (process.env.RESEARCH_LOG_LEVEL === undefined) process.env.RESEARCH_LOG_LEVEL = 'debug';
   const agent = new ResearchAgent(
     { pubmed, medrxiv, seen: async () => false, gate: relevanceGate, extract, dedup: isDuplicateInRun },
     bounds,
+    defaultLogger(),
   );
 
   const started = Date.now();

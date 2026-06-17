@@ -42,6 +42,16 @@ describe('ResearchAgent', () => {
     expect(summary.stopReason).toBe('maxDraftsPerTopic');
   });
 
+  it('emits progress through the injected logger (topic start + collected + topic done)', async () => {
+    const log = { info: jest.fn(), debug: jest.fn() };
+    const agent = new ResearchAgent(baseDeps(), bounds, log);
+    await agent.run('topic');
+    const msgs = log.info.mock.calls.map((c) => c[0]);
+    expect(msgs).toContain('topic start');
+    expect(msgs).toContain('collected');
+    expect(msgs).toContain('topic done');
+  });
+
   it('skips papers already seen, before gate/extract', async () => {
     const deps = baseDeps({ seen: jest.fn().mockResolvedValue(true) });
     const agent = new ResearchAgent(deps, bounds);

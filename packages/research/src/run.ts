@@ -8,6 +8,7 @@ import { extract } from './agent/extract';
 import { isDuplicateInRun } from './agent/dedup';
 import { ResearchAgent } from './agent/research-agent';
 import { BotClient, SubmitOutcome } from './bot-client';
+import { Logger, noopLogger, defaultLogger } from './util/logger';
 
 export interface RunDeps {
   topics: string[];
@@ -16,6 +17,8 @@ export interface RunDeps {
   submit: (candidate: Candidate) => Promise<SubmitOutcome>;
   /** Injectable clock for deadline enforcement; defaults to Date.now. */
   now?: () => number;
+  /** Optional progress logger; defaults to a no-op so tests stay silent. */
+  log?: Logger;
 }
 
 export interface RunResult { submitted: number; deduped: number; errors: number; collected: number; stopReason: string }
@@ -23,13 +26,15 @@ export interface RunResult { submitted: number; deduped: number; errors: number;
 /** Pure run core: iterate topics under the run budget, submit collected candidates, tally outcomes. */
 export async function runResearch(deps: RunDeps): Promise<RunResult> {
   const result: RunResult = { submitted: 0, deduped: 0, errors: 0, collected: 0, stopReason: 'exhausted' };
+  const log = deps.log ?? noopLogger;
   const topics = deps.topics.slice(0, deps.bounds.maxTopicsPerRun);
   const now = deps.now ?? (() => Date.now());
   const deadline = now() + deps.bounds.runTimeoutMs;
+  log.info('run start', { topics: topics.length, maxDraftsPerRun: deps.bounds.maxDraftsPerRun });
 
   for (const topic of topics) {
-    if (now() >= deadline) { result.stopReason = 'runTimeout'; break; }
-    if (result.collected >= deps.bounds.maxDraftsPerRun) { result.stopReason = 'maxDraftsPerRun'; break; }
+    if (now() >= deadline) { result.stopReason = 'runTimeout'; log.info('run stop', { reason: 'runTimeout' }); break; }
+    if (result.collected >= deps.bounds.maxDraftsPerRun) { result.stopReason = 'maxDraftsPerRun'; log.info('run stop', { reason: 'maxDraftsPerRun' }); break; }
     const { candidates } = await deps.runAgent(topic);
     for (const candidate of candidates) {
       if (result.collected >= deps.bounds.maxDraftsPerRun) break;
@@ -38,14 +43,17 @@ export async function runResearch(deps: RunDeps): Promise<RunResult> {
       if (outcome === 'submitted') result.submitted++;
       else if (outcome === 'deduped') result.deduped++;
       else result.errors++;
+      log.info('submit', { title: candidate.title, outcome });
     }
   }
+  log.info('run done', { ...result });
   return result;
 }
 
 /* istanbul ignore next — real wiring, exercised manually / in production, not unit-tested. */
 async function main(): Promise<void> {
   const bounds = loadBounds();
+  const log = defaultLogger();
   const botUrl = process.env.BOT_BASE_URL || 'http://localhost:3001';
   const secret = process.env.ADMIN_API_SECRET || '';
   const client = new BotClient({ baseUrl: botUrl, secret });
@@ -62,11 +70,13 @@ async function main(): Promise<void> {
   const result = await runResearch({
     topics,
     bounds,
+    log,
     submit: (c) => client.submit(c),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
         { pubmed, medrxiv, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
         bounds,
+        log,
       );
       const out = await agent.run(topic);
       topicsRun++;

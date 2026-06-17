@@ -1,4 +1,5 @@
 import { Bounds, Candidate, Paper, RunSummary, SourceKind } from '../types';
+import { Logger, noopLogger } from '../util/logger';
 
 export interface PubMedLike {
   search(query: string, limit: number): Promise<string[]>;
@@ -27,7 +28,11 @@ function emptySummary(): RunSummary {
 
 export class ResearchAgent {
   public tokens = 0;
-  constructor(private readonly deps: AgentDeps, private readonly bounds: Bounds) {}
+  constructor(
+    private readonly deps: AgentDeps,
+    private readonly bounds: Bounds,
+    private readonly log: Logger = noopLogger,
+  ) {}
 
   async run(topic: string): Promise<{ candidates: Candidate[]; summary: RunSummary }> {
     const summary = emptySummary();
@@ -35,6 +40,7 @@ export class ResearchAgent {
     const visited = new Set<string>();
     const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
+    this.log.info('topic start', { topic });
     const pmids = await this.deps.pubmed.search(topic, this.bounds.maxPapersPerTopic).catch(() => []);
     const medPapers = await this.deps.medrxiv.search(topic, this.bounds.maxPapersPerTopic).catch(() => []);
     const queue: Array<{ kind: SourceKind; id: string; paper?: Paper }> = [
@@ -42,6 +48,7 @@ export class ResearchAgent {
       ...medPapers.map((p) => ({ kind: 'medrxiv' as const, id: p.sourceId, paper: p })),
     ];
     summary.searched = queue.length;
+    this.log.info('search done', { topic, pubmed: pmids.length, medrxiv: medPapers.length, queued: queue.length });
 
     let papersRead = 0;
     let discoverySteps = 0;
@@ -57,7 +64,11 @@ export class ResearchAgent {
       visited.add(item.id);
 
       try {
-        if (await this.deps.seen(item.id)) { summary.seenSkipped++; continue; }
+        if (await this.deps.seen(item.id)) {
+          summary.seenSkipped++;
+          this.log.debug('skip: already seen', { id: item.id });
+          continue;
+        }
 
         let paper: Paper;
         if (item.paper) {
@@ -71,10 +82,12 @@ export class ResearchAgent {
           paper = { sourceId: `PMID:${pmid}`, sourceKind: 'pubmed', title: s.title, abstract,
             url: `https://pubmed.ncbi.nlm.nih.gov/${pmid}`, pubTypes: s.pubTypes, isPreprint: false };
         }
+        this.log.info('paper', { id: paper.sourceId, kind: paper.sourceKind, title: paper.title });
 
         const gate = await this.deps.gate(paper.abstract);
         this.tokens += gate.tokens;
-        if (!gate.keep) { summary.gatedOut++; papersRead++; continue; }
+        this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
+        if (!gate.keep) { summary.gatedOut++; papersRead++; this.log.info('gated out', { id: paper.sourceId }); continue; }
 
         if (paper.sourceKind === 'pubmed' && discoverySteps < this.bounds.maxDiscoverySteps) {
           discoverySteps++;
@@ -83,6 +96,7 @@ export class ResearchAgent {
             const sid = `PMID:${rid}`;
             if (!visited.has(sid)) queue.push({ kind: 'pubmed', id: sid });
           }
+          this.log.debug('discovery expand', { from: paper.sourceId, related: related.length, queue: queue.length });
         }
 
         const full = paper.sourceKind === 'pubmed'
@@ -90,24 +104,33 @@ export class ResearchAgent {
           : await this.deps.medrxiv.fullText(paper.sourceId).catch(() => null);
         const body = full ?? paper.abstract;
         papersRead++;
+        this.log.debug('body', { id: paper.sourceId, source: full ? 'fullText' : 'abstract', chars: body.length });
 
         const { candidate, tokens } = await this.deps.extract(paper, body);
         this.tokens += tokens;
-        if (!candidate) continue;
+        if (!candidate) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
         summary.extracted++;
+        this.log.info('extracted', { id: paper.sourceId, title: candidate.title, tokens });
 
         const dd = await this.deps.dedup(candidate, kept);
         this.tokens += dd.tokens;
-        if (dd.duplicate) { summary.inRunDeduped++; continue; }
+        if (dd.duplicate) {
+          summary.inRunDeduped++;
+          this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });
+          continue;
+        }
 
         kept.push(candidate);
         summary.collected++;
-      } catch {
+        this.log.info('collected', { id: paper.sourceId, title: candidate.title, kept: kept.length });
+      } catch (err) {
         summary.errors++;
+        this.log.info('error processing item', { id: item.id, err: (err as Error)?.message ?? String(err) });
         continue;
       }
     }
 
+    this.log.info('topic done', { topic, ...summary, tokens: this.tokens });
     return { candidates: kept, summary };
   }
 }
