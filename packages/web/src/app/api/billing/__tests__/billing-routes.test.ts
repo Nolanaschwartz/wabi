@@ -86,6 +86,22 @@ describe('Billing routes', () => {
         expect.objectContaining({ customer: 'cus_existing' }),
       );
     });
+
+    it('returns 502 (not an opaque throw) when Stripe fails', async () => {
+      validateRequest.mockResolvedValue({ user: { id: 'u1' }, session: {} as any });
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u1',
+        discordId: '123',
+        stripeCustomerId: 'cus_existing',
+      });
+      mockStripe.checkout.sessions.create.mockRejectedValue(
+        new Error('Your test data is in the process of being deleted.'),
+      );
+
+      const res = await checkoutPost({} as any);
+
+      expect(res.status).toBe(502);
+    });
   });
 
   describe('portal', () => {
