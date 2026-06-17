@@ -51,6 +51,34 @@ describe('MedrxivTool', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1); // one window fetch reused across both searches
   });
 
+  it('matches a record on a SUBSET of a multi-word query and ranks by how many terms hit', async () => {
+    const body = { collection: [
+      // 'gaming' is the only hit -> below the half-of-4 threshold (needs 2) -> excluded.
+      { doi: '10.1101/a.1', title: 'Gaming habits survey', abstract: 'screen time', date: '2024-01-01' },
+      // hits emotion + regulation (2 of 4) -> included.
+      { doi: '10.1101/a.2', title: 'Emotion regulation training', abstract: 'reappraisal of feelings', date: '2024-01-02' },
+      // hits emotion + regulation + competitive (3 of 4) -> included and ranked first.
+      { doi: '10.1101/a.3', title: 'Emotion regulation in competitive settings', abstract: 'arousal control', date: '2024-01-03' },
+    ] };
+    const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
+    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    const papers = await tool.search('emotion regulation competitive gaming', 8);
+    expect(papers.map((p) => p.sourceId)).toEqual(['doi:10.1101/a.3', 'doi:10.1101/a.2']);
+  });
+
+  it('drops stopwords/short tokens so they do not count toward the match threshold', async () => {
+    const body = { collection: [
+      { doi: '10.1101/b.1', title: 'Rumination and reappraisal', abstract: 'cognitive process', date: '2024-01-01' },
+    ] };
+    const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
+    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    // content terms = [rumination, after, loss, cognitive, reappraisal] minus stopword 'after' = 4 real terms;
+    // record hits rumination + reappraisal + cognitive (3) -> passes the half threshold.
+    const papers = await tool.search('rumination after loss cognitive reappraisal', 8);
+    expect(papers).toHaveLength(1);
+    expect(papers[0].sourceId).toBe('doi:10.1101/b.1');
+  });
+
   it('fullText returns null in v1 (abstract is read instead)', async () => {
     const tool = new MedrxivTool({ fetchFn: jest.fn(), minIntervalMs: 0 });
     expect(await tool.fullText('doi:10.1101/2024.01.01.1')).toBeNull();

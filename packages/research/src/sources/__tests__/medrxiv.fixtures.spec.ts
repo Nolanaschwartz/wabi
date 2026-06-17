@@ -38,7 +38,8 @@ describe('MedrxivTool against a real captured fixture', () => {
 
   it('returns [] when no record in the real window matches the query terms', async () => {
     const tool = new MedrxivTool({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
-    expect(await tool.search('zzzz-not-a-real-term qqqq', 8)).toEqual([]);
+    // Pure gibberish content terms — none appear as whole words in any real abstract.
+    expect(await tool.search('zxqwvb plokmnq vbnmqwz', 8)).toEqual([]);
   });
 });
 

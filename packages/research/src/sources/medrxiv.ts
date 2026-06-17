@@ -10,17 +10,30 @@ export interface MedrxivDeps {
   minIntervalMs?: number;
   windowDays?: number;       // how far back to scan (default 60)
   maxRecords?: number;       // cap on records pulled per window (default 1500, env-tunable)
+  minTermFraction?: number;  // fraction of query content-terms a record must contain (default 0.5)
   now?: () => Date;          // injectable clock for tests
   log?: Logger;
 }
 
+// Dropped from queries before matching: too generic to carry topical meaning. Short tokens (<3 chars)
+// are dropped too. What remains are the content terms a medRxiv record is scored against.
+const STOPWORDS = new Set([
+  'and', 'for', 'the', 'with', 'from', 'into', 'that', 'this', 'your', 'their', 'after', 'during',
+  'using', 'based', 'study', 'among', 'between', 'effect', 'effects',
+]);
+
 interface MedrxivRecord { doi: string; title: string; abstract: string; date: string }
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export class MedrxivTool {
   private readonly fetchFn: typeof fetch;
   private readonly limiter: RateLimiter;
   private readonly windowDays: number;
   private readonly maxRecords: number;
+  private readonly minTermFraction: number;
   private readonly now: () => Date;
   private readonly log: Logger;
   // Cache the fetched window so every topic in a run filters the SAME records without re-paginating.
@@ -31,6 +44,7 @@ export class MedrxivTool {
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 1000);
     this.windowDays = deps.windowDays ?? 60;
     this.maxRecords = deps.maxRecords ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_RECORDS) || 1500);
+    this.minTermFraction = deps.minTermFraction ?? (Number(process.env.RESEARCH_MEDRXIV_MIN_TERM_FRACTION) || 0.5);
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? noopLogger;
   }
@@ -91,23 +105,43 @@ export class MedrxivTool {
     return records;
   }
 
-  /** Keep preprints whose title/abstract contains every query term (case-insensitive). The API
-   * includes the abstract, so no extra fetch is needed. */
+  /** Content terms of a query: lowercase tokens of length ≥3 that aren't stopwords. Falls back to
+   * the raw tokens if everything was filtered out (e.g. a query of only short/stop words). */
+  private contentTerms(query: string): string[] {
+    const raw = query.toLowerCase().split(/\W+/).filter(Boolean);
+    const terms = raw.filter((t) => t.length >= 3 && !STOPWORDS.has(t));
+    return terms.length ? terms : raw;
+  }
+
+  /** Keep preprints that contain ENOUGH of the query's content terms (not all of them), ranked by how
+   * many match. Strict all-terms-AND made multi-word gaming topics match ~nothing on a clinical
+   * corpus; this trades a little precision for recall, and the downstream relevance gate + human
+   * review filter the rest. The API includes the abstract, so no extra fetch is needed. */
   async search(query: string, limit: number): Promise<Paper[]> {
     const to = this.now();
     const from = new Date(to.getTime() - this.windowDays * 86_400_000);
     const records = await this.windowRecords(this.fmt(from), this.fmt(to));
 
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    const matches = (r: MedrxivRecord) => {
-      const hay = `${r.title} ${r.abstract}`.toLowerCase();
-      return terms.every((t) => hay.includes(t));
-    };
+    const terms = this.contentTerms(query);
+    // ≤2 terms: require all (a 1–2 word query is already specific). More: require a fraction, min 2.
+    const minMatch = terms.length <= 2 ? terms.length : Math.max(2, Math.ceil(terms.length * this.minTermFraction));
+    // Whole-word match (not substring): "term" must not count inside "determine", and gibberish must
+    // not accidentally match. \W tokenization above already split hyphens etc.
+    const patterns = terms.map((t) => new RegExp(`\\b${escapeRegExp(t)}\\b`));
 
-    return records
-      .filter(matches)
+    const scored = records
+      .map((r) => {
+        const hay = `${r.title} ${r.abstract}`.toLowerCase();
+        let score = 0;
+        for (const re of patterns) if (re.test(hay)) score++;
+        return { r, score };
+      })
+      .filter((x) => x.score >= minMatch)
+      .sort((a, b) => b.score - a.score);
+
+    return scored
       .slice(0, limit)
-      .map((r) => ({
+      .map(({ r }) => ({
         sourceId: `doi:${r.doi}`,
         sourceKind: 'medrxiv' as const,
         title: r.title,
