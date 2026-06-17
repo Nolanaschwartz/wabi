@@ -15,8 +15,11 @@ const SINGLETON_ID = 'singleton';
 export class ResearchConfigService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     // Fail safe: if Postgres is down the worker still boots (research is non-critical, ADR-0034);
-    // admin reads will surface the error per-request instead of blocking startup.
-    await this.seedOnBoot().catch(() => undefined);
+    // admin reads will surface the error per-request instead of blocking startup. Log it like the
+    // bot logs degradation, so a failed seed isn't an invisible empty admin screen.
+    await this.seedOnBoot().catch((err) =>
+      console.error('[research] boot seed failed; continuing degraded', err),
+    );
   }
 
   /**
