@@ -1,5 +1,6 @@
 import { RateLimiter } from '../util/rate-limiter';
-import { Paper } from '../types';
+import { Paper, SourceKind } from '../types';
+import { Source } from './source';
 import { Logger, noopLogger } from '../util/logger';
 import { contentTerms, minMatch, scoreRecord } from './term-match';
 import { fetchAndParsePdf } from './pdf';
@@ -23,7 +24,8 @@ export interface MedrxivDeps {
 
 interface MedrxivRecord { doi: string; title: string; abstract: string; date: string; version?: string }
 
-export class MedrxivTool {
+export class MedrxivTool implements Source {
+  readonly kind: SourceKind = 'medrxiv';
   private readonly fetchFn: typeof fetch;
   private readonly limiter: RateLimiter;
   private readonly windowDays: number;
@@ -146,11 +148,16 @@ export class MedrxivTool {
       }));
   }
 
+  /** Preprint list endpoints already return complete papers, so hydrate is the identity (ADR-0036). */
+  async hydrate(paper: Paper): Promise<Paper> {
+    return paper;
+  }
+
   /** Full text from medRxiv's open-access PDF: `<doi>v<version>.full.pdf`. The version comes from the
    * window cache primed by search(); when the doi wasn't in the window (or carried no version) we fall
    * back to `v1`. Fail-safe: any HTTP/oversize/parse failure → null, and the agent reads the abstract. */
-  async fullText(sourceId: string): Promise<string | null> {
-    const doi = sourceId.replace(/^doi:/, '');
+  async fullText(paper: Paper): Promise<string | null> {
+    const doi = paper.sourceId.replace(/^doi:/, '');
     const version = this.cache?.records.find((r) => r.doi === doi)?.version ?? '1';
     const url = `https://www.medrxiv.org/content/${doi}v${version}.full.pdf`;
     return fetchAndParsePdf(url, {

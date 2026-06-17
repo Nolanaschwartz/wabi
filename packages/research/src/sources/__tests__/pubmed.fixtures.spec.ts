@@ -1,6 +1,13 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { PubMedTool } from '../pubmed';
+import { Paper } from '../../types';
+
+/** A thin pubmed hit (search() output) — the input shape hydrate()/fullText()/expand() take. */
+function pm(id: string): Paper {
+  return { sourceId: `PMID:${id}`, sourceKind: 'pubmed', title: '', abstract: '',
+    url: `https://pubmed.ncbi.nlm.nih.gov/${id}`, pubTypes: [], isPreprint: false };
+}
 
 // These specs replay REAL responses captured from the live NCBI E-utilities + BioC APIs
 // (see ./fixtures/README.md and ../../../scripts/capture-fixtures.sh). Unlike hand-written mocks,
@@ -45,47 +52,41 @@ function fixtureFetch(over: Record<string, string> = {}): jest.Mock {
 }
 
 describe('PubMedTool against real captured fixtures', () => {
-  it('search parses the real esearch idlist', async () => {
+  it('search parses the real esearch idlist into thin PMID papers', async () => {
     const tool = new PubMedTool({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
-    const ids = await tool.search('progressive muscle relaxation anxiety', 3);
-    expect(Array.isArray(ids)).toBe(true);
-    expect(ids.length).toBeGreaterThan(0);
-    expect(ids.every((id) => /^\d+$/.test(id))).toBe(true);
+    const papers = await tool.search('progressive muscle relaxation anxiety', 3);
+    expect(papers.length).toBeGreaterThan(0);
+    expect(papers.every((p) => /^PMID:\d+$/.test(p.sourceId) && p.sourceKind === 'pubmed')).toBe(true);
   });
 
-  it('summary extracts title + pubTypes from the real esummary shape', async () => {
+  it('hydrate fills title + pubTypes + abstract from the real esummary/efetch shapes', async () => {
     const tool = new PubMedTool({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
-    const s = await tool.summary('34542434');
-    expect(s.title).toContain('Mindfulness');
-    expect(Array.isArray(s.pubTypes)).toBe(true);
+    const p = await tool.hydrate(pm('34542434'));
+    expect(p.title).toContain('Mindfulness');
+    expect(Array.isArray(p.pubTypes)).toBe(true);
+    // The abstract is the raw efetch blob (citation/DOI metadata included) — the known limitation that
+    // `extract` is fed the header alongside the abstract. If hydrate ever parses the abstract proper,
+    // invert this assertion.
+    expect(p.abstract.length).toBeGreaterThan(100);
+    expect(p.abstract.toLowerCase()).toMatch(/doi:|author information|©|copyright/);
   });
 
-  it('abstract returns the raw efetch blob (NOTE: includes citation/DOI metadata, not just the abstract)', async () => {
+  it('expand parses neighbour PMIDs from the real elink shape as thin papers (includes the query PMID itself)', async () => {
     const tool = new PubMedTool({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
-    const abs = await tool.abstract('34542434');
-    expect(abs.length).toBeGreaterThan(100);
-    // Documents the known limitation: efetch text is a metadata-laden blob, so `extract` is fed
-    // the citation header + DOI alongside the abstract. If `abstract()` is ever changed to parse
-    // out the abstract proper, this assertion should be inverted.
-    expect(abs.toLowerCase()).toMatch(/doi:|author information|©|copyright/);
-  });
-
-  it('related parses neighbor PMIDs from the real elink shape (and includes the query PMID itself)', async () => {
-    const tool = new PubMedTool({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
-    const rel = await tool.related('34542434');
+    const rel = await tool.expand(pm('34542434'));
     expect(rel.length).toBeGreaterThan(10);
-    expect(rel.every((id) => /^\d+$/.test(id))).toBe(true);
+    expect(rel.every((p) => /^PMID:\d+$/.test(p.sourceId))).toBe(true);
     // Quirk worth pinning: elink's neighbor list contains the source PMID; the agent's visited-set
     // dedup relies on this not causing a re-process.
-    expect(rel).toContain('34542434');
+    expect(rel.map((p) => p.sourceId)).toContain('PMID:34542434');
   });
 
-  it('related returns [] on the real NCBI 200-with-ERROR elink shape (fail-safe)', async () => {
+  it('expand returns [] on the real NCBI 200-with-ERROR elink shape (fail-safe)', async () => {
     const tool = new PubMedTool({
       fetchFn: fixtureFetch({ elink: 'elink-error.json' }) as unknown as typeof fetch,
       minIntervalMs: 0,
     });
-    expect(await tool.related('34542434')).toEqual([]);
+    expect(await tool.expand(pm('34542434'))).toEqual([]);
   });
 
   // THE regression that the hand-written mock missed: real BioC is a top-level array and the
@@ -93,7 +94,7 @@ describe('PubMedTool against real captured fixtures', () => {
   it('fullText parses the real BioC top-level array into non-empty body text', async () => {
     const fetchFn = fixtureFetch();
     const tool = new PubMedTool({ fetchFn: fetchFn as unknown as typeof fetch, minIntervalMs: 0 });
-    const text = await tool.fullText('34542434');
+    const text = await tool.fullText(pm('34542434'));
     expect(text).not.toBeNull();
     expect((text as string).length).toBeGreaterThan(5000);
     expect(text as string).toContain('Psychological Flexibility');
@@ -109,14 +110,14 @@ const live = process.env.RESEARCH_LIVE === '1' ? describe : describe.skip;
 live('PubMed LIVE drift (RESEARCH_LIVE=1)', () => {
   it('real esearch still returns a numeric idlist array', async () => {
     const tool = new PubMedTool({ apiKey: process.env.NCBI_API_KEY, minIntervalMs: 1500 });
-    const ids = await tool.search('progressive muscle relaxation anxiety', 2);
-    expect(Array.isArray(ids)).toBe(true);
-    expect(ids.every((id) => /^\d+$/.test(id))).toBe(true);
+    const papers = await tool.search('progressive muscle relaxation anxiety', 2);
+    expect(Array.isArray(papers)).toBe(true);
+    expect(papers.every((p) => /^PMID:\d+$/.test(p.sourceId))).toBe(true);
   }, 30000);
 
   it('real fullText still parses to non-empty text for a known OA paper', async () => {
     const tool = new PubMedTool({ apiKey: process.env.NCBI_API_KEY, minIntervalMs: 2000 });
-    const text = await tool.fullText('34542434');
+    const text = await tool.fullText(pm('34542434'));
     expect(text && text.length).toBeGreaterThan(1000);
   }, 30000);
 });

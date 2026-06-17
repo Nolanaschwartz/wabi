@@ -1,5 +1,6 @@
 import { RateLimiter } from '../util/rate-limiter';
-import { Paper } from '../types';
+import { Paper, SourceKind } from '../types';
+import { Source } from './source';
 import { Logger, noopLogger } from '../util/logger';
 import { contentTerms, minMatch, scoreRecord } from './term-match';
 import { fetchAndParsePdf } from './pdf';
@@ -27,7 +28,8 @@ export interface PsyArxivDeps {
 interface OsfRecord { id: string; attributes?: { title?: string; description?: string; date_published?: string } }
 interface OsfPage { data?: OsfRecord[]; links?: { next?: string | null } }
 
-export class PsyArxivTool {
+export class PsyArxivTool implements Source {
+  readonly kind: SourceKind = 'psyarxiv';
   private readonly fetchFn: typeof fetch;
   private readonly token?: string;
   private readonly limiter: RateLimiter;
@@ -155,12 +157,17 @@ export class PsyArxivTool {
       }));
   }
 
+  /** Preprint list endpoints already return complete papers, so hydrate is the identity (ADR-0036). */
+  async hydrate(paper: Paper): Promise<Paper> {
+    return paper;
+  }
+
   /** Full text from the preprint's primary PDF: resolve `osf:<guid>` → preprint detail →
    * `primary_file` file node → `links.download`, then download+parse via the shared helper with
    * PsyArXiv's caps. Fail-safe: any HTTP/missing-link/oversize/parse failure → null → abstract. */
-  async fullText(sourceId: string): Promise<string | null> {
+  async fullText(paper: Paper): Promise<string | null> {
     try {
-      const guid = sourceId.replace(/^osf:/, '');
+      const guid = paper.sourceId.replace(/^osf:/, '');
       const detail = await this.getJson<{
         data?: { relationships?: { primary_file?: { links?: { related?: { href?: string } } } } };
       }>(`${BASE}${guid}/`);
@@ -180,7 +187,7 @@ export class PsyArxivTool {
         log: this.log,
       });
     } catch (e) {
-      this.log.info('psyarxiv fullText failed', { sourceId, err: (e as Error)?.message ?? String(e) });
+      this.log.info('psyarxiv fullText failed', { sourceId: paper.sourceId, err: (e as Error)?.message ?? String(e) });
       return null;
     }
   }

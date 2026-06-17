@@ -1,4 +1,5 @@
 import { PubMedTool } from '../pubmed';
+import { Paper } from '../../types';
 
 function jsonResponse(body: unknown) {
   return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => '' });
@@ -6,43 +7,60 @@ function jsonResponse(body: unknown) {
 function textResponse(body: string) {
   return Promise.resolve({ ok: true, status: 200, text: async () => body, json: async () => ({}) });
 }
+/** A thin pubmed hit as search() yields it — the input shape hydrate()/fullText()/expand() take. */
+function pm(id: string): Paper {
+  return { sourceId: `PMID:${id}`, sourceKind: 'pubmed', title: '', abstract: '',
+    url: `https://pubmed.ncbi.nlm.nih.gov/${id}`, pubTypes: [], isPreprint: false };
+}
 
 describe('PubMedTool', () => {
-  it('search returns PMIDs from esearch', async () => {
+  it('search returns thin PMID-prefixed papers from esearch', async () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse({ esearchresult: { idlist: ['111', '222'] } }));
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    expect(await tool.search('tilt regulation', 8)).toEqual(['111', '222']);
+    const papers = await tool.search('tilt regulation', 8);
+    // Thin: id keyspace + url only; the `PMID:` prefix is the canonical seen()/ledger key.
+    expect(papers.map((p) => p.sourceId)).toEqual(['PMID:111', 'PMID:222']);
+    expect(papers[0]).toMatchObject({ sourceKind: 'pubmed', title: '', abstract: '', isPreprint: false,
+      url: 'https://pubmed.ncbi.nlm.nih.gov/111' });
     expect(fetchFn.mock.calls[0][0]).toContain('esearch.fcgi');
     expect(fetchFn.mock.calls[0][0]).toContain('retmax=8');
   });
 
-  it('summary returns title + pubTypes from esummary', async () => {
-    const fetchFn = jest.fn().mockReturnValue(jsonResponse({
-      result: { '111': { uid: '111', title: 'PMR and anxiety', pubtype: ['Randomized Controlled Trial'] } },
-    }));
-    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    const s = await tool.summary('111');
-    expect(s).toEqual({ title: 'PMR and anxiety', pubTypes: ['Randomized Controlled Trial'] });
+  it('hydrate fills title/pubTypes/abstract from esummary + efetch, keeping the sourceId', async () => {
+    const fetchFn = jest.fn(async (url: unknown) => {
+      const u = String(url);
+      if (u.includes('esummary.fcgi')) {
+        return { ok: true, status: 200, json: async () => ({
+          result: { '111': { uid: '111', title: 'PMR and anxiety', pubtype: ['Randomized Controlled Trial'] } },
+        }), text: async () => '' } as Response;
+      }
+      if (u.includes('efetch.fcgi')) {
+        return { ok: true, status: 200, text: async () => 'PMR reduced state anxiety in a trial.', json: async () => ({}) } as Response;
+      }
+      throw new Error(`unexpected url ${u}`);
+    });
+    const tool = new PubMedTool({ fetchFn: fetchFn as unknown as typeof fetch, minIntervalMs: 0 });
+    const p = await tool.hydrate(pm('111'));
+    expect(p.title).toBe('PMR and anxiety');
+    expect(p.pubTypes).toEqual(['Randomized Controlled Trial']);
+    expect(p.abstract).toContain('PMR reduced state anxiety');
+    expect(p.sourceId).toBe('PMID:111'); // identity on the id keyspace
   });
 
-  it('abstract returns efetch text', async () => {
-    const fetchFn = jest.fn().mockReturnValue(textResponse('PMR reduced state anxiety in a trial.'));
-    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    expect(await tool.abstract('111')).toContain('PMR reduced state anxiety');
-  });
-
-  it('related returns neighbor PMIDs from elink', async () => {
+  it('expand returns citation-graph neighbours as thin PMID papers', async () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse({
       linksets: [{ linksetdbs: [{ links: ['333', '444'] }] }],
     }));
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    expect(await tool.related('111')).toEqual(['333', '444']);
+    const papers = await tool.expand(pm('111'));
+    expect(papers.map((p) => p.sourceId)).toEqual(['PMID:333', 'PMID:444']);
+    expect(papers.every((p) => p.sourceKind === 'pubmed' && p.abstract === '')).toBe(true);
   });
 
   it('fullText returns null when the paper is not open-access (no PMCID)', async () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse({ result: { '111': { uid: '111', articleids: [] } } }));
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    expect(await tool.fullText('111')).toBeNull();
+    expect(await tool.fullText(pm('111'))).toBeNull();
   });
 
   it('fullText fetches BioC with the PMC-prefixed id and parses the top-level array (real API shape)', async () => {
@@ -63,7 +81,7 @@ describe('PubMedTool', () => {
         ]),
       );
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    const text = await tool.fullText('111');
+    const text = await tool.fullText(pm('111'));
     expect(text).toContain('occupational stress');
     expect(text).toContain('PMR protocol');
     // The BioC URL must keep the PMC prefix — stripping it returns "[Error] : No result can be found".
@@ -81,7 +99,7 @@ describe('PubMedTool', () => {
       .mockReturnValueOnce(textResponse('<article><body><sec><p>Mindfulness reduced rumination.</p></sec></body></article>'));
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
 
-    const text = await tool.fullText('111');
+    const text = await tool.fullText(pm('111'));
 
     expect(text).toBe('Mindfulness reduced rumination.');
     expect(fetchFn.mock.calls[2][0]).toContain('/europepmc/webservices/rest/PMC8314311/fullTextXML');
@@ -94,7 +112,7 @@ describe('PubMedTool', () => {
       .mockReturnValueOnce(jsonResponse([{ documents: [{ passages: [{ text: 'BioC body present.' }] }] }]));
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
 
-    expect(await tool.fullText('111')).toBe('BioC body present.');
+    expect(await tool.fullText(pm('111'))).toBe('BioC body present.');
     expect(fetchFn).toHaveBeenCalledTimes(2); // no Europe PMC fetch
   });
 
@@ -107,7 +125,7 @@ describe('PubMedTool', () => {
       .mockReturnValueOnce(textResponse(longBody));
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0, maxTextChars: 50 });
 
-    const text = await tool.fullText('111');
+    const text = await tool.fullText(pm('111'));
 
     expect(text).toHaveLength(50);
     expect(text).not.toContain('<');
@@ -121,7 +139,7 @@ describe('PubMedTool', () => {
       .mockReturnValueOnce(Promise.resolve({ ok: false, status: 404, text: async () => '', json: async () => ({}) })); // Europe PMC 404
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
 
-    expect(await tool.fullText('111')).toBeNull();
+    expect(await tool.fullText(pm('111'))).toBeNull();
   });
 
   it('fullText returns null when the BioC body is a non-JSON error (not yet in BioC)', async () => {
@@ -142,7 +160,7 @@ describe('PubMedTool', () => {
         }),
       );
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    expect(await tool.fullText('111')).toBeNull();
+    expect(await tool.fullText(pm('111'))).toBeNull();
   });
 
   it('throws on HTTP error', async () => {

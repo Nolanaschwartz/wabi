@@ -1,7 +1,12 @@
 import { MedrxivTool } from '../medrxiv';
+import { Paper } from '../../types';
 
 function jsonResponse(body: unknown) {
   return Promise.resolve({ ok: true, status: 200, json: async () => body });
+}
+/** A medRxiv paper as fullText() now takes it — only sourceId is read. */
+function med(sourceId: string): Paper {
+  return { sourceId, sourceKind: 'medrxiv', title: '', abstract: '', url: '', pubTypes: [], isPreprint: true };
 }
 
 describe('MedrxivTool', () => {
@@ -102,7 +107,7 @@ describe('MedrxivTool', () => {
     const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-05-31'), parsePdf });
     await tool.search('tilt', 8); // primes the version cache
 
-    const text = await tool.fullText('doi:10.1101/2024.05.05.5');
+    const text = await tool.fullText(med('doi:10.1101/2024.05.05.5'));
 
     expect(text).toBe('FULL MEDRXIV BODY');
     const pdfCall = fetchFn.mock.calls.find((c) => String(c[0]).endsWith('.full.pdf'))!;
@@ -121,7 +126,7 @@ describe('MedrxivTool', () => {
     const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 60, now: () => new Date('2024-07-31'), parsePdf });
     await tool.search('reappraisal', 8); // primes the cache with both version rows
 
-    await tool.fullText('doi:10.1101/2024.07.07.7');
+    await tool.fullText(med('doi:10.1101/2024.07.07.7'));
 
     const pdfCall = fetchFn.mock.calls.find((c) => String(c[0]).endsWith('.full.pdf'))!;
     expect(pdfCall[0]).toBe('https://www.medrxiv.org/content/10.1101/2024.07.07.7v2.full.pdf');
@@ -132,7 +137,7 @@ describe('MedrxivTool', () => {
     const fetchFn = routedFetch({ collection: [] });
     const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, parsePdf });
 
-    await tool.fullText('doi:10.1101/2024.09.09.9');
+    await tool.fullText(med('doi:10.1101/2024.09.09.9'));
 
     const pdfCall = fetchFn.mock.calls.find((c) => String(c[0]).endsWith('.full.pdf'))!;
     expect(pdfCall[0]).toBe('https://www.medrxiv.org/content/10.1101/2024.09.09.9v1.full.pdf');
@@ -141,6 +146,6 @@ describe('MedrxivTool', () => {
   it('fullText fails safe to null when the PDF fetch errors (abstract fallback)', async () => {
     const fetchFn = routedFetch({ collection: [] }, false);
     const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, parsePdf: jest.fn() });
-    expect(await tool.fullText('doi:10.1101/2024.09.09.9')).toBeNull();
+    expect(await tool.fullText(med('doi:10.1101/2024.09.09.9'))).toBeNull();
   });
 });

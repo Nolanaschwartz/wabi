@@ -1,7 +1,12 @@
 import { PsyArxivTool } from '../psyarxiv';
+import { Paper } from '../../types';
 
 function jsonResponse(body: unknown) {
   return Promise.resolve({ ok: true, status: 200, json: async () => body });
+}
+/** A PsyArXiv paper as fullText() now takes it — only sourceId is read. */
+function psy(sourceId: string): Paper {
+  return { sourceId, sourceKind: 'psyarxiv', title: '', abstract: '', url: '', pubTypes: [], isPreprint: true };
 }
 
 // Minimal slice of the real OSF API v2 preprints response shape (verified live):
@@ -142,7 +147,7 @@ describe('PsyArxivTool', () => {
     const fetchFn = fullTextFetch();
     const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, parsePdf });
 
-    const text = await tool.fullText('osf:g1');
+    const text = await tool.fullText(psy('osf:g1'));
 
     expect(text).toBe('PSYARXIV FULL BODY');
     const urls = fetchFn.mock.calls.map((c) => String(c[0]));
@@ -153,16 +158,16 @@ describe('PsyArxivTool', () => {
 
   it('fullText fails safe to null when the preprint has no primary_file', async () => {
     const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ fileHref: null }), minIntervalMs: 0, parsePdf: jest.fn() });
-    expect(await tool.fullText('osf:g1')).toBeNull();
+    expect(await tool.fullText(psy('osf:g1'))).toBeNull();
   });
 
   it('fullText fails safe to null when the file node has no download link', async () => {
     const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ downloadUrl: null }), minIntervalMs: 0, parsePdf: jest.fn() });
-    expect(await tool.fullText('osf:g1')).toBeNull();
+    expect(await tool.fullText(psy('osf:g1'))).toBeNull();
   });
 
   it('fullText fails safe to null when the PDF download errors', async () => {
     const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ pdfOk: false }), minIntervalMs: 0, parsePdf: jest.fn() });
-    expect(await tool.fullText('osf:g1')).toBeNull();
+    expect(await tool.fullText(psy('osf:g1'))).toBeNull();
   });
 });

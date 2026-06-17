@@ -1,14 +1,16 @@
 import { ResearchAgent, AgentDeps } from '../research-agent';
-import { Bounds, Candidate, Paper } from '../../types';
+import { Source } from '../../sources/source';
+import { Bounds, Candidate, Paper, SourceKind } from '../../types';
 
 const bounds: Bounds = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 3, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
   maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
 };
 
-function paper(id: string): Paper {
-  return { sourceId: `PMID:${id}`, sourceKind: 'pubmed', title: `T${id}`, abstract: `A${id}`,
-    url: `u${id}`, pubTypes: ['Randomized Controlled Trial'], isPreprint: false };
+/** A thin PubMed paper as the adapter's search() now yields it: id+kind+url, abstract filled by hydrate. */
+function pubmedThin(id: string): Paper {
+  return { sourceId: `PMID:${id}`, sourceKind: 'pubmed', title: '', abstract: '',
+    url: `https://pubmed.ncbi.nlm.nih.gov/${id}`, pubTypes: [], isPreprint: false };
 }
 function psyPaper(guid: string): Paper {
   return { sourceId: `osf:${guid}`, sourceKind: 'psyarxiv', title: `PT${guid}`, abstract: `PA${guid}`,
@@ -19,17 +21,39 @@ function candidate(id: string): Candidate {
     sourceUrl: `u${id}`, source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent' };
 }
 
-function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
+/** Fake PubMed Source: thin search hits, hydrate fills T/A/pubTypes, expand citation-graph (default none). */
+function pubmedSource(over: Partial<Source> = {}): Source {
   return {
-    pubmed: {
-      search: jest.fn().mockResolvedValue(['1', '2', '3']),
-      summary: jest.fn().mockImplementation((id: string) => Promise.resolve({ title: `T${id}`, pubTypes: ['Randomized Controlled Trial'] })),
-      abstract: jest.fn().mockImplementation((id: string) => Promise.resolve(`A${id}`)),
-      related: jest.fn().mockResolvedValue([]),
-      fullText: jest.fn().mockResolvedValue(null),
-    } as any,
-    medrxiv: { search: jest.fn().mockResolvedValue([]), fullText: jest.fn().mockResolvedValue(null) } as any,
-    psyarxiv: { search: jest.fn().mockResolvedValue([]), fullText: jest.fn().mockResolvedValue(null) } as any,
+    kind: 'pubmed',
+    search: jest.fn().mockResolvedValue([pubmedThin('1'), pubmedThin('2'), pubmedThin('3')]),
+    hydrate: jest.fn(async (p: Paper) => {
+      const id = p.sourceId.replace('PMID:', '');
+      return { ...p, title: `T${id}`, abstract: `A${id}`, pubTypes: ['Randomized Controlled Trial'] };
+    }),
+    fullText: jest.fn().mockResolvedValue(null),
+    expand: jest.fn().mockResolvedValue([]),
+    ...over,
+  } as Source;
+}
+/** Fake preprint Source (medRxiv/PsyArXiv): search returns complete papers, hydrate is identity, NO expand. */
+function preprintSource(kind: SourceKind, over: Partial<Source> = {}): Source {
+  return {
+    kind,
+    search: jest.fn().mockResolvedValue([]),
+    hydrate: jest.fn(async (p: Paper) => p),
+    fullText: jest.fn().mockResolvedValue(null),
+    ...over,
+  } as Source;
+}
+
+function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind, Source>> = {}): AgentDeps {
+  const sources = new Map<SourceKind, Source>([
+    ['pubmed', srcs.pubmed ?? pubmedSource()],
+    ['medrxiv', srcs.medrxiv ?? preprintSource('medrxiv')],
+    ['psyarxiv', srcs.psyarxiv ?? preprintSource('psyarxiv')],
+  ]);
+  return {
+    sources,
     seen: jest.fn().mockResolvedValue(false),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidate: candidate(p.sourceId.replace('PMID:', '')), tokens: 10 })),
@@ -47,6 +71,14 @@ describe('ResearchAgent', () => {
     expect(summary.stopReason).toBe('maxDraftsPerTopic');
   });
 
+  it('hydrates a thin pubmed paper before the gate, with the abstract the gate then sees', async () => {
+    const gate = jest.fn().mockResolvedValue({ keep: true, tokens: 1 });
+    const agent = new ResearchAgent(baseDeps({ gate }), bounds);
+    await agent.run('topic');
+    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with the hydrated abstract.
+    expect(gate).toHaveBeenCalledWith('A1');
+  });
+
   it('emits progress through the injected logger (topic start + collected + topic done)', async () => {
     const log = { info: jest.fn(), debug: jest.fn() };
     const agent = new ResearchAgent(baseDeps(), bounds, log);
@@ -59,9 +91,7 @@ describe('ResearchAgent', () => {
 
   it('logs a swallowed pubmed search failure instead of hiding it as zero results', async () => {
     const log = { info: jest.fn(), debug: jest.fn() };
-    const deps = baseDeps({
-      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockRejectedValue(new Error('PubMed HTTP 400')) } as any,
-    });
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockRejectedValue(new Error('PubMed HTTP 400')) }) });
     const agent = new ResearchAgent(deps, bounds, log);
     const { summary } = await agent.run('topic');
     expect(summary.searched).toBe(0);
@@ -70,23 +100,22 @@ describe('ResearchAgent', () => {
     expect(fail![1]).toMatchObject({ err: 'PubMed HTTP 400' });
   });
 
-  it('skips papers already seen, before gate/extract', async () => {
-    const deps = baseDeps({ seen: jest.fn().mockResolvedValue(true) });
+  it('skips papers already seen, before hydrate/gate/extract', async () => {
+    const pubmed = pubmedSource();
+    const deps = baseDeps({ seen: jest.fn().mockResolvedValue(true) }, { pubmed });
     const agent = new ResearchAgent(deps, bounds);
     const { candidates, summary } = await agent.run('topic');
     expect(candidates).toHaveLength(0);
     expect(summary.seenSkipped).toBe(3);
+    expect(pubmed.hydrate).not.toHaveBeenCalled();
     expect(deps.gate).not.toHaveBeenCalled();
     expect(deps.extract).not.toHaveBeenCalled();
   });
 
   it('checks the seen ledger with the PMID-prefixed key for a direct search hit', async () => {
-    // The bot's ProcessedSource ledger is keyed `PMID:<id>` (extract sets sourceId=`PMID:<id>`,
-    // which strategy-admin.markProcessed stores). A bare-PMID seen() query never matches that row,
-    // so the paper is re-submitted every run → duplicate pending-review StrategyDrafts.
-    const deps = baseDeps({
-      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue(['40299806']) } as any,
-    });
+    // The bot's ProcessedSource ledger is keyed `PMID:<id>`; the adapter sets that prefix in search(),
+    // so a direct hit's seen() query matches the row (no bare-PMID miss → no duplicate drafts).
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('40299806')]) }) });
     const agent = new ResearchAgent(deps, bounds);
     await agent.run('topic');
     expect(deps.seen).toHaveBeenCalledWith('PMID:40299806');
@@ -94,15 +123,15 @@ describe('ResearchAgent', () => {
   });
 
   it('does not re-call seen for a paper already visited via discovery (in-memory set)', async () => {
-    const deps = baseDeps({
-      pubmed: { ...baseDeps().pubmed,
-        search: jest.fn().mockResolvedValue(['1']),
-        related: jest.fn().mockResolvedValue(['1']),
-      } as any,
+    const deps = baseDeps({}, {
+      pubmed: pubmedSource({
+        search: jest.fn().mockResolvedValue([pubmedThin('1')]),
+        expand: jest.fn().mockResolvedValue([pubmedThin('1')]),
+      }),
     });
     const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 5, maxDraftsPerTopic: 5 });
     await agent.run('topic');
-    // The direct hit and its discovery-expanded self share one key, so the paper is checked once.
+    // The direct hit and its discovery-expanded self share one sourceId, so the paper is checked once.
     expect((deps.seen as jest.Mock).mock.calls.filter((c) => c[0] === 'PMID:1')).toHaveLength(1);
     expect(deps.seen).toHaveBeenCalledTimes(1);
   });
@@ -123,25 +152,24 @@ describe('ResearchAgent', () => {
   it('queues and processes PsyArXiv papers, calling psyarxiv.fullText (never medrxiv.fullText) for them', async () => {
     const psyFullText = jest.fn().mockResolvedValue(null);
     const medFullText = jest.fn().mockResolvedValue(null);
-    const deps = baseDeps({
-      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue([]) } as any,
-      psyarxiv: { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: psyFullText } as any,
-      medrxiv: { search: jest.fn().mockResolvedValue([]), fullText: medFullText } as any,
+    const deps = baseDeps({}, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: psyFullText }),
+      medrxiv: preprintSource('medrxiv', { fullText: medFullText }),
     });
     const agent = new ResearchAgent(deps, bounds);
     const { candidates } = await agent.run('topic');
     expect(candidates).toHaveLength(1); // the single PsyArXiv paper flowed through to a candidate
-    expect(psyFullText).toHaveBeenCalledWith('osf:g1'); // routed to psyarxiv by kind...
-    expect(medFullText).not.toHaveBeenCalled();          // ...never to medrxiv
+    expect(psyFullText).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' })); // routed by kind...
+    expect(medFullText).not.toHaveBeenCalled();                                                  // ...never to medrxiv
   });
 
   it('falls back to the abstract when psyarxiv.fullText returns null', async () => {
     const extract = jest.fn().mockImplementation((p: Paper, body: string) =>
       Promise.resolve({ candidate: { ...candidate('g1'), sourceText: body }, tokens: 1 }));
-    const deps = baseDeps({
-      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue([]) } as any,
-      psyarxiv: { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: jest.fn().mockResolvedValue(null) } as any,
-      extract,
+    const deps = baseDeps({ extract }, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: jest.fn().mockResolvedValue(null) }),
     });
     const agent = new ResearchAgent(deps, bounds);
     await agent.run('topic');
@@ -151,9 +179,9 @@ describe('ResearchAgent', () => {
 
   it('logs a swallowed psyarxiv search failure instead of aborting the run', async () => {
     const log = { info: jest.fn(), debug: jest.fn() };
-    const deps = baseDeps({
-      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue([]) } as any,
-      psyarxiv: { search: jest.fn().mockRejectedValue(new Error('OSF HTTP 503')), fullText: jest.fn() } as any,
+    const deps = baseDeps({}, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockRejectedValue(new Error('OSF HTTP 503')) }),
     });
     const agent = new ResearchAgent(deps, bounds, log);
     const { summary } = await agent.run('topic');

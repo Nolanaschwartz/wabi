@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PsyArxivTool } from '../psyarxiv';
+import { Paper } from '../../types';
+
+/** A PsyArXiv paper as fullText() now takes it — only sourceId is read. */
+function psy(sourceId: string): Paper {
+  return { sourceId, sourceKind: 'psyarxiv', title: '', abstract: '', url: '', pubTypes: [], isPreprint: true };
+}
 
 /**
  * Validates the OSF full-text chain against RECORDED LIVE response shapes (captured 2026-06-17 from
@@ -54,7 +60,7 @@ describe('PsyArxivTool.fullText — recorded OSF shapes + real unpdf', () => {
 
     // No parsePdf override -> uses the default unpdf parser.
     const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0 });
-    const text = await tool.fullText(`osf:${PREPRINT_GUID}`);
+    const text = await tool.fullText(psy(`osf:${PREPRINT_GUID}`));
 
     expect(text).toContain('Hello unpdf fixture body');
   }, 30_000);
