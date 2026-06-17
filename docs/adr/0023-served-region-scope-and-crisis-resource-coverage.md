@@ -17,5 +17,5 @@ For a solo-founder PoC, vetting correct hotlines across dozens of countries is a
 
 ## Consequences
 
-- `crisis-resources.json` (Task 30) ships with US + UK/CA/AU/IE entries **and** a mandatory non-US international fallback entry; the escalation action selects by `user.locale` with the international fallback as default, US-`988` never the global default.
+- The hardcoded `RESOURCES` const in `crisis-resources.service.ts` ships with US + UK/CA/AU/IE entries **and** a mandatory non-US international fallback entry; the `resourcesFor(locale)` selection logic in the service selects by `user.locale` with the international fallback as default, US-`988` never the global default.
 - Widening served regions later means: vet more locales' hotlines, add the GDPR paperwork (policy, DPAs, Art. 9), and broaden marketing — the data-subject-rights mechanics already exist.

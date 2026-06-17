@@ -1,6 +1,6 @@
 # `packages/bot` is a NestJS app (necord for Discord); `packages/web` stays Next.js
 
-The backend process — the Discord bot, the Stripe webhook, the schedulers/workers, and all AI services (coach, crisis screening, access, memory, RAG) — is a **NestJS** application. Discord integration uses **necord** (decorators over discord.js v14); the Stripe webhook is a **NestJS controller** in `packages/bot` (replacing the plan's bare Express server). `packages/web` remains **Next.js 15** (App Router) for the landing page, Discord OAuth, Stripe checkout, dashboard, and the `/admin/drafts` review surface — NestJS does not replace it.
+The backend process — the Discord bot, the Stripe webhook, the schedulers/workers, and all AI services (coach, crisis screening, access, memory, RAG) — is a **NestJS** application. Discord integration uses **necord** (decorators over discord.js v14); the Stripe webhook is a **NestJS controller** in `packages/bot` (replacing the plan's bare Express server). `packages/web` remains **Next.js 15** (App Router) for the landing page, Discord OAuth, Stripe checkout, dashboard, and the `/admin/strategies` review surface — NestJS does not replace it.
 
 ## Why
 

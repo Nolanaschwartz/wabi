@@ -23,3 +23,5 @@ For as long as OpenAI processes real user messages, treat it as a disclosed sub-
 
 - Avoid OpenAI-only features; the inference endpoint is configuration (base URL / model / key), not hard-coded.
 - "Switch the model" must stay a config change, not a rewrite — this constrains how tightly coaching prompts may couple to a specific model's quirks.
+
+> **Update:** In practice the "OpenAI for PoC" posture above is superseded by privately-managed single-tenant endpoints per the ADR-0017 2026-06-06 amendment; the swappable-interface principle is unchanged.
