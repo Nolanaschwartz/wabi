@@ -1,9 +1,17 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { getProvider } from '@wabi/shared';
+import { extractMaxTokens } from '../config';
 import { Paper, Candidate } from '../types';
 
 const HIGH_TIER = ['Meta-Analysis', 'Systematic Review', 'Randomized Controlled Trial'];
+
+/** Strip a ```json … ``` (or bare ``` … ```) fence some models wrap JSON in, so JSON.parse sees the
+ * object. Returns the inner content trimmed, or the input unchanged when there is no fence. */
+function stripFences(s: string): string {
+  const m = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return (m ? m[1] : s).trim();
+}
 
 /** Evidence tag is set from the source's nature, never the model's self-claim (ADR-0012). */
 export function evidenceTag(paper: Paper): string {
@@ -35,15 +43,15 @@ export async function extract(paper: Paper, body: string): Promise<ExtractResult
         `- "sourceText" MUST be a verbatim quote copied exactly from the source (a real substring).\n` +
         `Return JSON: {"title": string, "technique": string, "sourceText": string} or the literal null.\n\n` +
         `Source:\n${body}`,
-      maxOutputTokens: 400,
+      maxOutputTokens: extractMaxTokens(),
     });
-    text = out.text.trim();
+    text = stripFences(out.text.trim());
     tokens = out.usage?.totalTokens ?? 0;
   } catch {
     return { candidate: null, tokens: 0 };
   }
 
-  if (text.toLowerCase() === 'null') return { candidate: null, tokens };
+  if (text === '' || text.toLowerCase() === 'null') return { candidate: null, tokens };
 
   let parsed: { title?: string; technique?: string; sourceText?: string };
   try {

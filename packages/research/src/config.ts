@@ -18,3 +18,18 @@ export function loadBounds(): Bounds {
     tokenBudget: num('RESEARCH_TOKEN_BUDGET', 200_000),
   };
 }
+
+// LLM output-token caps, resolved lazily per call (CLAUDE.md: never freeze env-derived state).
+// These MUST be generous: a reasoning model spends hidden reasoning tokens out of the same output
+// budget, so a 5-token cap returns EMPTY visible text and the call silently no-ops. Verified against
+// the local qwopus-3.6 MTP model — gate/dedup needed ~2k and extract ~4k to emit any answer at all.
+
+/** Output cap for the cheap triage calls (relevance gate + in-run dedup). */
+export function triageMaxTokens(): number {
+  return num('RESEARCH_TRIAGE_MAX_TOKENS', 2000);
+}
+
+/** Output cap for the extract call (must fit reasoning + a full JSON technique object). */
+export function extractMaxTokens(): number {
+  return num('RESEARCH_MAX_TOKENS', 4000);
+}

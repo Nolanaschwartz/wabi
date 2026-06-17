@@ -1,6 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { getProvider } from '@wabi/shared';
+import { triageMaxTokens } from '../config';
 import { Candidate } from '../types';
 
 const HIGH = 0.6;
@@ -46,8 +47,10 @@ export async function isDuplicateInRun(candidate: Candidate, kept: Candidate[]):
       prompt:
         `Are these two coaching techniques essentially the same? Answer only "same" or "different".\n` +
         `A: ${sig(candidate)}\nB: ${sig(best)}`,
-      maxOutputTokens: 5,
+      maxOutputTokens: triageMaxTokens(),
     });
+    // Empty/uncertain output (e.g. a reasoning model starved by the cap) reads as NOT duplicate,
+    // the safe direction — keep the candidate rather than silently drop it on an unparseable answer.
     return { duplicate: text.trim().toLowerCase().startsWith('same'), tokens: usage?.totalTokens ?? 0 };
   } catch {
     return { duplicate: false, tokens: 0 };

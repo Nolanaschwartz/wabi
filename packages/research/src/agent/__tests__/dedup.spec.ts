@@ -34,4 +34,11 @@ describe('isDuplicateInRun', () => {
     expect(generateText).toHaveBeenCalled();
     expect(r.duplicate).toBe(true);
   });
+
+  it('requests an output budget large enough for a reasoning model to answer the ambiguous case', async () => {
+    generateText.mockResolvedValue({ text: 'same', usage: { totalTokens: 6 } });
+    const kept = [mk('Box Breathing', 'inhale 4 hold 4 exhale 4 to calm down')];
+    await isDuplicateInRun(mk('Square breathing drill', 'four-count breathing to reduce arousal'), kept);
+    expect(generateText.mock.calls[0][0].maxOutputTokens).toBeGreaterThanOrEqual(1000);
+  });
 });

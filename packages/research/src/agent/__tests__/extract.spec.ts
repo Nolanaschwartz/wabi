@@ -59,4 +59,27 @@ describe('extract', () => {
     generateText.mockResolvedValue({ text: 'null', usage: { totalTokens: 8 } });
     expect((await extract(paper, paper.abstract)).candidate).toBeNull();
   });
+
+  it('parses JSON the model wrapped in a ``` fenced code block', async () => {
+    const json = JSON.stringify({
+      title: 'Progressive muscle relaxation',
+      technique: 'Tense and release the major muscle groups for several minutes to lower acute anxiety.',
+      sourceText: 'progressive muscle relaxation reduced state anxiety',
+    });
+    generateText.mockResolvedValue({ text: '```json\n' + json + '\n```', usage: { totalTokens: 70 } });
+    const r = await extract(paper, paper.abstract);
+    expect(r.candidate).not.toBeNull();
+    expect(r.candidate!.title).toBe('Progressive muscle relaxation');
+  });
+
+  it('returns null on EMPTY output — a reasoning model starved by the cap returns ""', async () => {
+    generateText.mockResolvedValue({ text: '', usage: { totalTokens: 400 } });
+    expect((await extract(paper, paper.abstract)).candidate).toBeNull();
+  });
+
+  it('requests an output budget large enough to fit reasoning + the full JSON object', async () => {
+    generateText.mockResolvedValue({ text: 'null', usage: { totalTokens: 8 } });
+    await extract(paper, paper.abstract);
+    expect(generateText.mock.calls[0][0].maxOutputTokens).toBeGreaterThanOrEqual(2000);
+  });
 });

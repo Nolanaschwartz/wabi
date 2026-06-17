@@ -26,4 +26,17 @@ describe('relevanceGate', () => {
     generateText.mockRejectedValue(new Error('timeout'));
     expect((await relevanceGate('anything')).keep).toBe(true);
   });
+
+  it('fails open (keep) on EMPTY output — a reasoning model starved by the token cap returns ""', async () => {
+    generateText.mockResolvedValue({ text: '', usage: { totalTokens: 480 } });
+    const r = await relevanceGate('Emotion regulation reduced tilt in competitive players.');
+    expect(r.keep).toBe(true);
+    expect(r.tokens).toBe(480);
+  });
+
+  it('requests an output budget large enough for a reasoning model to actually answer', async () => {
+    generateText.mockResolvedValue({ text: 'yes', usage: { totalTokens: 5 } });
+    await relevanceGate('x');
+    expect(generateText.mock.calls[0][0].maxOutputTokens).toBeGreaterThanOrEqual(1000);
+  });
 });
