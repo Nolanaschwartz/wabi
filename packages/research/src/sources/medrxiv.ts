@@ -1,6 +1,7 @@
 import { RateLimiter } from '../util/rate-limiter';
 import { Paper } from '../types';
 import { Logger, noopLogger } from '../util/logger';
+import { contentTerms, minMatch, scoreRecord } from './term-match';
 
 const BASE = 'https://api.medrxiv.org/details/medrxiv';
 const PAGE = 100; // medRxiv details endpoint returns 100 records per cursor page.
@@ -15,18 +16,7 @@ export interface MedrxivDeps {
   log?: Logger;
 }
 
-// Dropped from queries before matching: too generic to carry topical meaning. Short tokens (<3 chars)
-// are dropped too. What remains are the content terms a medRxiv record is scored against.
-const STOPWORDS = new Set([
-  'and', 'for', 'the', 'with', 'from', 'into', 'that', 'this', 'your', 'their', 'after', 'during',
-  'using', 'based', 'study', 'among', 'between', 'effect', 'effects',
-]);
-
 interface MedrxivRecord { doi: string; title: string; abstract: string; date: string }
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 export class MedrxivTool {
   private readonly fetchFn: typeof fetch;
@@ -105,14 +95,6 @@ export class MedrxivTool {
     return records;
   }
 
-  /** Content terms of a query: lowercase tokens of length ≥3 that aren't stopwords. Falls back to
-   * the raw tokens if everything was filtered out (e.g. a query of only short/stop words). */
-  private contentTerms(query: string): string[] {
-    const raw = query.toLowerCase().split(/\W+/).filter(Boolean);
-    const terms = raw.filter((t) => t.length >= 3 && !STOPWORDS.has(t));
-    return terms.length ? terms : raw;
-  }
-
   /** Keep preprints that contain ENOUGH of the query's content terms (not all of them), ranked by how
    * many match. Strict all-terms-AND made multi-word gaming topics match ~nothing on a clinical
    * corpus; this trades a little precision for recall, and the downstream relevance gate + human
@@ -122,21 +104,14 @@ export class MedrxivTool {
     const from = new Date(to.getTime() - this.windowDays * 86_400_000);
     const records = await this.windowRecords(this.fmt(from), this.fmt(to));
 
-    const terms = this.contentTerms(query);
+    const terms = contentTerms(query);
     // ≤2 terms: require all (a 1–2 word query is already specific). More: require a fraction, min 2.
-    const minMatch = terms.length <= 2 ? terms.length : Math.max(2, Math.ceil(terms.length * this.minTermFraction));
+    const need = minMatch(terms.length, this.minTermFraction);
     // Whole-word match (not substring): "term" must not count inside "determine", and gibberish must
-    // not accidentally match. \W tokenization above already split hyphens etc.
-    const patterns = terms.map((t) => new RegExp(`\\b${escapeRegExp(t)}\\b`));
-
+    // not accidentally match. \W tokenization in contentTerms already split hyphens etc.
     const scored = records
-      .map((r) => {
-        const hay = `${r.title} ${r.abstract}`.toLowerCase();
-        let score = 0;
-        for (const re of patterns) if (re.test(hay)) score++;
-        return { r, score };
-      })
-      .filter((x) => x.score >= minMatch)
+      .map((r) => ({ r, score: scoreRecord(`${r.title} ${r.abstract}`, terms) }))
+      .filter((x) => x.score >= need)
       .sort((a, b) => b.score - a.score);
 
     return scored
