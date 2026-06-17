@@ -84,7 +84,8 @@ Reads the canonical root `.env`. Relevant vars:
   `RESEARCH_MEDRXIV_MIN_TERM_FRACTION` (default 0.5), `RESEARCH_MEDRXIV_MAX_PDF_BYTES` (default 20MB)
   and `RESEARCH_MEDRXIV_MAX_TEXT_CHARS` (default 50000) for full-text PDF extraction; PsyArXiv (OSF API v2): `OSF_TOKEN` (optional,
   raises the anonymous rate limit), `RESEARCH_PSYARXIV_WINDOW_DAYS` (default 60),
-  `RESEARCH_PSYARXIV_MAX_RECORDS` (default 1500), `RESEARCH_PSYARXIV_MIN_TERM_FRACTION` (default 0.5).
+  `RESEARCH_PSYARXIV_MAX_RECORDS` (default 1500), `RESEARCH_PSYARXIV_MIN_TERM_FRACTION` (default 0.5),
+  `RESEARCH_PSYARXIV_MAX_PDF_BYTES` (default 20MB) and `RESEARCH_PSYARXIV_MAX_TEXT_CHARS` (default 50000) for full-text PDF extraction.
 - **Run bounds** — the `RESEARCH_MAX_*` vars are now **seed defaults only**; once the worker has
   booted, the `ResearchConfig` singleton (editable from `/admin/research`) is the source of truth.
 

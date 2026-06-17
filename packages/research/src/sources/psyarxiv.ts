@@ -2,6 +2,7 @@ import { RateLimiter } from '../util/rate-limiter';
 import { Paper } from '../types';
 import { Logger, noopLogger } from '../util/logger';
 import { contentTerms, minMatch, scoreRecord } from './term-match';
+import { fetchAndParsePdf } from './pdf';
 
 const BASE = 'https://api.osf.io/v2/preprints/';
 const PAGE = 100; // OSF page[size] cap.
@@ -13,6 +14,9 @@ export interface PsyArxivDeps {
   windowDays?: number;       // default 60; env RESEARCH_PSYARXIV_WINDOW_DAYS
   maxRecords?: number;       // default 1500; env RESEARCH_PSYARXIV_MAX_RECORDS
   minTermFraction?: number;  // default 0.5; env RESEARCH_PSYARXIV_MIN_TERM_FRACTION
+  maxPdfBytes?: number;      // full-text PDF size cap (default 20MB; env RESEARCH_PSYARXIV_MAX_PDF_BYTES)
+  maxTextChars?: number;     // extracted full-text char cap (default 50k; env RESEARCH_PSYARXIV_MAX_TEXT_CHARS)
+  parsePdf?: (buf: Uint8Array) => Promise<string>; // injectable for tests; default = unpdf
   now?: () => Date;          // injectable clock for tests
   log?: Logger;
 }
@@ -29,6 +33,9 @@ export class PsyArxivTool {
   private readonly windowDays: number;
   private readonly maxRecords: number;
   private readonly minTermFraction: number;
+  private readonly maxPdfBytes: number;
+  private readonly maxTextChars: number;
+  private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
   private readonly now: () => Date;
   private readonly log: Logger;
   // Cache the fetched window so every topic in a run filters the SAME records without re-paginating.
@@ -42,12 +49,28 @@ export class PsyArxivTool {
     this.windowDays = deps.windowDays ?? (Number(process.env.RESEARCH_PSYARXIV_WINDOW_DAYS) || 60);
     this.maxRecords = deps.maxRecords ?? (Number(process.env.RESEARCH_PSYARXIV_MAX_RECORDS) || 1500);
     this.minTermFraction = deps.minTermFraction ?? (Number(process.env.RESEARCH_PSYARXIV_MIN_TERM_FRACTION) || 0.5);
+    this.maxPdfBytes = deps.maxPdfBytes ?? (Number(process.env.RESEARCH_PSYARXIV_MAX_PDF_BYTES) || 20_000_000);
+    this.maxTextChars = deps.maxTextChars ?? (Number(process.env.RESEARCH_PSYARXIV_MAX_TEXT_CHARS) || 50_000);
+    this.parsePdf = deps.parsePdf;
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? noopLogger;
   }
 
   private fmt(d: Date): string {
     return d.toISOString().slice(0, 10);
+  }
+
+  /** Bearer auth when a token is configured; OSF works anonymously otherwise (lower rate limit). */
+  private authInit(): RequestInit | undefined {
+    return this.token ? { headers: { Authorization: `Bearer ${this.token}` } } : undefined;
+  }
+
+  private async getJson<T>(url: string): Promise<T> {
+    return this.limiter.schedule(async () => {
+      const res = await this.fetchFn(url, this.authInit());
+      if (!res.ok) throw new Error(`OSF HTTP ${res.status}`);
+      return (await res.json()) as T;
+    });
   }
 
   private firstPageUrl(from: string): string {
@@ -64,7 +87,7 @@ export class PsyArxivTool {
   private async windowRecords(from: string): Promise<OsfRecord[]> {
     if (this.cache?.key === from) return this.cache.records;
 
-    const init = this.token ? { headers: { Authorization: `Bearer ${this.token}` } } : undefined;
+    const init = this.authInit();
     const byGuid = new Map<string, OsfRecord>();
     let url: string | null = this.firstPageUrl(from);
     const maxPages = Math.ceil(this.maxRecords / PAGE) + 1;
@@ -129,8 +152,33 @@ export class PsyArxivTool {
       }));
   }
 
-  /** v1: PsyArXiv full-text PDF fetch is deferred to a later slice; the agent reads the abstract. */
-  async fullText(_sourceId: string): Promise<string | null> {
-    return null;
+  /** Full text from the preprint's primary PDF: resolve `osf:<guid>` → preprint detail →
+   * `primary_file` file node → `links.download`, then download+parse via the shared helper with
+   * PsyArXiv's caps. Fail-safe: any HTTP/missing-link/oversize/parse failure → null → abstract. */
+  async fullText(sourceId: string): Promise<string | null> {
+    try {
+      const guid = sourceId.replace(/^osf:/, '');
+      const detail = await this.getJson<{
+        data?: { relationships?: { primary_file?: { links?: { related?: { href?: string } } } } };
+      }>(`${BASE}${guid}/`);
+      const fileHref = detail.data?.relationships?.primary_file?.links?.related?.href;
+      if (!fileHref) return null;
+
+      const fileNode = await this.getJson<{ data?: { links?: { download?: string } } }>(fileHref);
+      const downloadUrl = fileNode.data?.links?.download;
+      if (!downloadUrl) return null;
+
+      return await fetchAndParsePdf(downloadUrl, {
+        fetchFn: this.fetchFn,
+        schedule: (fn) => this.limiter.schedule(fn),
+        maxPdfBytes: this.maxPdfBytes,
+        maxTextChars: this.maxTextChars,
+        parsePdf: this.parsePdf,
+        log: this.log,
+      });
+    } catch (e) {
+      this.log.info('psyarxiv fullText failed', { sourceId, err: (e as Error)?.message ?? String(e) });
+      return null;
+    }
   }
 }

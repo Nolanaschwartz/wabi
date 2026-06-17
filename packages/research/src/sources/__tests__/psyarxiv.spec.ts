@@ -117,8 +117,52 @@ describe('PsyArxivTool', () => {
     expect((fetchFn2.mock.calls[0][1] as any)?.headers?.Authorization).toBeUndefined();
   });
 
-  it('fullText returns null in this slice (abstract is read instead)', async () => {
-    const tool = new PsyArxivTool({ fetchFn: jest.fn(), minIntervalMs: 0 });
-    expect(await tool.fullText('osf:abc12')).toBeNull();
+  // Routes the OSF full-text chain: preprint detail -> file node -> PDF download.
+  function fullTextFetch(opts: { fileHref?: string | null; downloadUrl?: string | null; pdfOk?: boolean } = {}) {
+    const fileHref = 'fileHref' in opts ? opts.fileHref : 'https://api.osf.io/v2/files/F1/';
+    const downloadUrl = 'downloadUrl' in opts ? opts.downloadUrl : 'https://osf.io/download/F1/';
+    return jest.fn((url: string) => {
+      if (url === 'https://api.osf.io/v2/preprints/g1/') {
+        return jsonResponse({ data: { relationships: { primary_file: fileHref ? { links: { related: { href: fileHref } } } : {} } } });
+      }
+      if (url === fileHref) {
+        return jsonResponse({ data: { links: downloadUrl ? { download: downloadUrl } : {} } });
+      }
+      if (url === downloadUrl) {
+        if (opts.pdfOk === false) return Promise.resolve({ ok: false, status: 500, headers: { get: () => null } });
+        const bytes = new TextEncoder().encode('%PDF-psy');
+        return Promise.resolve({ ok: true, status: 200, headers: { get: () => String(bytes.byteLength) }, arrayBuffer: async () => bytes.buffer });
+      }
+      return Promise.resolve({ ok: false, status: 404, headers: { get: () => null } });
+    }) as unknown as jest.MockedFunction<typeof fetch>;
+  }
+
+  it('fullText resolves guid -> primary_file -> download URL and returns parsed text', async () => {
+    const parsePdf = jest.fn().mockResolvedValue('PSYARXIV FULL BODY');
+    const fetchFn = fullTextFetch();
+    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, parsePdf });
+
+    const text = await tool.fullText('osf:g1');
+
+    expect(text).toBe('PSYARXIV FULL BODY');
+    const urls = fetchFn.mock.calls.map((c) => String(c[0]));
+    expect(urls).toContain('https://api.osf.io/v2/preprints/g1/'); // detail
+    expect(urls).toContain('https://api.osf.io/v2/files/F1/');      // file node
+    expect(urls).toContain('https://osf.io/download/F1/');          // download
+  });
+
+  it('fullText fails safe to null when the preprint has no primary_file', async () => {
+    const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ fileHref: null }), minIntervalMs: 0, parsePdf: jest.fn() });
+    expect(await tool.fullText('osf:g1')).toBeNull();
+  });
+
+  it('fullText fails safe to null when the file node has no download link', async () => {
+    const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ downloadUrl: null }), minIntervalMs: 0, parsePdf: jest.fn() });
+    expect(await tool.fullText('osf:g1')).toBeNull();
+  });
+
+  it('fullText fails safe to null when the PDF download errors', async () => {
+    const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ pdfOk: false }), minIntervalMs: 0, parsePdf: jest.fn() });
+    expect(await tool.fullText('osf:g1')).toBeNull();
   });
 });
