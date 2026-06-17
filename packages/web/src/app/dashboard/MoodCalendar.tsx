@@ -17,6 +17,19 @@ function firstWeekday(year: number, month: number): number {
 
 const key = (year: number, month: number) => `${year}-${month}`;
 
+/** Days in `year`/`month` (month is 1-12). */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+/** Neutral, data-less grid for a month — keeps height stable while a month loads. */
+function placeholderDays(year: number, month: number): MoodDayPoint[] {
+  return Array.from({ length: daysInMonth(year, month) }, (_, i) => ({
+    date: `${year}-${String(month).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`,
+    avg: null,
+  }));
+}
+
 function DayCell({ point, isToday }: { point: MoodDayPoint; isToday: boolean }) {
   const day = Number(point.date.slice(-2));
   const emoji = point.avg === null ? null : ratingToEmoji(Math.round(point.avg));
@@ -88,6 +101,9 @@ export default function MoodCalendar({
   const [todayYear, todayMonth] = today.split('-').map(Number);
   const atCurrentMonth = viewYear === todayYear && viewMonth === todayMonth;
   const lead = firstWeekday(viewYear, viewMonth);
+  // Fall back to a same-size neutral grid for a not-yet-loaded month so the
+  // calendar never collapses mid-navigation.
+  const displayDays = current ?? placeholderDays(viewYear, viewMonth);
 
   return (
     <div className="rounded-md border border-ink-2 bg-ink-0 p-4">
@@ -127,7 +143,7 @@ export default function MoodCalendar({
         {Array.from({ length: lead }, (_, i) => (
           <div key={`blank-${i}`} />
         ))}
-        {(current ?? []).map((point) => (
+        {displayDays.map((point) => (
           <DayCell key={point.date} point={point} isToday={point.date === today} />
         ))}
       </div>
