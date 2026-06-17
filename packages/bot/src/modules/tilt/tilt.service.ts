@@ -1,11 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
-import { SchedulerService } from '../scheduler/scheduler.service';
+import { JobRegistry } from '../scheduler/job-registry';
+import { Job } from '../scheduler/jobs';
 
 const TILT_DURATION_MINUTES = 30;
 const OFFER_TTL_MS = 5 * 60 * 1000;
-const AUTO_RESOLVE_QUEUE = 'tilt-auto-resolve';
 const AUTO_RESOLVE_CRON = '*/5 * * * *';
 const OFFER_DEFAULT_SEVERITY = 5;
 const TILT_KEYWORDS = [
@@ -53,12 +53,18 @@ export class TiltService {
 
   constructor(
     private readonly strategyRetrieval: StrategyRetrievalService,
-    private readonly scheduler: SchedulerService,
+    private readonly jobs: JobRegistry,
   ) {}
 
-  async init(): Promise<void> {
-    await this.scheduler.cron(AUTO_RESOLVE_QUEUE, AUTO_RESOLVE_CRON, async () => {
-      await this.autoResolveExpired();
+  init(): void {
+    this.jobs.declare({
+      name: Job.TiltAutoResolve,
+      kind: 'cron',
+      cron: AUTO_RESOLVE_CRON,
+      owner: 'tilt',
+      handler: async () => {
+        await this.autoResolveExpired();
+      },
     });
   }
 

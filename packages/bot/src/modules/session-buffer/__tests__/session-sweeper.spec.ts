@@ -23,15 +23,13 @@ jest.mock('../../memory/memory-store.service', () => ({
   })),
 }));
 
-jest.mock('../../scheduler/scheduler.service', () => ({
-  SchedulerService: jest.fn().mockImplementation(() => ({
-    cron: jest.fn().mockResolvedValue(undefined),
-    work: jest.fn().mockResolvedValue(undefined),
-    available: true,
+jest.mock('../../scheduler/job-registry', () => ({
+  JobRegistry: jest.fn().mockImplementation(() => ({
+    declare: jest.fn(),
   })),
 }));
 
-import { SchedulerService } from '../../scheduler/scheduler.service';
+import { JobRegistry } from '../../scheduler/job-registry';
 
 const mockSession = (id: string, discordId: string, doNotMine: boolean = false) => ({
   id,
@@ -55,8 +53,8 @@ describe('SessionSweeper', () => {
     coachingSession = new CoachingSessionService() as any;
     sessionBuffer = new SessionBufferService() as any;
     memoryStore = new MemoryStoreService() as any;
-    const scheduler = new SchedulerService() as any;
-    sweeper = new SessionSweeper(coachingSession, sessionBuffer, memoryStore, scheduler);
+    const jobs = new JobRegistry() as any;
+    sweeper = new SessionSweeper(coachingSession, sessionBuffer, memoryStore, jobs);
   });
 
   it('mines one extraction per ended session', async () => {

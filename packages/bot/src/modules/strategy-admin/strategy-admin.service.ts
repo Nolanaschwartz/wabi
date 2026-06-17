@@ -4,6 +4,8 @@ import { prisma } from '@wabi/shared';
 import { StrategyTrustGate, StrategyDraft, EvaluationDecision } from './strategy-trust-gate';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
+import { JobRegistry } from '../scheduler/job-registry';
+import { Job } from '../scheduler/jobs';
 
 export interface IngestCandidate {
   id?: string;
@@ -17,8 +19,6 @@ export interface IngestCandidate {
   sourceKind: string;
 }
 
-const DEMOTE_QUEUE = 'strategy-demote';
-const RECONCILE_QUEUE = 'strategy-reconcile';
 // Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
 const RECONCILE_CRON = '0 * * * *';
 
@@ -34,15 +34,27 @@ export class StrategyAdminService {
     private readonly trustGate: StrategyTrustGate,
     private readonly retrieval: StrategyRetrievalService,
     private readonly scheduler: SchedulerService,
+    private readonly jobs: JobRegistry,
   ) {}
 
-  async init(): Promise<void> {
-    // Register the demote worker on the shared Scheduler. When degraded, this no-ops and
-    // enqueueDemote falls back to synchronous processing (below).
-    await this.scheduler.work(DEMOTE_QUEUE, this.demoteJob.bind(this));
+  init(): void {
+    // Declare the demote worker. When degraded it never binds and enqueueDemote falls back to
+    // synchronous processing (below).
+    this.jobs.declare({
+      name: Job.StrategyDemote,
+      kind: 'work',
+      owner: 'strategy-admin',
+      handler: this.demoteJob.bind(this),
+    });
     // Periodic reconcile sweep keeps the Qdrant index in agreement with Postgres status.
-    await this.scheduler.cron(RECONCILE_QUEUE, RECONCILE_CRON, async () => {
-      await this.reconcile();
+    this.jobs.declare({
+      name: Job.StrategyReconcile,
+      kind: 'cron',
+      cron: RECONCILE_CRON,
+      owner: 'strategy-admin',
+      handler: async () => {
+        await this.reconcile();
+      },
     });
   }
 
@@ -215,7 +227,7 @@ export class StrategyAdminService {
   private async enqueueDemote(draftId: string): Promise<void> {
     if (this.scheduler.available) {
       try {
-        await this.scheduler.send(DEMOTE_QUEUE, { draftId });
+        await this.scheduler.send(Job.StrategyDemote, { draftId });
         return;
       } catch {
         // Fall through to synchronous demotion

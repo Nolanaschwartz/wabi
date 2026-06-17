@@ -19,17 +19,13 @@ jest.mock('../../strategy-retrieval/strategy-retrieval.service', () => ({
   })),
 }));
 
-jest.mock('../../scheduler/scheduler.service', () => ({
-  SchedulerService: jest.fn().mockImplementation(() => ({
-    cron: jest.fn().mockResolvedValue(undefined),
-    work: jest.fn().mockResolvedValue(undefined),
-    send: jest.fn().mockResolvedValue(undefined),
-    schedule: jest.fn().mockResolvedValue(undefined),
-    available: true,
+jest.mock('../../scheduler/job-registry', () => ({
+  JobRegistry: jest.fn().mockImplementation(() => ({
+    declare: jest.fn(),
   })),
 }));
 
-import { SchedulerService } from '../../scheduler/scheduler.service';
+import { JobRegistry } from '../../scheduler/job-registry';
 
 // TiltService is now a plain persist + state-machine service: crisis screening of the trigger and the
 // consent-gated derivation moved to InnerStateLogger (ADR-0028/0029). `acceptOffer` is the shared
@@ -37,13 +33,13 @@ import { SchedulerService } from '../../scheduler/scheduler.service';
 describe('TiltService', () => {
   let service: TiltService;
   let strategyRetrieval: jest.Mocked<StrategyRetrievalService>;
-  let scheduler: jest.Mocked<SchedulerService>;
+  let jobs: jest.Mocked<JobRegistry>;
 
   beforeEach(() => {
     jest.clearAllMocks();
     strategyRetrieval = new StrategyRetrievalService() as any;
-    scheduler = new SchedulerService() as any;
-    service = new TiltService(strategyRetrieval, scheduler);
+    jobs = new JobRegistry() as any;
+    service = new TiltService(strategyRetrieval, jobs);
   });
 
   it('detects tilt language', () => {

@@ -93,7 +93,9 @@ describe('strategy ingest integration', () => {
       send: jest.fn(),
     };
 
-    svc = new StrategyAdminService(trustGateAutoPass as any, retrieval, scheduler as any);
+    svc = new StrategyAdminService(trustGateAutoPass as any, retrieval, scheduler as any, {
+      declare: jest.fn(),
+    } as any);
   }, 90000);
 
   afterAll(async () => {

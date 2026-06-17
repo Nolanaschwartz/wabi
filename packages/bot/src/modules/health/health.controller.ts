@@ -1,10 +1,14 @@
 import { Injectable, Controller, Get, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import { Client } from 'discord.js';
 import { prisma } from '@wabi/shared';
+import { SchedulerService } from '../scheduler/scheduler.service';
 
 @Injectable()
 export class HealthService {
-  constructor(@Inject(Client) private readonly client: Client) {}
+  constructor(
+    @Inject(Client) private readonly client: Client,
+    private readonly scheduler: SchedulerService,
+  ) {}
 
   async checkGateway(): Promise<boolean> {
     return this.client.isReady();
@@ -25,9 +29,12 @@ export class HealthService {
       this.checkDb(),
     ]);
     const allOk = gateway && db;
+    // The job buckets are surfaced for an operator but do NOT gate `status`: a failed registration
+    // doesn't stop the bot serving DMs, and a 503 here would only bounce the process pointlessly.
     return {
       status: allOk ? 'ok' : 'degraded',
       checks: { gateway, db },
+      jobs: this.scheduler.jobStatus,
     };
   }
 }

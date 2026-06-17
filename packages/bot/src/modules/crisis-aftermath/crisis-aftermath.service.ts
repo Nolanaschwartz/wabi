@@ -4,6 +4,8 @@ import { prisma } from '@wabi/shared';
 import { SessionBufferService } from '../session-buffer/session-buffer.service';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
+import { JobRegistry } from '../scheduler/job-registry';
+import { Job } from '../scheduler/jobs';
 import { ContactPolicyService } from '../contact-policy/contact-policy.service';
 
 const FOLLOW_UP_DELAY_MINUTES = 30;
@@ -24,11 +26,17 @@ export class CrisisAftermathService {
     private readonly scheduler: SchedulerService,
     private readonly client: Client,
     private readonly contactPolicy: ContactPolicyService,
+    private readonly jobs: JobRegistry,
   ) {}
 
-  async init(): Promise<void> {
-    // Register the follow-up worker on the shared Scheduler; lifecycle is the Scheduler's.
-    await this.scheduler.work('crisis-follow-up', this.followUpJob.bind(this));
+  init(): void {
+    // Declare the follow-up worker; the Scheduler binds it at bootstrap, lifecycle is the Scheduler's.
+    this.jobs.declare({
+      name: Job.CrisisFollowUp,
+      kind: 'work',
+      owner: 'crisis-aftermath',
+      handler: this.followUpJob.bind(this),
+    });
   }
 
   async onEscalation(userId: string): Promise<void> {
@@ -56,7 +64,7 @@ export class CrisisAftermathService {
     // than waking the person (ADR-0008/0010), but is exempt from opt-in and the sparing rate.
     const startAfterSeconds = await this.followUpDelaySeconds(userId);
     await this.scheduler.sendAfter(
-      'crisis-follow-up',
+      Job.CrisisFollowUp,
       { userId, message: followUpMessage },
       startAfterSeconds,
     );
