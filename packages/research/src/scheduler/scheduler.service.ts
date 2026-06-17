@@ -9,6 +9,15 @@ export interface ScheduleOptions {
 }
 
 /**
+ * Options for binding a worker. `policy` sets the queue policy at creation time. We use
+ * `'singleton'` for `research-run`: pg-boss then keeps at most one job *active* at a time
+ * (unlimited queued), which is the primary single-flight guard for a research run.
+ */
+export interface WorkOptions {
+  policy?: 'standard' | 'short' | 'singleton' | 'stately' | 'exclusive';
+}
+
+/**
  * The research worker's single pg-boss client and job seam (ADR-0034). Ported from the bot's
  * SchedulerService and kept to the same posture: one PgBoss client, one lifecycle, fail-closed.
  *
@@ -43,11 +52,18 @@ export class SchedulerService {
     }
   }
 
-  /** Bind a worker to a queue (creating it). No-op when degraded. */
-  async work(queue: string, handler: JobHandler): Promise<void> {
+  /**
+   * Bind a worker to a queue (creating it). When `options.policy` is given the queue is created
+   * with that policy (e.g. `'singleton'` for single-flight). No-op when degraded.
+   */
+  async work(queue: string, handler: JobHandler, options?: WorkOptions): Promise<void> {
     if (!this.boss) return;
     try {
-      await this.boss.createQueue(queue);
+      if (options?.policy) {
+        await this.boss.createQueue(queue, { policy: options.policy });
+      } else {
+        await this.boss.createQueue(queue);
+      }
       await this.boss.work(queue, handler);
     } catch {
       // best-effort registration

@@ -67,6 +67,14 @@ describe('SchedulerService', () => {
     expect(mockBoss.work).toHaveBeenCalledWith('research-run', handler);
   });
 
+  it('work() creates a singleton queue when a policy is given (single-flight)', async () => {
+    await scheduler.start();
+    const handler = jest.fn();
+    await scheduler.work('research-run', handler, { policy: 'singleton' });
+    expect(mockBoss.createQueue).toHaveBeenCalledWith('research-run', { policy: 'singleton' });
+    expect(mockBoss.work).toHaveBeenCalledWith('research-run', handler);
+  });
+
   it('send() enqueues a one-off job', async () => {
     await scheduler.start();
     await scheduler.send('research-run', { trigger: 'manual' });

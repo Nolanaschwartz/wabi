@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { AdminGuard } from './admin.guard';
@@ -18,12 +19,14 @@ import {
   ResearchConfigService,
 } from '../config-service/research-config.service';
 import { ResearchScheduleService } from '../schedule-service/research-schedule.service';
+import { ResearchRunService } from '../run-service/research-run.service';
 import { isValidCron } from '../cron-compile/cron-compile';
 
 /**
  * Admin HTTP surface for the research worker (ADR-0034). All routes are behind the timing-safe
  * `x-admin-secret` guard; the web proxy is the only caller. Slice 01 exposed the read-only config;
- * slice 02 adds topic CRUD. The remaining mutation endpoints (schedule/bounds/run/runs) land later.
+ * slice 02 added topic CRUD; slices 03/04 added bounds + schedule; slice 05 adds the manual run
+ * trigger and run history.
  */
 @Controller('admin/research')
 @UseGuards(AdminGuard)
@@ -31,6 +34,7 @@ export class ResearchAdminController {
   constructor(
     private readonly config: ResearchConfigService,
     private readonly schedule: ResearchScheduleService,
+    private readonly runs: ResearchRunService,
   ) {}
 
   @Get('config')
@@ -89,5 +93,29 @@ export class ResearchAdminController {
   @HttpCode(HttpStatus.OK)
   async deleteTopic(@Param('id') id: string) {
     return this.config.deleteTopic(id);
+  }
+
+  /**
+   * Manual "Run now" (issue 05, ADR-0034). Enqueues a manual run and returns its id. Single-flight
+   * is reconciled in the service: a manual run landing during an active run collapses to the existing
+   * run's id (no second row, no second enqueue). Degraded (DB/pg-boss down) returns `{ runId: null }`
+   * rather than a 500.
+   */
+  @Post('run')
+  @HttpCode(HttpStatus.OK)
+  async runNow() {
+    return this.runs.triggerManualRun();
+  }
+
+  /**
+   * Recent run history (issue 05). `limit` defaults to 20 and is clamped to a sane max in the
+   * service. Rows are newest-first. An absent/non-numeric limit passes `undefined` so the service
+   * applies its default.
+   */
+  @Get('runs')
+  async listRuns(@Query('limit') limit?: string) {
+    const parsed = limit !== undefined ? Number(limit) : undefined;
+    const safe = parsed !== undefined && Number.isFinite(parsed) ? parsed : undefined;
+    return this.runs.listRuns(safe);
   }
 }
