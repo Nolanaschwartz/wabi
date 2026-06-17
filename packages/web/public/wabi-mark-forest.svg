@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="1024" height="1024">
+  <defs>
+    <radialGradient id="sfield" cx="42%" cy="35%" r="80%"><stop offset="0%" stop-color="#46583A"></stop><stop offset="52%" stop-color="#2B3624"></stop><stop offset="100%" stop-color="#1C2418"></stop></radialGradient>
+    <linearGradient id="leafCream" x1="0.2" y1="0" x2="0.85" y2="1"><stop offset="0%" stop-color="#F4F0E6"></stop><stop offset="100%" stop-color="#DCD3C1"></stop></linearGradient>
+    <linearGradient id="vein" x1="0" y1="1" x2="0.7" y2="0"><stop offset="0%" stop-color="#7E5234"></stop><stop offset="42%" stop-color="#C08A4E"></stop><stop offset="100%" stop-color="#F2DAAE"></stop></linearGradient>
+  </defs>
+  <rect width="100" height="100" fill="url(#sfield)"></rect>
+  <g transform="translate(50,51) scale(1.16) translate(-50,-51)">
+    <path d="M50,86 C50,68 47,56 55,46 C62,38 56,27 46,30 C38,32 39,43 47,42 C51,41 52,37 49,35" fill="none" stroke="url(#vein)" stroke-width="4" stroke-linecap="round"></path>
+    <path d="M50,63 C41,60 36,52 37,42 C47,45 53,54 50,63 Z" fill="url(#leafCream)"></path>
+  </g>
+</svg>
