@@ -3,7 +3,7 @@
 **Date:** 2026-06-17
 **Status:** Approved design; ready for implementation plan
 **Parent:** [Coaching Quality Roadmap](./2026-06-17-coaching-quality-roadmap.md) — Phase 1 (enabler)
-**Relevant ADRs:** 0014 (evals = sampled monitoring + pre-deploy gate, in Langfuse, manual for now), 0024 (full non-crisis content retained in Langfuse; crisis never traced), 0009 (swappable providers), 0035 (scheduled jobs in one registry — future graduation).
+**Relevant ADRs:** 0014 (evals = sampled monitoring + pre-deploy gate, in Langfuse, manual for now), 0024 (full non-crisis content retained in Langfuse; crisis never traced), 0009 (swappable providers), 0037 (shared `generate` + `LangfuseIngest` kernels; tracer stays per-context/write-only), 0035 (scheduled jobs in one registry — future graduation).
 
 ## Goal
 
@@ -17,13 +17,13 @@ Establish a **measurable baseline of coaching quality** before we change the coa
 - **Manual script first, not a scheduled job.** Avoids committing to a cadence before the judge is trusted. The judge is written as a reusable function so graduating to a pg-boss scheduled job (ADR-0035) is a later, small step — explicitly out of scope here.
 - **Judge has real content to score.** ADR-0024 retains full non-crisis `input`/`output` in Langfuse traces. Crisis content is never traced, so **every** coach trace is already non-crisis — no safety filtering needed, only selection of traces that carry a coach generation.
 
-## Dependency (must land first)
+## Dependency (LANDED — ADR-0037)
 
-A parallel effort is **moving the Langfuse client/tracer into `@wabi/shared`**. Phase 1's read-client belongs beside that moved tracer. Therefore:
+The Langfuse-to-shared refactor has **merged into this branch** (ADR-0037). Its shape is narrower than this spec originally assumed, and the components below are now grounded against what actually exists:
 
-- Implementation **rebases onto / waits for** the Langfuse-to-shared branch before landing.
-- This worktree branched from local HEAD, which does **not** yet contain that refactor. The spec is valid regardless; the plan records the rebase step.
-- If the refactor's shape differs from assumptions here (e.g. the shared module's export names), the read-client placement adapts to it — the contract below is what matters, not the file path.
+- **`@wabi/shared/langfuse` = `LangfuseIngest`** — a content-agnostic, **write/ingest-only** kernel: `post(label, envelope)` → `POST /api/public/ingestion` (Basic auth), plus `enabled`, `shouldSample`, `flush`. It does **not** read, and ADR-0037 deliberately keeps the per-context `LangfuseTracer` adapter write-only (crisis latch + redaction stay in Wellbeing). So there is **no Langfuse read capability anywhere yet** — Phase 1 adds it.
+- **Scores are already written as a `score-create` ingestion event** — `LangfuseTracer.score(...)` builds a `score-create` batch and calls `ingest.post('score-create', …)`. The eval **reuses this path**, not a separate `POST /api/public/scores`.
+- **`@wabi/shared/generate`** — `generate(role, opts) → { text, usage, model, latencyMs }`, throws on transport error, retry-on-empty opt-in, lazy provider resolution. The judge calls this rather than hand-rolling an AI-SDK call.
 
 ## Dimensions (rubric)
 
@@ -41,38 +41,43 @@ Each scored **0.0–1.0 (continuous)** with a one-line rationale. Continuous giv
 
 ## Components
 
-### 1. `langfuse-read-client` — in `@wabi/shared` (beside the moved tracer)
+### 1. Langfuse **read** kernel — in `@wabi/shared/langfuse` (NEW, symmetric with `LangfuseIngest`)
 
-Thin HTTP client for the Langfuse read + score APIs. The existing tracer only **writes ingestion**; this adds the read and score-write side, reusing the shared Basic-auth/config the moved tracer exposes.
+The ingest kernel is write-only, so Phase 1 adds the read side as a sibling content-agnostic transport in the same subpath. It returns raw Langfuse JSON; interpreting the coach-span shape is per-context (the bot eval module, below). Reuses the same `LANGFUSE_HOST` + Basic-auth env as `LangfuseIngest`; lazy env read (never cached), failures surfaced to the caller (this is a batch tool, not the hot path — it may fail loud, unlike ingest).
 
 Contract:
-- `listCoachTraces({ since, limit }) → TraceRef[]` — traces that contain a coach generation (`GET /api/public/traces`, filtered).
-- `getCoachObservation(traceId) → { input, output } | null` — the coach span's full input/output (`GET /api/public/observations`).
-- `postScore({ traceId, name, value, comment }) → void` — `POST /api/public/scores`.
-- `hasScores(traceId, names[]) → boolean` — for idempotency.
+- `listTraces({ since, limit, name? }) → TraceRef[]` — `GET /api/public/traces` (filter to coach turns via the trace `name`/tag the bot tracer already sets).
+- `getObservations(traceId) → Observation[]` — `GET /api/public/observations`, from which the caller picks the `coach` span's full `input`/`output`.
+- `getScores(traceId) → Score[]` — `GET /api/public/scores`, for idempotency (`hasScores`).
 
-### 2. `coaching-judge` — in `packages/bot` (new `eval` module)
+### 2. Score write — **reuse the `score-create` ingestion path**
 
-The reusable scoring unit. AI-SDK `generateText` call mirroring `coach.service` (so a future pg-boss job imports the same function).
+No new write code. Scores are emitted as a `score-create` event through `LangfuseIngest.post('score-create', envelope)` — the exact mechanism `LangfuseTracer.score` already uses. The score-envelope builder is extracted to a small shared/bot helper if needed so the eval and the tracer don't duplicate the batch shape. (The eval runs offline, so it constructs its own `LangfuseIngest` and `flush()`es before exit — it does not go through the Nest `LangfuseTracer`, which carries the crisis latch the eval doesn't need.)
+
+### 3. `coaching-judge` — in `packages/bot` (new `eval` module)
+
+The reusable scoring unit, calling **`generate('eval', opts)`** from `@wabi/shared/generate` (not a hand-rolled AI-SDK call — ADR-0037 owns that mechanism).
 
 ```
-judgeCoachingTurn({ coachInput, coachReply }, deps) →
+judgeCoachingTurn({ coachInput, coachReply }) →
   { safety, tone, personalization, grounding, helpfulness, rationale }
 ```
 
-- Uses the **`eval` provider role** (below). Forces structured output (JSON) and parses/validates into the five 0–1 floats + rationale string.
-- Pure of I/O beyond the model call: deps inject the model adapter so it's unit-testable with a mock.
+- Forces structured (JSON) output and parses/validates into the five 0–1 floats + rationale string; clamps to [0,1]; throws a typed "unparseable" error on malformed output (the script counts it as a skip).
+- I/O is only the `generate` call, which is mocked in unit tests.
 
-### 3. `run-coaching-eval` script — in `packages/bot` (pnpm-invokable)
+### 4. `run-coaching-eval` script — in `packages/bot` (pnpm-invokable, standalone)
 
-Orchestrator:
-1. `listCoachTraces({ since })` (default window configurable, e.g. last N days/limit).
-2. For each trace: skip if already scored (unless `--rescore`); else `getCoachObservation` → `judgeCoachingTurn` → `postScore` × 5.
-3. Print an aggregate summary to stdout: mean per dimension, `n scored`, `n skipped (already)`, `n skipped (error/unparseable)`.
+Standalone entrypoint (research-worker style: loads root `.env` itself, no Nest bootstrap). Orchestrator:
+1. `read.listTraces({ since, name: <coach-turn> })` (default window configurable).
+2. For each trace: skip if `read.getScores` already has the coach dimensions (unless `--rescore`); else pick the `coach` observation → `judgeCoachingTurn` → emit 5 `score-create` events via `LangfuseIngest`.
+3. `ingest.flush()`, then print an aggregate summary: mean per dimension, `n scored`, `n skipped (already)`, `n skipped (error/unparseable)`.
 
 Flags: `--since`, `--limit`, `--rescore`, `--dry-run` (judge + print, no write).
 
-### 4. `eval` provider role — in `@wabi/shared`
+The judge fn and the orchestration body live in the bot `eval` module so the future pg-boss graduation (ADR-0035) imports them unchanged; only the CLI arg-parsing/`.env` bootstrap is script-specific.
+
+### 5. `eval` provider role — in `@wabi/shared`
 
 Add `'eval'` to `ProviderRole` (joins `coach`, `classifier`, `embedding`, `router`, `research`, `research-triage`). Env via `EVAL_*`, falling back to the coach provider config when unset. Per ADR-0014 the eval model should be **pinned/dated**; per ADR-0009 it stays swappable. Documented in `.env.example`.
 
@@ -80,16 +85,17 @@ Add `'eval'` to `ProviderRole` (joins `coach`, `classifier`, `embedding`, `route
 
 ```
 Langfuse (coach traces, full content — ADR-0024)
-   │  listCoachTraces(since)            [shared read-client]
+   │  read.listTraces({since, name})           [shared read kernel]
    ▼
 for each trace
-   │  getCoachObservation → { input, output }   [shared read-client]
-   │  judgeCoachingTurn(input, output)          [bot eval module, EVAL provider]
+   │  read.getScores → skip if already scored   [shared read kernel]
+   │  read.getObservations → pick coach span { input, output }
+   │  judgeCoachingTurn(input, output) via generate('eval')   [bot eval module]
    ▼
 { safety, tone, personalization, grounding, helpfulness, rationale }
-   │  postScore × 5                     [shared read-client]
+   │  ingest.post('score-create', …) × 5        [shared LangfuseIngest — same path as tracer]
    ▼
-Langfuse scores   +   stdout aggregate (means, n scored/skipped)
+ingest.flush()  →  Langfuse scores  +  stdout aggregate (means, n scored/skipped)
 ```
 
 ## Error handling
@@ -101,9 +107,9 @@ Langfuse scores   +   stdout aggregate (means, n scored/skipped)
 
 ## Testing (TDD)
 
-- **`coaching-judge`** (mocked provider): well-formed rubric parses to five 0–1 floats + rationale; out-of-range values clamp to [0,1]; malformed/empty model output → throws a typed "unparseable" error the script counts as a skip; the judge prompt pins the turn content and labels it as untrusted read-back (consistent with `coach-prompt`'s boundary discipline).
-- **`langfuse-read-client`** (mocked fetch): trace-list query construction + filter; observation extraction; score payload shape and Basic-auth header; `hasScores` true/false.
-- **`run-coaching-eval`** (both mocked): skip-on-error path increments the error bucket and continues; already-scored skip vs `--rescore`; `--dry-run` writes nothing; summary math (means, counts) is correct.
+- **`coaching-judge`** (mocking `@wabi/shared/generate`): well-formed rubric parses to five 0–1 floats + rationale; out-of-range values clamp to [0,1]; malformed/empty model output → throws a typed "unparseable" error the script counts as a skip; the judge prompt pins the turn content and labels it as untrusted read-back (consistent with `coach-prompt`'s boundary discipline).
+- **Langfuse read kernel** (mocked fetch): trace-list query construction + `name` filter; observation list parsing; `getScores`/`hasScores` true/false; Basic-auth header; lazy env read.
+- **`run-coaching-eval`** (read kernel + `generate` mocked, `LangfuseIngest.post` spied): skip-on-error path increments the error bucket and continues; already-scored skip vs `--rescore`; `--dry-run` emits no `score-create` and no `flush`; the five score-create envelopes are well-formed; summary math (means, counts) is correct.
 
 ## Explicitly out of scope (Phase 1)
 
