@@ -80,13 +80,13 @@ Reads the canonical root `.env`. Relevant vars:
   `RESEARCH_TRIAGE_*` (role `research-triage`, falls back to `CLASSIFIER_*`) for the gate.
 - **Strategy ingest** — `STRATEGY_API_URL` (the configurable seam; falls back to `BOT_BASE_URL`,
   default `http://localhost:3001`) and `ADMIN_API_SECRET`.
-- **Sources** — `NCBI_API_KEY` (PubMed), `RESEARCH_PUBMED_MAX_TEXT_CHARS` (default 50000, caps
-  BioC/Europe PMC full text), `RESEARCH_MEDRXIV_MAX_RECORDS` (default 1500),
-  `RESEARCH_MEDRXIV_MIN_TERM_FRACTION` (default 0.5), `RESEARCH_MEDRXIV_MAX_PDF_BYTES` (default 20MB)
-  and `RESEARCH_MEDRXIV_MAX_TEXT_CHARS` (default 50000) for full-text PDF extraction; PsyArXiv (OSF API v2): `OSF_TOKEN` (optional,
-  raises the anonymous rate limit), `RESEARCH_PSYARXIV_WINDOW_DAYS` (default 60),
-  `RESEARCH_PSYARXIV_MAX_RECORDS` (default 1500), `RESEARCH_PSYARXIV_MIN_TERM_FRACTION` (default 0.5),
-  `RESEARCH_PSYARXIV_MAX_PDF_BYTES` (default 20MB) and `RESEARCH_PSYARXIV_MAX_TEXT_CHARS` (default 50000) for full-text PDF extraction.
+- **Sources** — auth: `NCBI_API_KEY` (PubMed), `OSF_TOKEN` (optional PsyArXiv/OSF, raises the
+  anonymous rate limit). Tuning is **shared** across the windowed preprint sources (medRxiv,
+  PsyArXiv) via `config.ts` → `loadSourceConfig`: set the shared `RESEARCH_<KEY>` and override one
+  source with `RESEARCH_<SOURCE>_<KEY>`. Keys (defaults): `WINDOW_DAYS` (60), `MAX_RECORDS` (1500),
+  `MIN_TERM_FRACTION` (0.5), `MAX_PDF_BYTES` (20MB), `MAX_TEXT_CHARS` (50000). `MAX_TEXT_CHARS` also
+  caps PubMed BioC/Europe PMC full text (`sourceMaxTextChars`). e.g. `RESEARCH_MAX_PDF_BYTES` for all,
+  `RESEARCH_PSYARXIV_MAX_PDF_BYTES` to override just PsyArXiv.
 - **Run bounds** — the `RESEARCH_MAX_*` vars are now **seed defaults only**; once the worker has
   booted, the `ResearchConfig` singleton (editable from `/admin/research`) is the source of truth.
 

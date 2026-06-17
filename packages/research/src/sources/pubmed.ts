@@ -1,4 +1,5 @@
 import { RateLimiter } from '../util/rate-limiter';
+import { sourceMaxTextChars } from '../config';
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 const BIOC = 'https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json';
@@ -32,8 +33,9 @@ export class PubMedTool {
     this.fetchFn = deps.fetchFn ?? fetch;
     this.apiKey = deps.apiKey;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 350);
-    // Env read in the constructor (instantiated per-run after ConfigModule loads), never at import.
-    this.maxTextChars = deps.maxTextChars ?? (Number(process.env.RESEARCH_PUBMED_MAX_TEXT_CHARS) || 50_000);
+    // Env-derived default from config.ts (shared RESEARCH_MAX_TEXT_CHARS, RESEARCH_PUBMED_* override),
+    // resolved lazily here (constructed per-run after ConfigModule loads), never frozen at import.
+    this.maxTextChars = deps.maxTextChars ?? sourceMaxTextChars('pubmed');
   }
 
   private key(): string {

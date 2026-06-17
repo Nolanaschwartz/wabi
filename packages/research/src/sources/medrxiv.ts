@@ -3,6 +3,7 @@ import { Paper } from '../types';
 import { Logger, noopLogger } from '../util/logger';
 import { contentTerms, minMatch, scoreRecord } from './term-match';
 import { fetchAndParsePdf } from './pdf';
+import { loadSourceConfig } from '../config';
 
 const BASE = 'https://api.medrxiv.org/details/medrxiv';
 const PAGE = 100; // medRxiv details endpoint returns 100 records per cursor page.
@@ -37,13 +38,16 @@ export class MedrxivTool {
   private cache: { key: string; records: MedrxivRecord[] } | null = null;
 
   constructor(deps: MedrxivDeps = {}) {
+    // Env-derived defaults come from config.ts (shared RESEARCH_* with RESEARCH_MEDRXIV_* overrides),
+    // resolved lazily here (constructed per-run after ConfigModule loads), never frozen at import.
+    const cfg = loadSourceConfig('medrxiv');
     this.fetchFn = deps.fetchFn ?? fetch;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 1000);
-    this.windowDays = deps.windowDays ?? 60;
-    this.maxRecords = deps.maxRecords ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_RECORDS) || 1500);
-    this.minTermFraction = deps.minTermFraction ?? (Number(process.env.RESEARCH_MEDRXIV_MIN_TERM_FRACTION) || 0.5);
-    this.maxPdfBytes = deps.maxPdfBytes ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_PDF_BYTES) || 20_000_000);
-    this.maxTextChars = deps.maxTextChars ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_TEXT_CHARS) || 50_000);
+    this.windowDays = deps.windowDays ?? cfg.windowDays;
+    this.maxRecords = deps.maxRecords ?? cfg.maxRecords;
+    this.minTermFraction = deps.minTermFraction ?? cfg.minTermFraction;
+    this.maxPdfBytes = deps.maxPdfBytes ?? cfg.maxPdfBytes;
+    this.maxTextChars = deps.maxTextChars ?? cfg.maxTextChars;
     this.parsePdf = deps.parsePdf;
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? noopLogger;
