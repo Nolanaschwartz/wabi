@@ -1,8 +1,8 @@
-jest.mock('@ai-sdk/openai', () => ({ createOpenAI: jest.fn(() => jest.fn(() => ({}))) }));
-jest.mock('ai', () => ({ generateText: jest.fn() }));
-jest.mock('@wabi/shared', () => ({
-  getProvider: jest.fn(() => ({ baseUrl: 'http://t', model: 'm', apiKey: 'k' })),
-}));
+// extract is now a caller of @wabi/shared/generate: build prompt -> generate -> map result. The
+// MECHANISM (provider resolution, ai client, the call) moved into generate; what stays here and is
+// tested is extract's DOMAIN logic — JSON parse, the verbatim-substring hallucination guard, the
+// evidence tag — and its fail policy (failure/empty -> null).
+jest.mock('@wabi/shared/generate', () => ({ generate: jest.fn() }));
 
 import { extract, evidenceTag } from '../extract';
 import { Paper } from '../../types';
@@ -26,18 +26,22 @@ describe('evidenceTag', () => {
 });
 
 describe('extract', () => {
-  const { generateText } = require('ai') as { generateText: jest.Mock };
+  const { generate } = require('@wabi/shared/generate') as { generate: jest.Mock };
+  // generate returns { text, usage, model, latencyMs }; extract reads text + usage.totalTokens.
+  const reply = (text: string, totalTokens?: number) => ({
+    text,
+    usage: totalTokens === undefined ? undefined : { totalTokens },
+    model: 'm',
+    latencyMs: 1,
+  });
   beforeEach(() => jest.clearAllMocks());
 
   it('returns a candidate whose sourceText is a verbatim substring of the body', async () => {
-    generateText.mockResolvedValue({
-      text: JSON.stringify({
-        title: 'Progressive muscle relaxation',
-        technique: 'Tense and release the major muscle groups for several minutes to lower acute anxiety.',
-        sourceText: 'progressive muscle relaxation reduced state anxiety',
-      }),
-      usage: { totalTokens: 50 },
-    });
+    generate.mockResolvedValue(reply(JSON.stringify({
+      title: 'Progressive muscle relaxation',
+      technique: 'Tense and release the major muscle groups for several minutes to lower acute anxiety.',
+      sourceText: 'progressive muscle relaxation reduced state anxiety',
+    }), 50));
     const body = paper.abstract;
     const r = await extract(paper, body);
     expect(r.candidate).not.toBeNull();
@@ -47,16 +51,20 @@ describe('extract', () => {
     expect(r.candidate!.sourceId).toBe('PMID:1');
   });
 
+  it('uses role "research" and opts out of retry-on-empty', async () => {
+    generate.mockResolvedValue(reply('null', 8));
+    await extract(paper, paper.abstract);
+    expect(generate.mock.calls[0][0]).toBe('research');
+    expect(generate.mock.calls[0][1].retryOnEmpty).toBeUndefined();
+  });
+
   it('returns null when the quoted sourceText is not actually in the body (hallucination guard)', async () => {
-    generateText.mockResolvedValue({
-      text: JSON.stringify({ title: 'X', technique: 'Y', sourceText: 'a quote that is not present' }),
-      usage: { totalTokens: 10 },
-    });
+    generate.mockResolvedValue(reply(JSON.stringify({ title: 'X', technique: 'Y', sourceText: 'a quote that is not present' }), 10));
     expect((await extract(paper, paper.abstract)).candidate).toBeNull();
   });
 
   it('returns null when the model declines (no clean technique)', async () => {
-    generateText.mockResolvedValue({ text: 'null', usage: { totalTokens: 8 } });
+    generate.mockResolvedValue(reply('null', 8));
     expect((await extract(paper, paper.abstract)).candidate).toBeNull();
   });
 
@@ -66,20 +74,27 @@ describe('extract', () => {
       technique: 'Tense and release the major muscle groups for several minutes to lower acute anxiety.',
       sourceText: 'progressive muscle relaxation reduced state anxiety',
     });
-    generateText.mockResolvedValue({ text: '```json\n' + json + '\n```', usage: { totalTokens: 70 } });
+    generate.mockResolvedValue(reply('```json\n' + json + '\n```', 70));
     const r = await extract(paper, paper.abstract);
     expect(r.candidate).not.toBeNull();
     expect(r.candidate!.title).toBe('Progressive muscle relaxation');
   });
 
   it('returns null on EMPTY output — a reasoning model starved by the cap returns ""', async () => {
-    generateText.mockResolvedValue({ text: '', usage: { totalTokens: 400 } });
+    generate.mockResolvedValue(reply('', 400));
     expect((await extract(paper, paper.abstract)).candidate).toBeNull();
   });
 
+  it('returns null when generate throws (transport failure) — extract owns the fail policy', async () => {
+    generate.mockRejectedValue(new Error('ECONNREFUSED'));
+    const r = await extract(paper, paper.abstract);
+    expect(r.candidate).toBeNull();
+    expect(r.tokens).toBe(0);
+  });
+
   it('requests an output budget large enough to fit reasoning + the full JSON object', async () => {
-    generateText.mockResolvedValue({ text: 'null', usage: { totalTokens: 8 } });
+    generate.mockResolvedValue(reply('null', 8));
     await extract(paper, paper.abstract);
-    expect(generateText.mock.calls[0][0].maxOutputTokens).toBeGreaterThanOrEqual(2000);
+    expect(generate.mock.calls[0][1].maxOutputTokens).toBeGreaterThanOrEqual(2000);
   });
 });

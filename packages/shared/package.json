@@ -12,6 +12,14 @@
     "./sentry-scrub": {
       "types": "./dist/sentry-scrub.d.ts",
       "default": "./dist/sentry-scrub.js"
+    },
+    "./generate": {
+      "types": "./dist/generate.d.ts",
+      "default": "./dist/generate.js"
+    },
+    "./langfuse": {
+      "types": "./dist/langfuse.d.ts",
+      "default": "./dist/langfuse.js"
     }
   },
   "scripts": {
@@ -24,7 +32,9 @@
     "test": "jest"
   },
   "dependencies": {
-    "@prisma/client": "^6.15.0"
+    "@ai-sdk/openai": "^3.0.68",
+    "@prisma/client": "^6.15.0",
+    "ai": "^6.0.197"
   },
   "devDependencies": {
     "prisma": "^6.15.0",

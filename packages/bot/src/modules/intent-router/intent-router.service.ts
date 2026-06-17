@@ -1,7 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { JsonLogger } from '../../lib/json-logger';
 
 /** Wellness-verb intents the router can dispatch to. `coach` is the catch-all / fallback. */
@@ -54,8 +52,9 @@ const ROUTER_MAX_OUTPUT_TOKENS = 256;
  * any error, empty output, unknown label, or out-of-range confidence resolves to coach/0 so a broken
  * router can only ever under-route to coaching, never mis-handle a turn. Its system prompt and its
  * validation are BOTH generated from the spoke catalogue the hub passes in, so adding a tool needs no
- * edit here (ADR-0032). Provider is resolved lazily on every call (CLAUDE.md: never cache env-derived
- * config — ROUTER_* may load after import).
+ * edit here (ADR-0032). The LLM mechanism — lazy provider resolution, the ai client, the call — lives
+ * in `@wabi/shared/generate` (ADR-0037); this service owns only the prompt, the parse, and the
+ * fail-soft policy that is local to it.
  */
 @Injectable()
 export class IntentRouterService {
@@ -67,14 +66,9 @@ export class IntentRouterService {
     context?: IntentContext,
   ): Promise<IntentResult> {
     try {
-      const config = getProvider('router');
-      const openai = createOpenAI({
-        baseURL: config.baseUrl,
-        apiKey: config.apiKey,
-      });
-
-      const { text } = await generateText({
-        model: openai(config.model),
+      // generate owns the mechanism and THROWS only on a transport error; empty output comes back as
+      // an empty `text` that flows through parse's unparseable branch to the same fail-soft verdict.
+      const { text } = await generate('router', {
         system: this.buildSystemPrompt(catalogue),
         prompt: this.buildPrompt(batch, context),
         temperature: 0,

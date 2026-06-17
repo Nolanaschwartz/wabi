@@ -422,7 +422,7 @@ describe('CoachingService', () => {
     (memoryStore.search as jest.Mock).mockResolvedValue([
       { id: 'm1', content: 'Tilts in ranked after losing two games in a row' },
     ]);
-    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 
@@ -461,7 +461,7 @@ describe('CoachingService', () => {
       { id: 'old', content: 'STALE FACT', similarity: 0.8, updatedAt: Date.now() - 90 * DAY },
       { id: 'new', content: 'FRESH FACT', similarity: 0.8, updatedAt: Date.now() - 1 * DAY },
     ]);
-    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 
@@ -486,7 +486,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'That sounds tough. Hang in there.', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'That sounds tough. Hang in there.', model: 'test-coach', latencyMs: 0 });
     // Never resolves — mimics a slow/hung hybrid extraction.
     (memoryStore.deriveAndStore as jest.Mock).mockReturnValue(new Promise<void>(() => {}));
 
@@ -515,7 +515,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 
@@ -537,7 +537,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
     // Sub-threshold journal verdict: still traced for tuning, but dispatch falls back to the coach.
     intentRouter.route.mockResolvedValue({ intent: 'journal', confidence: 0.5 });
 
@@ -566,7 +566,7 @@ describe('CoachingService', () => {
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
     classifier.classify.mockResolvedValue('safe');
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
     strategyRetrieval.search.mockResolvedValue([
       { id: 's1', content: 'box breathing', evidence: 'rct', effectivenessScore: 0.9 },
       { id: 's2', content: 'reframing', evidence: 'meta', effectivenessScore: 0.7 },
@@ -593,7 +593,7 @@ describe('CoachingService', () => {
     (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'help me focus' });
     classifier.classify.mockResolvedValue('safe');
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
     strategyRetrieval.search.mockResolvedValue([
       { id: 's1', content: 'box breathing', evidence: 'rct', effectivenessScore: 0.9 },
     ]);
@@ -764,7 +764,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'Gentle reply.', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'Gentle reply.', model: 'test-coach', latencyMs: 0 });
     (crisisAftermath.isQuarantined as jest.Mock).mockResolvedValue(true);
 
     await service.handle(mockMessage);
@@ -812,7 +812,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'Want to try a different reset?', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'Want to try a different reset?', model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 
@@ -831,7 +831,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'hey', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'hey', model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 
@@ -849,7 +849,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockResolvedValue([]);
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: 'hey', model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: 'hey', model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 
@@ -874,7 +874,7 @@ describe('CoachingService', () => {
     classifier.classify.mockResolvedValue('safe');
     strategyRetrieval.search.mockRejectedValue(new Error('qdrant down'));
     sessionBuffer.getContext.mockResolvedValue(null);
-    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach' });
+    coach.generateDetailed.mockResolvedValue({ text: "That sounds tough. Hang in there.", model: 'test-coach', latencyMs: 0 });
 
     await service.handle(mockMessage);
 

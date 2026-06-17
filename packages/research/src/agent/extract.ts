@@ -1,8 +1,7 @@
-import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
-import { getProvider } from '@wabi/shared';
+import { generate } from '@wabi/shared/generate';
 import { extractMaxTokens } from '../config';
 import { Paper, Candidate } from '../types';
+import { StepTrace } from './relevance-gate';
 
 const HIGH_TIER = ['Meta-Analysis', 'Systematic Review', 'Randomized Controlled Trial'];
 
@@ -20,20 +19,20 @@ export function evidenceTag(paper: Paper): string {
   return tier ? `peer-reviewed: ${tier}` : 'peer-reviewed: observational';
 }
 
-export interface ExtractResult { candidate: Candidate | null; tokens: number }
+export interface ExtractResult { candidate: Candidate | null; tokens: number; trace?: StepTrace }
 
 /** One source body → one generalized, grounded candidate or null. The technique must be
  * audience-neutral (no game-specific framing — that's coaching-time work) and the sourceText must be
  * a VERBATIM quote, validated here as an actual substring so faithfulnessCheck can't be gamed. */
 export async function extract(paper: Paper, body: string): Promise<ExtractResult> {
-  const cfg = getProvider('research');
-  const openai = createOpenAI({ baseURL: cfg.baseUrl, apiKey: cfg.apiKey });
-
   let text = '';
   let tokens = 0;
+  let trace: StepTrace | undefined;
   try {
-    const out = await generateText({
-      model: openai(cfg.model),
+    // generate owns the mechanism (lazy provider resolution, the client, the call); extract keeps its
+    // role, its cap, and its fail policy. No retry-on-empty here — a starved/empty result just maps to
+    // null below, same as before. The verbatim-substring + JSON checks stay this module's job.
+    const out = await generate('research', {
       prompt:
         `From the source below, extract ONE transferable, actionable coping/wellbeing technique, ` +
         `or return exactly "null" if there is no clean, safe, self-contained technique.\n` +
@@ -47,24 +46,27 @@ export async function extract(paper: Paper, body: string): Promise<ExtractResult
     });
     text = stripFences(out.text.trim());
     tokens = out.usage?.totalTokens ?? 0;
+    // The raw model output is the span output; the body it read is the span input (on-infra retention).
+    trace = { input: body, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage };
   } catch {
     return { candidate: null, tokens: 0 };
   }
 
-  if (text === '' || text.toLowerCase() === 'null') return { candidate: null, tokens };
+  if (text === '' || text.toLowerCase() === 'null') return { candidate: null, tokens, trace };
 
   let parsed: { title?: string; technique?: string; sourceText?: string };
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { candidate: null, tokens };
+    return { candidate: null, tokens, trace };
   }
 
   const { title, technique, sourceText } = parsed;
-  if (!title || !technique || !sourceText) return { candidate: null, tokens };
-  if (!body.includes(sourceText)) return { candidate: null, tokens };
+  if (!title || !technique || !sourceText) return { candidate: null, tokens, trace };
+  if (!body.includes(sourceText)) return { candidate: null, tokens, trace };
 
   return {
+    trace,
     candidate: {
       title,
       technique,
