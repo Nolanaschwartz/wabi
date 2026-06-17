@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 
   const fetchFn = fixtureFetch();
   const pubmed = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-  const medrxiv = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-06') });
+  const medrxiv = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-06'), log: defaultLogger() });
 
   console.log(`[harness] topic="${topic}"  research=${research.baseUrl} (${research.model})`);
   console.log(`[harness] triage=${triage.baseUrl} (${triage.model})`);

@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   const secret = process.env.ADMIN_API_SECRET || '';
   const client = new BotClient({ baseUrl: botUrl, secret });
   const pubmed = new PubMedTool({ apiKey: process.env.NCBI_API_KEY });
-  const medrxiv = new MedrxivTool();
+  const medrxiv = new MedrxivTool({ log });
 
   const topicArg = process.argv.indexOf('--topic');
   const topics = topicArg !== -1 ? [process.argv[topicArg + 1]] : SEED_TOPICS;
