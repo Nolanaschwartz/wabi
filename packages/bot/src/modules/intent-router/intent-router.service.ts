@@ -36,8 +36,8 @@ export interface IntentResult {
 }
 
 /**
- * Optional disambiguating context. Part of the seam so later slices can feed recent turns without
- * changing the signature.
+ * Optional disambiguating context for the intent router: recent turns let it distinguish a
+ * technique-frustration reply from a fresh complaint.
  */
 export interface IntentContext {
   recentTurns?: Array<{ role: string; content: string }>;

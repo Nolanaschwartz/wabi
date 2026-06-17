@@ -8,10 +8,10 @@ import { JsonLogger } from '../../lib/json-logger';
  * but only when they have opted in (ADR-0029). Callers know nothing about consent, Mem0, or
  * namespaces: they hand over already-screened free text and this decides whether it becomes Memory.
  *
- * Depth lives in *where it is called*: every caller invokes it inside the Crisis Screening `guard()`
- * success closure (ADR-0028), so crisis-tripping text physically cannot reach it. The method itself
- * stays trivial and fails soft — a degraded consent lookup or a degraded Mem0 must never break the
- * write that logged the entry.
+ * The only production caller is `InnerStateRecorderService.record()`, which requires a branded
+ * `Screened` proof (ADR-0031), so crisis-tripping text structurally cannot reach it — invariant
+ * enforced by the type, not call discipline. The method itself stays trivial and fails soft — a
+ * degraded consent lookup or a degraded Mem0 must never break the write that logged the entry.
  */
 @Injectable()
 export class InnerStateMemoryService {
