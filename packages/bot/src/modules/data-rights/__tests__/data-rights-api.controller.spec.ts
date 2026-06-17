@@ -14,4 +14,23 @@ describe('DataRightsApiController', () => {
     expect(service.export).toHaveBeenCalledWith('disc_123');
     expect(res).toEqual({ data: '{"moods":[]}' });
   });
+
+  it("deletes the requested person's data, keyed by discordId, keeping the account", async () => {
+    const service = { delete: jest.fn().mockResolvedValue(undefined) } as any;
+    const controller = new DataRightsApiController(service);
+
+    const res = await controller.deleteData({ discordId: 'disc_123' });
+
+    expect(service.delete).toHaveBeenCalledWith('disc_123');
+    expect(res).toEqual({ ok: true });
+  });
+
+  it('lets a delete failure propagate so the caller learns it was incomplete', async () => {
+    const service = {
+      delete: jest.fn().mockRejectedValue(new Error('mem0 down')),
+    } as any;
+    const controller = new DataRightsApiController(service);
+
+    await expect(controller.deleteData({ discordId: 'disc_123' })).rejects.toThrow('mem0 down');
+  });
 });

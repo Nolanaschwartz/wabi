@@ -25,4 +25,15 @@ export class DataRightsApiController {
   async export(@Body() { discordId }: DataRightsRequest): Promise<{ data: string }> {
     return { data: await this.dataRights.export(discordId) };
   }
+
+  /**
+   * Delete the person's child data but keep their account (and subscription). Mirrors the Discord
+   * `/data delete`. A failure propagates (→ 500) so the web learns the deletion was incomplete
+   * rather than falsely reporting success — Data Rights are unconditional (ADR-0011).
+   */
+  @Post('delete-data')
+  async deleteData(@Body() { discordId }: DataRightsRequest): Promise<{ ok: true }> {
+    await this.dataRights.delete(discordId);
+    return { ok: true };
+  }
 }
