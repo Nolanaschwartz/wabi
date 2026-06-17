@@ -1,4 +1,4 @@
-import { createLangfuseTracing } from '../otel';
+import { createLangfuseTracing, startActiveObservation, getActiveTraceId } from '../otel';
 
 describe('createLangfuseTracing', () => {
   const savedEnv = { ...process.env };
@@ -63,6 +63,36 @@ describe('createLangfuseTracing', () => {
     expect(seen).toContain('turn');
   });
 
+  it('forwards a custom exporter and exports only spans passing shouldExportSpan, flushed on demand', async () => {
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-test';
+    process.env.LANGFUSE_SECRET_KEY = 'sk-lf-test';
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+    const exporter = new InMemorySpanExporter();
+    const dropped = new Set<string>();
+
+    const tracing = createLangfuseTracing({
+      serviceName: 'wabi-test',
+      sampleRate: 1,
+      exporter,
+      shouldExportSpan: ({ otelSpan }) => !dropped.has(otelSpan.spanContext().traceId),
+    });
+
+    const keep = tracing.tracer.startSpan('keep');
+    keep.end();
+
+    const drop = tracing.tracer.startSpan('drop');
+    dropped.add(drop.spanContext().traceId);
+    drop.end();
+
+    await tracing.forceFlush();
+
+    const names = exporter.getFinishedSpans().map((s: { name: string }) => s.name);
+    expect(names).toContain('keep');
+    expect(names).not.toContain('drop');
+  });
+
   it('produces valid (non-zero) trace ids even when degraded, for log correlation', () => {
     delete process.env.LANGFUSE_PUBLIC_KEY;
     delete process.env.LANGFUSE_SECRET_KEY;
@@ -72,5 +102,25 @@ describe('createLangfuseTracing', () => {
 
     expect(traceId).toMatch(/^[0-9a-f]{32}$/);
     expect(traceId).not.toBe('0'.repeat(32));
+  });
+
+  it('enables active-span propagation: getActiveTraceId works inside startActiveObservation', async () => {
+    // Regression: without a global ContextManager the active span never propagates, so
+    // getActiveTraceId returns undefined and child observations split into separate traces.
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-test';
+    process.env.LANGFUSE_SECRET_KEY = 'sk-lf-test';
+    const tracing = createLangfuseTracing({
+      serviceName: 'wabi-bot',
+      sampleRate: 1,
+      shouldExportSpan: () => false,
+    });
+
+    let active: string | undefined;
+    await startActiveObservation('turn', async () => {
+      active = getActiveTraceId();
+    });
+
+    expect(active).toMatch(/^[0-9a-f]{32}$/);
+    await tracing.shutdown(200);
   });
 });

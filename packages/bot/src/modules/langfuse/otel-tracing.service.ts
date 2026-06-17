@@ -1,6 +1,7 @@
 import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { createLangfuseTracing, type LangfuseTracing } from '@wabi/shared/otel';
 import { JsonLogger } from '../../lib/json-logger';
+import { LangfuseTracer } from './langfuse-tracer.service';
 
 // Dev keeps full visibility (sample everything); prod samples 10%. Read per-call from env so it tracks
 // the running environment rather than import-time state. LANGFUSE_SAMPLE_RATE overrides both. Mirrors
@@ -34,11 +35,17 @@ function flushTimeoutMs(): number {
 @Injectable()
 export class OtelTracingService implements OnApplicationShutdown {
   private readonly logger = new JsonLogger(OtelTracingService.name);
+  private readonly tracing: LangfuseTracing;
 
-  private readonly tracing: LangfuseTracing = createLangfuseTracing({
-    serviceName: 'wabi-bot',
-    sampleRate: resolveSampleRate(),
-  });
+  constructor(private readonly langfuseTracer: LangfuseTracer) {
+    // The crisis backstop (ADR-0024) rides on the export filter: a crisis-latched trace drops its
+    // entire tree at export. The closure reads the tracer's live crisis set + NODE_ENV per call.
+    this.tracing = createLangfuseTracing({
+      serviceName: 'wabi-bot',
+      sampleRate: resolveSampleRate(),
+      shouldExportSpan: this.langfuseTracer.shouldExportSpan,
+    });
+  }
 
   async onApplicationShutdown(): Promise<void> {
     await this.tracing.shutdown(flushTimeoutMs());

@@ -143,6 +143,10 @@ export class CoachingService {
       });
 
       if (classification === 'crisis') {
+        // Latch SYNCHRONOUSLY the instant the verdict is crisis — before any span of this turn ends —
+        // so the OTEL export filter drops the ENTIRE trace tree (root + every child) in production
+        // (ADR-0024). Dev (localFullFidelity) retains it for classifier debugging.
+        this.langfuseTracer.latchCrisis(traceId);
         this.burstCoalescer.cancel(userId);
         // Crisis on a capture turn (journal or mood holds the floor): drop the spoke floor so the
         // crisis text never reaches a spoke writer and a later DM routes fresh. (Quarantine clears
@@ -151,7 +155,13 @@ export class CoachingService {
         if (decision.isCapture) {
           await this.dmRouter.clearPending(userId);
         }
-        this.langfuseTracer.span({ traceId, span: 'classify', input: batch, output: 'crisis', isCrisis: true });
+        this.langfuseTracer.traceObservation({
+          name: 'classify',
+          input: batch,
+          output: 'crisis',
+          kind: 'generation',
+          latencyMs: classifyResult.latencyMs,
+        });
         // One seam for the whole crisis response: resources + ONE Escalation Event ('classifier')
         // + quarantine + ONE follow-up. Escalation returns the renderable payload; we send it on the
         // DM channel. No more hand-assembling the sequence here and again on the tripwire path.
@@ -162,21 +172,21 @@ export class CoachingService {
         return;
       }
 
-      this.langfuseTracer.span({
-        traceId,
-        span: 'classify',
+      this.langfuseTracer.traceObservation({
+        name: 'classify',
         input: batch,
         output: 'safe',
+        kind: 'generation',
         latencyMs: classifyResult.latencyMs,
       });
 
       // Record the router's verdict on every safe turn so the dispatch threshold (θ) can be tuned
       // from Langfuse traces. The intent span carries the router's latency and its confidence.
-      this.langfuseTracer.span({
-        traceId,
-        span: 'intent',
+      this.langfuseTracer.traceObservation({
+        name: 'intent',
         input: batch,
         output: decision.verdict.intent,
+        kind: 'generation',
         confidence: decision.verdict.confidence,
         latencyMs: decisionResult.latencyMs,
       });
@@ -188,11 +198,11 @@ export class CoachingService {
       // scores cross. Outside production the call site includes the query + strategy bodies so a
       // local trace shows exactly what fed the coach.
       const fullFidelity = this.langfuseTracer.localFullFidelity;
-      this.langfuseTracer.span({
-        traceId,
-        span: 'retrieval',
+      this.langfuseTracer.traceObservation({
+        name: 'retrieval',
         input: fullFidelity ? batch : '',
         output: fullFidelity ? JSON.stringify(strategies.map((s) => s.content)) : '',
+        kind: 'span',
         latencyMs: strategyResult.latencyMs,
         metadata: {
           count: strategies.length,

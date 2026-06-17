@@ -1,6 +1,7 @@
-import { trace, type Tracer } from '@opentelemetry/api';
+import { trace, context, type Tracer } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
-import { TraceIdRatioBasedSampler } from '@opentelemetry/sdk-trace-base';
+import { TraceIdRatioBasedSampler, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { LangfuseSpanProcessor, type ShouldExportSpan } from '@langfuse/otel';
 import { setLangfuseTracerProvider } from '@langfuse/tracing';
 
@@ -24,6 +25,8 @@ export type { ShouldExportSpan } from '@langfuse/otel';
 export interface LangfuseTracing {
   /** Tracer bound to the isolated provider (or the global no-op tracer when degraded). */
   tracer: Tracer;
+  /** Flush in-flight spans to the exporter without tearing down. Always resolves; never throws. */
+  forceFlush(): Promise<void>;
   /** Flush in-flight spans and tear the provider down. Always resolves; never throws. */
   shutdown(timeoutMs?: number): Promise<void>;
 }
@@ -35,15 +38,17 @@ export interface CreateLangfuseTracingOptions {
   sampleRate: number;
   /** Per-span export filter (e.g. crisis backstop). Forwarded to `LangfuseSpanProcessor`. */
   shouldExportSpan?: ShouldExportSpan;
+  /** Override the OTLP exporter (e.g. an in-memory exporter under test). */
+  exporter?: SpanExporter;
 }
 
 function noopHandle(serviceName: string): LangfuseTracing {
   // The global API tracer creates non-recording spans when no provider is registered.
-  return { tracer: trace.getTracer(serviceName), shutdown: async () => {} };
+  return { tracer: trace.getTracer(serviceName), forceFlush: async () => {}, shutdown: async () => {} };
 }
 
 export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): LangfuseTracing {
-  const { serviceName, sampleRate, shouldExportSpan } = opts;
+  const { serviceName, sampleRate, shouldExportSpan, exporter } = opts;
 
   // We always build a real isolated provider (real, non-zero OTEL trace ids for log correlation),
   // even when degraded. The exporting `LangfuseSpanProcessor` is attached only when creds are present
@@ -52,7 +57,17 @@ export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): Langf
   const hasCreds = !!process.env.LANGFUSE_PUBLIC_KEY && !!process.env.LANGFUSE_SECRET_KEY;
 
   try {
-    const spanProcessors = hasCreds ? [new LangfuseSpanProcessor({ shouldExportSpan })] : [];
+    // Active-span propagation (so startActiveObservation makes the `turn` active and children nest
+    // under it) needs a global ContextManager. Sentry registers one at init in prod; setGlobalContextManager
+    // is a no-op when one already exists, so this never clobbers Sentry — it only fills the gap when Sentry
+    // is absent (tests, Sentry off), keeping trace nesting correct everywhere.
+    const contextManager = new AsyncLocalStorageContextManager();
+    contextManager.enable();
+    context.setGlobalContextManager(contextManager);
+
+    const spanProcessors = hasCreds
+      ? [new LangfuseSpanProcessor({ shouldExportSpan, exporter })]
+      : [];
     const provider = new NodeTracerProvider({
       sampler: new TraceIdRatioBasedSampler(sampleRate),
       spanProcessors,
@@ -61,6 +76,13 @@ export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): Langf
 
     return {
       tracer: provider.getTracer(serviceName),
+      forceFlush: async () => {
+        try {
+          await provider.forceFlush();
+        } catch {
+          // fail-open: a flush failure must never break the caller.
+        }
+      },
       shutdown: async (timeoutMs = 2000) => {
         try {
           await Promise.race([

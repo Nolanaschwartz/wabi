@@ -75,6 +75,8 @@ jest.mock('../../langfuse/langfuse-tracer.service', () => ({
   LangfuseTracer: jest.fn().mockImplementation(() => ({
     span: jest.fn(),
     score: jest.fn(),
+    traceObservation: jest.fn(),
+    latchCrisis: jest.fn(),
   })),
 }));
 
@@ -395,12 +397,14 @@ describe('CoachingService', () => {
     expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
     expect(coach.generateDetailed).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
-    expect(langfuseTracer.span).toHaveBeenCalledWith(
+    // The turn is crisis-latched synchronously so the OTEL export filter drops the whole tree (ADR-0024),
+    // and the classify observation is emitted (its content is dropped at export in prod, retained in dev).
+    expect(langfuseTracer.latchCrisis).toHaveBeenCalled();
+    expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
       expect.objectContaining({
-        span: 'classify',
+        name: 'classify',
         input: 'batch',
         output: 'crisis',
-        isCrisis: true,
       }),
     );
   });
@@ -549,9 +553,9 @@ describe('CoachingService', () => {
       expect.objectContaining({ recentTurns: undefined }),
     );
     // The verdict is traced for threshold tuning (intent span carries confidence + router latency)...
-    expect(langfuseTracer.span).toHaveBeenCalledWith(
+    expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
       expect.objectContaining({
-        span: 'intent',
+        name: 'intent',
         input: 'want to journal about tonight',
         output: 'journal',
         confidence: 0.5,
@@ -574,9 +578,9 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    const retrieval = langfuseTracer.span.mock.calls
+    const retrieval = langfuseTracer.traceObservation.mock.calls
       .map((c) => c[0] as any)
-      .find((p) => p.span === 'retrieval');
+      .find((p) => p.name === 'retrieval');
     expect(retrieval).toBeDefined();
     expect(retrieval.metadata.count).toBe(2);
     expect(retrieval.metadata.ids).toEqual(['s1', 's2']);
@@ -600,9 +604,9 @@ describe('CoachingService', () => {
 
     await service.handle(mockMessage);
 
-    const retrieval = langfuseTracer.span.mock.calls
+    const retrieval = langfuseTracer.traceObservation.mock.calls
       .map((c) => c[0] as any)
-      .find((p) => p.span === 'retrieval');
+      .find((p) => p.name === 'retrieval');
     expect(retrieval.input).toBe('help me focus');
     expect(retrieval.output).toContain('box breathing');
     // Metadata still present alongside the verbatim text.
@@ -682,8 +686,8 @@ describe('CoachingService', () => {
     expect(escalation.escalate).toHaveBeenCalledWith('123', 'classifier', 'conversation');
     expect(coach.generateDetailed).not.toHaveBeenCalled();
     // The crisis short-circuit happens before the intent trace — the routing verdict is dropped.
-    expect(langfuseTracer.span).not.toHaveBeenCalledWith(
-      expect.objectContaining({ span: 'intent' }),
+    expect(langfuseTracer.traceObservation).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'intent' }),
     );
   });
 
