@@ -35,11 +35,11 @@ function mockEmbed(text: string): number[] {
   return v;
 }
 
-// Mock only the embedding endpoint (the retrieval service POSTs to `${baseUrl}/api/embeddings`
+// Mock only the embedding endpoint (the retrieval service POSTs to `${baseUrl}/v1/embeddings`
 // with { input: text }); pass Qdrant's own HTTP through to the real container.
 function installEmbedMock(): void {
   global.fetch = jest.fn().mockImplementation((url: string, opts: any) => {
-    if (typeof url === 'string' && url.includes('/api/embeddings')) {
+    if (typeof url === 'string' && url.includes('/v1/embeddings')) {
       const body = JSON.parse(opts.body);
       return Promise.resolve({
         ok: true,

@@ -40,7 +40,10 @@ function makeVector(a: number, b: number): number[] {
 // so each strategy gets a distinct embedding and ranking is meaningful.
 function installEmbedMock(): void {
   global.fetch = jest.fn().mockImplementation((url: string, opts: any) => {
-    if (typeof url === 'string' && url.includes('/api/embeddings')) {
+    if (typeof url === 'string' && url.includes('/v1/embeddings')) {
+      // Production embeds via the OpenAI-compatible `${baseUrl}/v1/embeddings` path (see
+      // strategy-retrieval.service.ts); this mock must match that URL or it falls through to
+      // the real (absent in CI) embedding server and search returns empty.
       const body = JSON.parse(opts.body);
       return Promise.resolve({
         ok: true,
