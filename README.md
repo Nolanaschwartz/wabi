@@ -20,6 +20,14 @@ message and the turn is buffered in Redis. Later a background sweeper derives du
 See `docs/ARCHITECTURE.md` for the full hot path, deployment topology, and personal-data
 map.
 
+## Architecture at a glance
+
+![Wabi system architecture](docs/assets/wabi-architecture.png)
+
+External services and actors (top) talk to the four `packages/*` (middle), which sit on a
+self-hosted, swappable data and observability tier (bottom). The bot expands to show the
+crisis → coaching hot path and its module groups.
+
 ## Monorepo layout
 
 pnpm workspace; packages live under `packages/*` (there is no `apps/`). Each package has its
