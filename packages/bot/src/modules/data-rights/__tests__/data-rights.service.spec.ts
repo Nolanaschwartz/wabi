@@ -15,10 +15,12 @@ const mockTx = {
   tiltSession: { deleteMany: jest.fn() },
   aiConversation: { deleteMany: jest.fn() },
   coachingSession: { deleteMany: jest.fn() },
+  user: { deleteMany: jest.fn() },
 };
 
 jest.mock('@wabi/shared', () => ({
   prisma: {
+    user: { findUnique: jest.fn() },
     mood: { findMany: jest.fn(), deleteMany: jest.fn() },
     playtimeLog: { findMany: jest.fn(), deleteMany: jest.fn() },
     journalEntry: { findMany: jest.fn(), deleteMany: jest.fn() },
@@ -50,18 +52,27 @@ jest.mock('../../user/user.service', () => ({
   })),
 }));
 
+jest.mock('../../billing/stripe.service', () => ({
+  StripeService: jest.fn().mockImplementation(() => ({
+    deleteCustomer: jest.fn(),
+  })),
+}));
+
 describe('DataRightsService', () => {
   let service: DataRightsService;
   let userService: jest.Mocked<UserService>;
   let memoryStore: jest.Mocked<MemoryStoreService>;
   let sessionBuffer: jest.Mocked<SessionBufferService>;
+  let stripe: { deleteCustomer: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
     userService = new UserService() as any;
     memoryStore = new MemoryStoreService() as any;
     sessionBuffer = new SessionBufferService() as any;
-    service = new DataRightsService(userService, memoryStore, sessionBuffer);
+    const { StripeService } = require('../../billing/stripe.service');
+    stripe = new StripeService();
+    service = new DataRightsService(userService, memoryStore, sessionBuffer, stripe as any);
   });
 
   it('exports user data including tilt sessions and memory', async () => {
@@ -135,5 +146,57 @@ describe('DataRightsService', () => {
     (memoryStore.deleteAllForUser as jest.Mock).mockRejectedValue(new Error('mem0 down'));
 
     await expect(service.delete('123')).rejects.toThrow(/incomplete/i);
+  });
+
+  describe('deleteAccount', () => {
+    beforeEach(() => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({ stripeCustomerId: 'cus_9' });
+    });
+
+    it('cancels the Stripe customer BEFORE deleting any data (fail toward not-billing)', async () => {
+      await service.deleteAccount('123');
+
+      expect(stripe.deleteCustomer).toHaveBeenCalledWith('cus_9');
+      // Ordering: Stripe cancellation must precede the Postgres transaction.
+      expect(stripe.deleteCustomer.mock.invocationCallOrder[0]).toBeLessThan(
+        (prisma.$transaction as jest.Mock).mock.invocationCallOrder[0],
+      );
+    });
+
+    it('aborts with nothing deleted when Stripe cancellation fails', async () => {
+      stripe.deleteCustomer.mockRejectedValue(new Error('stripe down'));
+
+      await expect(service.deleteAccount('123')).rejects.toThrow('stripe down');
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(memoryStore.deleteAllForUser).not.toHaveBeenCalled();
+    });
+
+    it('skips Stripe gracefully for a person with no customer, and still deletes', async () => {
+      (prisma.user.findUnique as jest.Mock).mockResolvedValue({ stripeCustomerId: null });
+
+      await service.deleteAccount('123');
+
+      expect(stripe.deleteCustomer).toHaveBeenCalledWith(null);
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(mockTx.user.deleteMany).toHaveBeenCalledWith({ where: { discordId: '123' } });
+    });
+
+    it('hard-deletes the User identity row inside the atomic transaction', async () => {
+      await service.deleteAccount('123');
+
+      // Deleting the User row cascades to lucia Session rows (Session.userId -> User.id, onDelete:
+      // Cascade), invalidating the web session server-side.
+      expect(mockTx.user.deleteMany).toHaveBeenCalledWith({ where: { discordId: '123' } });
+      // Child data is still reaped in the same tx.
+      expect(mockTx.coachingSession.deleteMany).toHaveBeenCalledWith({ where: { discordId: '123' } });
+    });
+
+    it('purges external stores and surfaces a partial failure', async () => {
+      (memoryStore.deleteAllForUser as jest.Mock).mockRejectedValue(new Error('mem0 down'));
+
+      await expect(service.deleteAccount('123')).rejects.toThrow(/incomplete/i);
+      // The account row + data were already gone before the external purge ran.
+      expect(mockTx.user.deleteMany).toHaveBeenCalled();
+    });
   });
 });

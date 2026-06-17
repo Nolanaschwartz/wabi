@@ -1,5 +1,6 @@
 import { StripeWebhookController } from '../stripe-webhook.controller';
 import { AccessResolver } from '../access-resolver';
+import { StripeService } from '../stripe.service';
 import { prisma } from '@wabi/shared';
 
 jest.mock('@wabi/shared', () => ({
@@ -52,7 +53,7 @@ describe('StripeWebhookController', () => {
     jest.clearAllMocks();
     const { UserService } = require('../../user/user.service');
     accessResolver = new AccessResolver(new UserService()) as any;
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
   });
 
   it('does not construct Stripe eagerly and returns 400 when STRIPE_SECRET_KEY is unset', async () => {
@@ -62,7 +63,7 @@ describe('StripeWebhookController', () => {
     const Stripe = require('stripe');
     Stripe.mockClear();
 
-    const c = new StripeWebhookController(accessResolver);
+    const c = new StripeWebhookController(accessResolver, new StripeService());
     expect(Stripe).not.toHaveBeenCalled();
 
     const sendMock = jest.fn();
@@ -96,7 +97,7 @@ describe('StripeWebhookController', () => {
       throw new Error('No signatures found');
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
 
     const res = {
       status: jest.fn().mockReturnValue({ send: jest.fn() }),
@@ -114,7 +115,7 @@ describe('StripeWebhookController', () => {
   it('ignores unknown event types', async () => {
     mockConstructEvent.mockReturnValue({ type: 'invoice.paid', id: 'evt_1' });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
 
     const sendMock = jest.fn();
     const res = {
@@ -138,7 +139,7 @@ describe('StripeWebhookController', () => {
       data: { object: { customer: 'cus_123', status: 'active' } },
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
     (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue({ id: 'evt_1' });
 
     const sendMock = jest.fn();
@@ -164,7 +165,7 @@ describe('StripeWebhookController', () => {
       data: { object: { customer: 'cus_123', status: 'active' } },
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
     (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.user.findFirst as jest.Mock).mockResolvedValue({
       discordId: 'discord_123',
@@ -201,7 +202,7 @@ describe('StripeWebhookController', () => {
       data: { object: { customer: 'cus_123', status: 'active' } },
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
     (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.user.findFirst as jest.Mock).mockResolvedValue(null);
 
@@ -227,7 +228,7 @@ describe('StripeWebhookController', () => {
       data: { object: { customer: 'cus_123', status: 'canceled' } },
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
     (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.user.findFirst as jest.Mock).mockResolvedValue({
       discordId: 'discord_123',
@@ -259,7 +260,7 @@ describe('StripeWebhookController', () => {
       data: { object: { customer: 'cus_123', status: 'active' } },
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
     (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.user.findFirst as jest.Mock).mockResolvedValue({
       discordId: 'discord_123',
@@ -293,7 +294,7 @@ describe('StripeWebhookController', () => {
       data: { object: { customer: 'cus_123', status: 'active' } },
     });
 
-    controller = new StripeWebhookController(accessResolver);
+    controller = new StripeWebhookController(accessResolver, new StripeService());
     (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
     (prisma.user.findFirst as jest.Mock).mockResolvedValue({
       discordId: 'discord_123',

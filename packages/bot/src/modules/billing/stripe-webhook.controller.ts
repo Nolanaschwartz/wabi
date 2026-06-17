@@ -1,26 +1,15 @@
 import { Controller, Post, Req, Res, RawBodyRequest } from '@nestjs/common';
 import { StripeAccessMapper, type StripeWebhookEvent } from './stripe-access-mapper';
 import { AccessResolver } from './access-resolver';
+import { StripeService } from './stripe.service';
 import { prisma } from '@wabi/shared';
-import Stripe from 'stripe';
 
 @Controller('webhooks/stripe')
 export class StripeWebhookController {
-  private stripe: InstanceType<typeof Stripe> | null = null;
-
-  constructor(private readonly accessResolver: AccessResolver) {}
-
-  // Lazily build the Stripe client. Constructing it eagerly with an empty key throws and would
-  // crash the whole bot at boot when Stripe is unconfigured (e.g. local dev). Returns null when
-  // no key is set, so the webhook handler degrades to a graceful "missing config" response.
-  private getStripe(): InstanceType<typeof Stripe> | null {
-    const apiKey = process.env.STRIPE_SECRET_KEY;
-    if (!apiKey) return null;
-    if (!this.stripe) {
-      this.stripe = new Stripe(apiKey, { typescript: true });
-    }
-    return this.stripe;
-  }
+  constructor(
+    private readonly accessResolver: AccessResolver,
+    private readonly stripeService: StripeService,
+  ) {}
 
   @Post()
   async handle(
@@ -31,7 +20,7 @@ export class StripeWebhookController {
     const rawBody = req.rawBody ?? Buffer.from('');
 
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    const stripe = this.getStripe();
+    const stripe = this.stripeService.getClient();
     if (!webhookSecret || !signature || !stripe) {
       res.status(400).send('Missing webhook config');
       return;

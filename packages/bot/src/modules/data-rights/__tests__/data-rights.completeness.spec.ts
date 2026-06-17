@@ -23,10 +23,36 @@ describe('Data Rights deletion completeness (ADR-0004/0011)', () => {
       undefined as any,
       undefined as any,
       undefined as any,
+      undefined as any,
     );
     const covered = service.coveredModels();
 
     const missing = userScopedModels.filter((m) => !covered.includes(m as Prisma.ModelName));
+    expect(missing).toEqual([]);
+  });
+
+  // Account deletion goes further than the child-data sweep: it also drops the User identity row.
+  // Assert it covers EVERY person-data model with NO exclusions, so a future User-linked model fails
+  // the build until the account-deletion path handles it.
+  it('account deletion covers every person-data model, including the User row', () => {
+    const allPersonModels = Prisma.dmmf.datamodel.models
+      .filter(
+        (m) =>
+          m.name === 'User' ||
+          m.fields.some((f) => f.name === 'userId' || f.name === 'discordId'),
+      )
+      .map((m) => m.name);
+
+    const service = new DataRightsService(
+      undefined as any,
+      undefined as any,
+      undefined as any,
+      undefined as any,
+    );
+    const covered = service.accountCoveredModels();
+
+    expect(covered).toContain('User');
+    const missing = allPersonModels.filter((m) => !covered.includes(m as Prisma.ModelName));
     expect(missing).toEqual([]);
   });
 });
