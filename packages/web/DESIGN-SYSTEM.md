@@ -52,8 +52,10 @@ accent (the "gold seam"), sage for calm and growth.
 - `favicon.ico` / `favicon.svg` / `favicon-16/32.png` / `apple-touch-icon.png` /
   `icon-192/512.png` / `site.webmanifest`
 
-## Not yet restyled
+## Coverage
 
-`src/app/admin/research/page.tsx` and `src/app/admin/strategies/page.tsx` still use
-the default Tailwind palette (gray/blue). They render fine on the new base, but
-swap `gray-*`→`ink-*`/`bone-*` and `blue-*`→`copper` when you touch them next.
+All web surfaces are on the Kintsugi system: the landing, consent, and dashboard
+pages, plus the admin tools (`src/app/admin/research/page.tsx` and
+`src/app/admin/strategies/page.tsx`). The admin pages share a small inline class
+vocabulary (`card`, `btnPrimary`, `btnSecondary`, `btnDanger`, `fieldCls`,
+`metaLabel`) defined at the top of each file — reuse those when extending them.

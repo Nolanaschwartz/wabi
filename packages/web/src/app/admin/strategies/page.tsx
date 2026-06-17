@@ -12,6 +12,17 @@ interface Strategy {
   status: string;
 }
 
+const card = 'rounded-lg border border-ink-3 bg-ink-1 p-6';
+const inputCls =
+  'min-w-0 flex-1 rounded-md border border-ink-3 bg-ink-2 px-3 py-2 text-sm text-bone-0 placeholder:text-bone-3 transition-colors duration-200 ease-calm focus:border-copper focus:outline-none';
+const btnPrimary =
+  'rounded-md bg-copper px-4 py-2 text-sm font-semibold text-ink-0 transition-colors duration-200 ease-calm hover:bg-copper-bright disabled:cursor-not-allowed disabled:opacity-50';
+const btnSecondary =
+  'rounded-md border border-ink-3 bg-ink-2 px-4 py-2 text-sm font-medium text-bone-1 transition-colors duration-200 ease-calm hover:border-ink-4 disabled:cursor-not-allowed disabled:opacity-50';
+const btnDanger =
+  'rounded-md border border-alert/60 px-4 py-2 text-sm font-medium text-alert transition-colors duration-200 ease-calm hover:bg-alert/10 disabled:cursor-not-allowed disabled:opacity-50';
+const metaLabel = 'font-mono text-[11px] uppercase tracking-[0.14em] text-bone-2';
+
 export default function StrategyAdminPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,88 +69,57 @@ export default function StrategyAdminPage() {
     });
   };
 
-  if (loading) return <div>Loading...</div>;
+  if (loading)
+    return (
+      <div className="mx-auto max-w-3xl px-6 py-20 font-mono text-sm uppercase tracking-[0.14em] text-bone-2">
+        Loading…
+      </div>
+    );
 
   return (
-    <div style={{ maxWidth: 800, margin: '2rem auto', padding: '0 1rem', fontFamily: 'system-ui, sans-serif' }}>
-      <h1 style={{ fontSize: '1.5rem', marginBottom: '1rem' }}>Strategy Admin</h1>
+    <div className="mx-auto max-w-3xl px-6 py-16">
+      <h1 className="mb-2 font-display text-3xl font-medium text-bone-0">Strategy review</h1>
+      <p className="mb-8 text-sm text-bone-2">
+        Research drafts awaiting approval before they enter the shared library.
+      </p>
+
       {strategies.length === 0 ? (
-        <p>No pending strategies.</p>
+        <div className={card}>
+          <p className="text-sm text-bone-2">No pending strategies.</p>
+        </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <div className="flex flex-col gap-4">
           {strategies.map((d) => (
-            <div
-              key={d.id}
-              style={{
-                border: '1px solid #e5e7eb',
-                borderRadius: 8,
-                padding: '1rem',
-              }}
-            >
-              <h3 style={{ margin: '0 0 0.5rem' }}>{d.title}</h3>
-              <p style={{ margin: '0 0 0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
-                {d.technique}
+            <div key={d.id} className={card}>
+              <h3 className="mb-1 font-display text-xl text-bone-0">{d.title}</h3>
+              <p className="mb-3 text-sm text-bone-1">{d.technique}</p>
+              <p className={`mb-4 ${metaLabel}`}>
+                {d.source} · trust {d.trustLevel}
               </p>
-              <p style={{ margin: '0 0 0.5rem', fontSize: '0.75rem', color: '#9ca3af' }}>
-                Source: {d.source} | Trust: {d.trustLevel}
-              </p>
-              <label
-                style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', margin: '0 0 0.75rem', fontSize: '0.75rem', color: '#6b7280' }}
-              >
-                Evidence:
+
+              <label className="mb-4 flex flex-wrap items-center gap-2">
+                <span className={metaLabel}>Evidence</span>
                 <input
                   value={evidenceDraft[d.id] ?? d.evidence}
                   onChange={(e) =>
                     setEvidenceDraft((prev) => ({ ...prev, [d.id]: e.target.value }))
                   }
-                  style={{
-                    flex: 1,
-                    padding: '0.25rem 0.5rem',
-                    border: '1px solid #d1d5db',
-                    borderRadius: 4,
-                    fontSize: '0.75rem',
-                  }}
+                  className={inputCls}
                 />
                 <button
                   onClick={() => saveEvidence(d.id)}
                   disabled={evidenceDraft[d.id] === undefined || evidenceDraft[d.id] === d.evidence}
-                  style={{
-                    padding: '0.25rem 0.75rem',
-                    background: '#374151',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 4,
-                    cursor: 'pointer',
-                  }}
+                  className={btnSecondary}
                 >
                   Save
                 </button>
               </label>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <button
-                  onClick={() => approve(d.id)}
-                  style={{
-                    padding: '0.5rem 1rem',
-                    background: '#16a34a',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 4,
-                    cursor: 'pointer',
-                  }}
-                >
+
+              <div className="flex gap-3">
+                <button onClick={() => approve(d.id)} className={btnPrimary}>
                   Approve
                 </button>
-                <button
-                  onClick={() => reject(d.id)}
-                  style={{
-                    padding: '0.5rem 1rem',
-                    background: '#dc2626',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: 4,
-                    cursor: 'pointer',
-                  }}
-                >
+                <button onClick={() => reject(d.id)} className={btnDanger}>
                   Reject
                 </button>
               </div>
