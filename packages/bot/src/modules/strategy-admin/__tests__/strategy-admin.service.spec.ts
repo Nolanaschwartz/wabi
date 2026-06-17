@@ -410,6 +410,57 @@ describe('StrategyAdminService', () => {
     await service.recordNegativeFeedback('999');
     expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
   });
+
+  it('removePublished quarantines a published draft and removes it from the index', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'published',
+    });
+    (prisma.strategyDraft.update as jest.Mock).mockResolvedValue({
+      id: '1',
+      title: 'Test',
+      technique: 'Test',
+      source: 'Test',
+      evidence: 'Test',
+      sourceText: null,
+      sourceUrl: 'https://test.com',
+      trustLevel: 'community',
+      status: 'quarantined',
+      negativeCount: 0,
+    });
+
+    const result = await service.removePublished('1');
+
+    expect(result?.status).toBe('quarantined');
+    expect(prisma.strategyDraft.update).toHaveBeenCalledWith({
+      where: { id: '1' },
+      data: { status: 'quarantined' },
+    });
+    expect(retrieval.delete).toHaveBeenCalledWith('1');
+  });
+
+  it('refuses to remove a draft that is not published (lifecycle guard)', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
+      id: '1',
+      status: 'pending-review',
+    });
+
+    const result = await service.removePublished('1');
+
+    expect(result).toBeNull();
+    expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+    expect(retrieval.delete).not.toHaveBeenCalled();
+  });
+
+  it('returns null when removing a non-existent draft', async () => {
+    (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue(null);
+
+    const result = await service.removePublished('999');
+
+    expect(result).toBeNull();
+    expect(prisma.strategyDraft.update).not.toHaveBeenCalled();
+    expect(retrieval.delete).not.toHaveBeenCalled();
+  });
 });
 
 describe('StrategyAdminService.isDuplicate', () => {

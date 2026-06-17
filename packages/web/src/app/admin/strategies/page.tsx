@@ -26,15 +26,78 @@ const btnDanger =
   'rounded-md border border-alert/60 px-4 py-2 text-sm font-medium text-alert transition-colors duration-200 ease-calm hover:bg-alert/10 disabled:cursor-not-allowed disabled:opacity-50';
 const metaLabel = 'font-mono text-[11px] uppercase tracking-[0.14em] text-bone-2';
 
+/** Collapsible source-text + metadata block shared by the pending-review and published-library cards. */
+function StrategyDetails({ d }: { d: Strategy }) {
+  return (
+    <details className="group mt-4 border-t border-ink-2 pt-4">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-bone-2 transition-colors duration-200 ease-calm hover:text-bone-0 [&::-webkit-details-marker]:hidden">
+        <span
+          aria-hidden
+          className="inline-block transition-transform duration-200 ease-calm group-open:rotate-90"
+        >
+          &#9656;
+        </span>
+        Full text &amp; metadata
+      </summary>
+
+      <div className="mt-4 space-y-4">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+          <dt className={metaLabel}>Source</dt>
+          <dd className="text-bone-1">{d.source}</dd>
+          <dt className={metaLabel}>Trust</dt>
+          <dd className="text-bone-1">{d.trustLevel}</dd>
+          <dt className={metaLabel}>Status</dt>
+          <dd className="text-bone-1">{d.status}</dd>
+          <dt className={metaLabel}>Negatives</dt>
+          <dd className={d.negativeCount > 0 ? 'text-warn' : 'text-bone-1'}>{d.negativeCount}</dd>
+          <dt className={metaLabel}>Link</dt>
+          <dd>
+            <a
+              href={d.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="break-all text-copper underline-offset-4 transition-colors duration-200 ease-calm hover:text-copper-bright hover:underline"
+            >
+              {d.sourceUrl}
+            </a>
+          </dd>
+          <dt className={metaLabel}>ID</dt>
+          <dd className="break-all font-mono text-xs text-bone-2">{d.id}</dd>
+        </dl>
+
+        <div>
+          <p className={`mb-1.5 ${metaLabel}`}>Source text</p>
+          {d.sourceText ? (
+            <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md border border-ink-3 bg-ink-2 p-3 text-sm leading-relaxed text-bone-1">
+              {d.sourceText}
+            </p>
+          ) : (
+            <p className="text-sm text-bone-3">No source text captured.</p>
+          )}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export default function StrategyAdminPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [published, setPublished] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
   const [evidenceDraft, setEvidenceDraft] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    fetch('/api/admin/strategies/pending')
-      .then((r) => r.json())
-      .then((data) => setStrategies(Array.isArray(data) ? data : []))
+    const load = (path: string) =>
+      fetch(`/api/admin/strategies/${path}`)
+        .then((r) => r.json())
+        .then((data) => (Array.isArray(data) ? data : []))
+        .catch(() => []);
+
+    Promise.all([load('pending'), load('published')])
+      .then(([pending, pub]) => {
+        setStrategies(pending);
+        setPublished(pub);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -54,6 +117,17 @@ export default function StrategyAdminPage() {
       body: JSON.stringify({ id }),
     });
     setStrategies((s) => s.filter((d) => d.id !== id));
+  };
+
+  const remove = async (id: string) => {
+    if (!confirm('Remove this strategy from the shared library? It will stop being surfaced in coaching.'))
+      return;
+    const res = await fetch(`/api/admin/strategies/${id}/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    if (res.ok) setPublished((s) => s.filter((d) => d.id !== id));
   };
 
   const saveEvidence = async (id: string) => {
@@ -127,56 +201,39 @@ export default function StrategyAdminPage() {
                 </button>
               </div>
 
-              <details className="group mt-4 border-t border-ink-2 pt-4">
-                <summary className="flex cursor-pointer list-none items-center gap-2 text-sm text-bone-2 transition-colors duration-200 ease-calm hover:text-bone-0 [&::-webkit-details-marker]:hidden">
-                  <span
-                    aria-hidden
-                    className="inline-block transition-transform duration-200 ease-calm group-open:rotate-90"
-                  >
-                    &#9656;
-                  </span>
-                  Full text &amp; metadata
-                </summary>
+              <StrategyDetails d={d} />
+            </div>
+          ))}
+        </div>
+      )}
 
-                <div className="mt-4 space-y-4">
-                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-                    <dt className={metaLabel}>Source</dt>
-                    <dd className="text-bone-1">{d.source}</dd>
-                    <dt className={metaLabel}>Trust</dt>
-                    <dd className="text-bone-1">{d.trustLevel}</dd>
-                    <dt className={metaLabel}>Status</dt>
-                    <dd className="text-bone-1">{d.status}</dd>
-                    <dt className={metaLabel}>Negatives</dt>
-                    <dd className={d.negativeCount > 0 ? 'text-warn' : 'text-bone-1'}>
-                      {d.negativeCount}
-                    </dd>
-                    <dt className={metaLabel}>Link</dt>
-                    <dd>
-                      <a
-                        href={d.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="break-all text-copper underline-offset-4 transition-colors duration-200 ease-calm hover:text-copper-bright hover:underline"
-                      >
-                        {d.sourceUrl}
-                      </a>
-                    </dd>
-                    <dt className={metaLabel}>ID</dt>
-                    <dd className="break-all font-mono text-xs text-bone-2">{d.id}</dd>
-                  </dl>
+      <h2 className="mb-2 mt-16 font-display text-2xl font-medium text-bone-0">Published library</h2>
+      <p className="mb-8 text-sm text-bone-2">
+        Strategies currently stored in the shared library and live in coaching.
+      </p>
 
-                  <div>
-                    <p className={`mb-1.5 ${metaLabel}`}>Source text</p>
-                    {d.sourceText ? (
-                      <p className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md border border-ink-3 bg-ink-2 p-3 text-sm leading-relaxed text-bone-1">
-                        {d.sourceText}
-                      </p>
-                    ) : (
-                      <p className="text-sm text-bone-3">No source text captured.</p>
-                    )}
-                  </div>
-                </div>
-              </details>
+      {published.length === 0 ? (
+        <div className={card}>
+          <p className="text-sm text-bone-2">No stored strategies.</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-4">
+          {published.map((d) => (
+            <div key={d.id} className={card}>
+              <h3 className="mb-1 font-display text-xl text-bone-0">{d.title}</h3>
+              <p className="mb-3 text-sm text-bone-1">{d.technique}</p>
+              <p className={metaLabel}>
+                {d.source} · trust {d.trustLevel} ·{' '}
+                <span className={d.negativeCount > 0 ? 'text-warn' : undefined}>
+                  {d.negativeCount} negative
+                </span>
+              </p>
+
+              <button onClick={() => remove(d.id)} className={`mt-4 ${btnDanger}`}>
+                Remove
+              </button>
+
+              <StrategyDetails d={d} />
             </div>
           ))}
         </div>
