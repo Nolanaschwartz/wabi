@@ -15,6 +15,7 @@ export interface MedrxivLike {
 export interface AgentDeps {
   pubmed: PubMedLike;
   medrxiv: MedrxivLike;
+  psyarxiv: MedrxivLike; // same shape as medRxiv: search(query, limit) + fullText(sourceId)
   seen: (sourceId: string) => Promise<boolean>;
   gate: (abstract: string) => Promise<{ keep: boolean; tokens: number }>;
   extract: (paper: Paper, body: string) => Promise<{ candidate: Candidate | null; tokens: number }>;
@@ -45,12 +46,15 @@ export class ResearchAgent {
       .catch((e) => { this.log.info('pubmed search failed', { topic, err: (e as Error)?.message ?? String(e) }); return []; });
     const medPapers = await this.deps.medrxiv.search(topic, this.bounds.maxPapersPerTopic)
       .catch((e) => { this.log.info('medrxiv search failed', { topic, err: (e as Error)?.message ?? String(e) }); return []; });
+    const psyPapers = await this.deps.psyarxiv.search(topic, this.bounds.maxPapersPerTopic)
+      .catch((e) => { this.log.info('psyarxiv search failed', { topic, err: (e as Error)?.message ?? String(e) }); return []; });
     const queue: Array<{ kind: SourceKind; id: string; paper?: Paper }> = [
       ...pmids.map((id) => ({ kind: 'pubmed' as const, id })),
       ...medPapers.map((p) => ({ kind: 'medrxiv' as const, id: p.sourceId, paper: p })),
+      ...psyPapers.map((p) => ({ kind: 'psyarxiv' as const, id: p.sourceId, paper: p })),
     ];
     summary.searched = queue.length;
-    this.log.info('search done', { topic, pubmed: pmids.length, medrxiv: medPapers.length, queued: queue.length });
+    this.log.info('search done', { topic, pubmed: pmids.length, medrxiv: medPapers.length, psyarxiv: psyPapers.length, queued: queue.length });
 
     let papersRead = 0;
     let discoverySteps = 0;
@@ -101,9 +105,16 @@ export class ResearchAgent {
           this.log.debug('discovery expand', { from: paper.sourceId, related: related.length, queue: queue.length });
         }
 
-        const full = paper.sourceKind === 'pubmed'
-          ? await this.deps.pubmed.fullText(paper.sourceId.replace('PMID:', '')).catch(() => null)
-          : await this.deps.medrxiv.fullText(paper.sourceId).catch(() => null);
+        // Route full-text by source kind explicitly: each source owns its own id keyspace and fetcher.
+        // A catch-all else-arm would mis-route (e.g. send an osf: id to medrxiv.fullText).
+        let full: string | null = null;
+        if (paper.sourceKind === 'pubmed') {
+          full = await this.deps.pubmed.fullText(paper.sourceId.replace('PMID:', '')).catch(() => null);
+        } else if (paper.sourceKind === 'medrxiv') {
+          full = await this.deps.medrxiv.fullText(paper.sourceId).catch(() => null);
+        } else if (paper.sourceKind === 'psyarxiv') {
+          full = await this.deps.psyarxiv.fullText(paper.sourceId).catch(() => null);
+        }
         const body = full ?? paper.abstract;
         papersRead++;
         this.log.debug('body', { id: paper.sourceId, source: full ? 'fullText' : 'abstract', chars: body.length });

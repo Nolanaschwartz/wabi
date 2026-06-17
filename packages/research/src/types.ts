@@ -1,7 +1,7 @@
-export type SourceKind = 'pubmed' | 'medrxiv';
+export type SourceKind = 'pubmed' | 'medrxiv' | 'psyarxiv';
 
 export interface Paper {
-  sourceId: string;     // "PMID:12345" | "doi:10.1101/..."
+  sourceId: string;     // "PMID:12345" | "doi:10.1101/..." | "osf:<guid>"
   sourceKind: SourceKind;
   title: string;
   abstract: string;

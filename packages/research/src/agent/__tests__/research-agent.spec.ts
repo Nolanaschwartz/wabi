@@ -10,6 +10,10 @@ function paper(id: string): Paper {
   return { sourceId: `PMID:${id}`, sourceKind: 'pubmed', title: `T${id}`, abstract: `A${id}`,
     url: `u${id}`, pubTypes: ['Randomized Controlled Trial'], isPreprint: false };
 }
+function psyPaper(guid: string): Paper {
+  return { sourceId: `osf:${guid}`, sourceKind: 'psyarxiv', title: `PT${guid}`, abstract: `PA${guid}`,
+    url: `https://osf.io/${guid}`, pubTypes: [], isPreprint: true };
+}
 function candidate(id: string): Candidate {
   return { title: `Tech ${id}`, technique: `do ${id}`, sourceText: `A${id}`, evidence: 'peer-reviewed: RCT',
     sourceUrl: `u${id}`, source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent' };
@@ -25,6 +29,7 @@ function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
       fullText: jest.fn().mockResolvedValue(null),
     } as any,
     medrxiv: { search: jest.fn().mockResolvedValue([]), fullText: jest.fn().mockResolvedValue(null) } as any,
+    psyarxiv: { search: jest.fn().mockResolvedValue([]), fullText: jest.fn().mockResolvedValue(null) } as any,
     seen: jest.fn().mockResolvedValue(false),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidate: candidate(p.sourceId.replace('PMID:', '')), tokens: 10 })),
@@ -98,6 +103,49 @@ describe('ResearchAgent', () => {
     const { candidates, summary } = await agent.run('topic');
     expect(candidates).toHaveLength(2);
     expect(summary.inRunDeduped).toBe(1);
+  });
+
+  it('queues and processes PsyArXiv papers, calling psyarxiv.fullText (never medrxiv.fullText) for them', async () => {
+    const psyFullText = jest.fn().mockResolvedValue(null);
+    const medFullText = jest.fn().mockResolvedValue(null);
+    const deps = baseDeps({
+      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue([]) } as any,
+      psyarxiv: { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: psyFullText } as any,
+      medrxiv: { search: jest.fn().mockResolvedValue([]), fullText: medFullText } as any,
+    });
+    const agent = new ResearchAgent(deps, bounds);
+    const { candidates } = await agent.run('topic');
+    expect(candidates).toHaveLength(1); // the single PsyArXiv paper flowed through to a candidate
+    expect(psyFullText).toHaveBeenCalledWith('osf:g1'); // routed to psyarxiv by kind...
+    expect(medFullText).not.toHaveBeenCalled();          // ...never to medrxiv
+  });
+
+  it('falls back to the abstract when psyarxiv.fullText returns null', async () => {
+    const extract = jest.fn().mockImplementation((p: Paper, body: string) =>
+      Promise.resolve({ candidate: { ...candidate('g1'), sourceText: body }, tokens: 1 }));
+    const deps = baseDeps({
+      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue([]) } as any,
+      psyarxiv: { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: jest.fn().mockResolvedValue(null) } as any,
+      extract,
+    });
+    const agent = new ResearchAgent(deps, bounds);
+    await agent.run('topic');
+    // extract received the abstract (PAg1) as the body, proving the abstract fallback path.
+    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' }), 'PAg1');
+  });
+
+  it('logs a swallowed psyarxiv search failure instead of aborting the run', async () => {
+    const log = { info: jest.fn(), debug: jest.fn() };
+    const deps = baseDeps({
+      pubmed: { ...baseDeps().pubmed, search: jest.fn().mockResolvedValue([]) } as any,
+      psyarxiv: { search: jest.fn().mockRejectedValue(new Error('OSF HTTP 503')), fullText: jest.fn() } as any,
+    });
+    const agent = new ResearchAgent(deps, bounds, log);
+    const { summary } = await agent.run('topic');
+    expect(summary.searched).toBe(0);
+    const fail = log.info.mock.calls.find((c) => c[0] === 'psyarxiv search failed');
+    expect(fail).toBeTruthy();
+    expect(fail![1]).toMatchObject({ err: 'OSF HTTP 503' });
   });
 
   it('continues when one paper errors (fail-open-empty)', async () => {
