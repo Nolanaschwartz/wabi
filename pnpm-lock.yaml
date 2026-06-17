@@ -95,13 +95,37 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.68
         version: 3.0.68(zod@4.4.3)
+      '@nestjs/common':
+        specifier: ^11.0.0
+        version: 11.1.24(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/config':
+        specifier: ^4.0.0
+        version: 4.0.4(@nestjs/common@11.1.24(reflect-metadata@0.2.2)(rxjs@7.8.2))(rxjs@7.8.2)
+      '@nestjs/core':
+        specifier: ^11.0.0
+        version: 11.1.24(@nestjs/common@11.1.24(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@11.1.24)(reflect-metadata@0.2.2)(rxjs@7.8.2)
+      '@nestjs/platform-express':
+        specifier: ^11.1.24
+        version: 11.1.24(@nestjs/common@11.1.24(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.24)
       '@wabi/shared':
         specifier: workspace:*
         version: link:../shared
       ai:
         specifier: ^6.0.197
         version: 6.0.197(zod@4.4.3)
+      pg-boss:
+        specifier: ^12.18.2
+        version: 12.18.2
+      reflect-metadata:
+        specifier: ^0.2.2
+        version: 0.2.2
+      rxjs:
+        specifier: ^7.8.1
+        version: 7.8.2
     devDependencies:
+      '@nestjs/cli':
+        specifier: ^11.0.0
+        version: 11.0.21(@types/node@22.19.20)
       '@types/jest':
         specifier: ^29.5.14
         version: 29.5.14

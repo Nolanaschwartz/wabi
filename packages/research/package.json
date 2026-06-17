@@ -5,14 +5,23 @@
   "scripts": {
     "build": "tsc",
     "test": "jest",
-    "start": "ts-node src/run.ts"
+    "dev": "RESEARCH_PORT=3002 nest start --watch",
+    "start:prod": "node dist/main.js"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.68",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.1.24",
     "@wabi/shared": "workspace:*",
-    "ai": "^6.0.197"
+    "ai": "^6.0.197",
+    "pg-boss": "^12.18.2",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.13.0",
     "jest": "^29.7.0",
