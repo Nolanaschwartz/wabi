@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build": "tsc",
-    "test": "jest",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "dev": "RESEARCH_PORT=3002 nest start --watch",
     "start:prod": "node dist/main.js"
   },
@@ -18,7 +18,8 @@
     "ai": "^6.0.197",
     "pg-boss": "^12.18.2",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "unpdf": "^1.6.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
@@ -32,8 +33,21 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "moduleFileExtensions": ["ts", "js"],
-    "testMatch": ["**/__tests__/**/*.spec.ts", "**/*.spec.ts"],
-    "transform": { "^.+\\.ts$": ["ts-jest", { "diagnostics": false }] }
+    "moduleFileExtensions": [
+      "ts",
+      "js"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.spec.ts",
+      "**/*.spec.ts"
+    ],
+    "transform": {
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "diagnostics": false
+        }
+      ]
+    }
   }
 }

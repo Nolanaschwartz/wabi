@@ -2,6 +2,7 @@ import { RateLimiter } from '../util/rate-limiter';
 import { Paper } from '../types';
 import { Logger, noopLogger } from '../util/logger';
 import { contentTerms, minMatch, scoreRecord } from './term-match';
+import { fetchAndParsePdf } from './pdf';
 
 const BASE = 'https://api.medrxiv.org/details/medrxiv';
 const PAGE = 100; // medRxiv details endpoint returns 100 records per cursor page.
@@ -12,11 +13,14 @@ export interface MedrxivDeps {
   windowDays?: number;       // how far back to scan (default 60)
   maxRecords?: number;       // cap on records pulled per window (default 1500, env-tunable)
   minTermFraction?: number;  // fraction of query content-terms a record must contain (default 0.5)
+  maxPdfBytes?: number;      // full-text PDF size cap (default 20MB, env-tunable)
+  maxTextChars?: number;     // extracted full-text char cap (default 50k, env-tunable)
+  parsePdf?: (buf: Uint8Array) => Promise<string>; // injectable for tests; default = unpdf
   now?: () => Date;          // injectable clock for tests
   log?: Logger;
 }
 
-interface MedrxivRecord { doi: string; title: string; abstract: string; date: string }
+interface MedrxivRecord { doi: string; title: string; abstract: string; date: string; version?: string }
 
 export class MedrxivTool {
   private readonly fetchFn: typeof fetch;
@@ -24,6 +28,9 @@ export class MedrxivTool {
   private readonly windowDays: number;
   private readonly maxRecords: number;
   private readonly minTermFraction: number;
+  private readonly maxPdfBytes: number;
+  private readonly maxTextChars: number;
+  private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
   private readonly now: () => Date;
   private readonly log: Logger;
   // Cache the fetched window so every topic in a run filters the SAME records without re-paginating.
@@ -35,6 +42,9 @@ export class MedrxivTool {
     this.windowDays = deps.windowDays ?? 60;
     this.maxRecords = deps.maxRecords ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_RECORDS) || 1500);
     this.minTermFraction = deps.minTermFraction ?? (Number(process.env.RESEARCH_MEDRXIV_MIN_TERM_FRACTION) || 0.5);
+    this.maxPdfBytes = deps.maxPdfBytes ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_PDF_BYTES) || 20_000_000);
+    this.maxTextChars = deps.maxTextChars ?? (Number(process.env.RESEARCH_MEDRXIV_MAX_TEXT_CHARS) || 50_000);
+    this.parsePdf = deps.parsePdf;
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? noopLogger;
   }
@@ -75,7 +85,12 @@ export class MedrxivTool {
 
       let added = 0;
       for (const r of recs) {
-        if (r?.doi && !byDoi.has(r.doi)) { byDoi.set(r.doi, r); added++; }
+        if (!r?.doi) continue;
+        const existing = byDoi.get(r.doi);
+        // medRxiv emits one row per version (ascending); keep the HIGHEST so search() presents — and
+        // fullText() fetches — the current version, not a superseded one. New dois count as progress.
+        if (!existing) { byDoi.set(r.doi, r); added++; }
+        else if (Number(r.version ?? 0) > Number(existing.version ?? 0)) byDoi.set(r.doi, r);
       }
 
       if (recs.length < PAGE) break;          // last (or only) page
@@ -127,8 +142,20 @@ export class MedrxivTool {
       }));
   }
 
-  /** v1: medRxiv full-text JATS fetch is deferred; the agent reads the abstract from search(). */
-  async fullText(_sourceId: string): Promise<string | null> {
-    return null;
+  /** Full text from medRxiv's open-access PDF: `<doi>v<version>.full.pdf`. The version comes from the
+   * window cache primed by search(); when the doi wasn't in the window (or carried no version) we fall
+   * back to `v1`. Fail-safe: any HTTP/oversize/parse failure → null, and the agent reads the abstract. */
+  async fullText(sourceId: string): Promise<string | null> {
+    const doi = sourceId.replace(/^doi:/, '');
+    const version = this.cache?.records.find((r) => r.doi === doi)?.version ?? '1';
+    const url = `https://www.medrxiv.org/content/${doi}v${version}.full.pdf`;
+    return fetchAndParsePdf(url, {
+      fetchFn: this.fetchFn,
+      schedule: (fn) => this.limiter.schedule(fn),
+      maxPdfBytes: this.maxPdfBytes,
+      maxTextChars: this.maxTextChars,
+      parsePdf: this.parsePdf,
+      log: this.log,
+    });
   }
 }
