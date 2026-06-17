@@ -130,7 +130,9 @@ export async function generate(role: ProviderRole, opts: GenerateOptions): Promi
       prompt: opts.prompt,
       temperature: opts.retryOnEmpty.temperature,
       maxOutputTokens: opts.maxOutputTokens,
-      experimental_telemetry: opts.telemetry,
+      // No telemetry on the retry: the AI SDK emits one generation span per call, so re-passing it would
+      // produce TWO generation spans (double token/cost + duplicate prompt/reply capture) under one coach
+      // parent for a single logical turn. The first attempt's span already represents the call.
     });
     text = retry.text.trim();
     usageParts.push(retry.usage as RawUsage);

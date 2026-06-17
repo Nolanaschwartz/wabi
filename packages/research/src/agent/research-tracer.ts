@@ -71,12 +71,20 @@ function flushTimeoutMs(): number {
   return Number.isNaN(parsed) || parsed <= 0 ? 5000 : parsed;
 }
 
+// An open run-root observation: kept LIVE so children nest under it (ending it before its children
+// makes the SDK treat each child as its own app-root, fragmenting the tree). Stored with its span
+// context for parenting, plus the handle to end it when the run completes.
+interface OpenRun {
+  end(): void;
+  context: SpanContext;
+}
+
 @Injectable()
 export class ResearchTracer implements OnApplicationShutdown {
   private readonly log: Logger;
   private readonly tracing: LangfuseTracing;
-  // runId -> the run's root observation span context, so each paper's spans parent under one run trace.
-  private readonly runRoots = new Map<string, SpanContext>();
+  // runId -> the run's LIVE root observation, so each paper's spans parent under one run trace.
+  private readonly runRoots = new Map<string, OpenRun>();
 
   constructor(log: Logger = defaultLogger()) {
     this.log = log;
@@ -84,29 +92,27 @@ export class ResearchTracer implements OnApplicationShutdown {
   }
 
   /**
-   * Open the run's parent observation and remember its span context so every later {@link span} nests
-   * under it. Lets a paper-less run still appear in Langfuse. Never throws (ADR-0021).
+   * Open the run's parent observation and keep it LIVE so every later {@link span} nests under it. The
+   * root is ended by {@link endRun} when the run completes — NOT here — because ending it first would
+   * make the SDK tag each child as its own app-root and fragment the run/paper tree. Never throws.
    */
   run(input: RunTraceInput): void {
     try {
       const root = startObservation('run', { metadata: input.metadata }, { asType: 'span' });
-      this.runRoots.set(input.runId, root.otelSpan.spanContext());
-      // End the content-free root immediately — it marks the trace; children created later reference its
-      // span context as parent and nest correctly even though it has already ended.
-      root.end();
+      this.runRoots.set(input.runId, { end: () => root.end(), context: root.otelSpan.spanContext() });
     } catch (err) {
       this.log.info(`research tracer run threw: ${err}`);
     }
   }
 
   /**
-   * Emit one child generation (`gate`/`extract`/`dedup`) under the run's parent, carrying the leaf data
-   * the orchestrator passes through from the migrated callers. Each wraps an LLM call, so every span is
-   * a generation (model/usage render for costing). No-op-safe; never throws (ADR-0021).
+   * Emit one child generation (`gate`/`extract`/`dedup`) under the run's still-open parent, carrying the
+   * leaf data the orchestrator passes through. Each wraps an LLM call, so every span is a generation
+   * (model/usage render for costing). No-op-safe; never throws (ADR-0021).
    */
   span(input: ResearchSpanInput): void {
     try {
-      const parentSpanContext = this.runRoots.get(input.runId);
+      const parentSpanContext = this.runRoots.get(input.runId)?.context;
       // Backdate the start so the span's duration reflects the measured generate latency.
       const startTime = input.latencyMs != null ? new Date(Date.now() - input.latencyMs) : undefined;
 
@@ -133,9 +139,32 @@ export class ResearchTracer implements OnApplicationShutdown {
     }
   }
 
-  // Flush in-flight spans before the process exits so the last spans before a redeploy/SIGTERM are not
-  // lost. The handle races the deadline and swallows failures so a flush error can never block shutdown.
+  /** Close the run's root observation once the run completes, so it exports and the tree is whole. */
+  endRun(runId: string): void {
+    try {
+      this.runRoots.get(runId)?.end();
+    } catch (err) {
+      this.log.info(`research tracer endRun threw: ${err}`);
+    } finally {
+      this.runRoots.delete(runId);
+    }
+  }
+
+  /**
+   * Push in-flight spans to Langfuse WITHOUT tearing the provider down — called per run so a long-lived
+   * (singleton) tracer flushes between runs. Deadline-bounded: a Langfuse that accepts the connection but
+   * never responds must not block the worker. Never throws.
+   */
+  async flush(): Promise<void> {
+    await Promise.race([
+      this.tracing.forceFlush(),
+      new Promise<void>((resolve) => setTimeout(resolve, flushTimeoutMs())),
+    ]);
+  }
+
+  // Flush + tear down on process exit. Ends any still-open run roots first so their trees aren't lost.
   async onApplicationShutdown(): Promise<void> {
+    for (const runId of [...this.runRoots.keys()]) this.endRun(runId);
     await this.tracing.shutdown(flushTimeoutMs());
   }
 }

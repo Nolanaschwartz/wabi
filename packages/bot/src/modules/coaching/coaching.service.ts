@@ -155,9 +155,14 @@ export class CoachingService {
         if (decision.isCapture) {
           await this.dmRouter.clearPending(userId);
         }
+        // Fail CLOSED on content: the trace-id export drop is the primary defense, but if it is ever
+        // defeated (e.g. the active trace id resolved empty so the latch key mismatches the span's real
+        // id), the verbatim crisis text must still never reach Langfuse. So gate the input by
+        // localFullFidelity exactly like retrieval/memory — prod carries no crisis content at all, dev
+        // keeps it for classifier debugging (ADR-0021/0024).
         this.langfuseTracer.traceObservation({
           name: 'classify',
-          input: batch,
+          input: this.langfuseTracer.localFullFidelity ? batch : '',
           output: 'crisis',
           kind: 'generation',
           latencyMs: classifyResult.latencyMs,

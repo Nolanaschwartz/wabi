@@ -62,6 +62,24 @@ describe('generate', () => {
     expect(generateText.mock.calls[0][0].experimental_telemetry).toBeUndefined();
   });
 
+  it('does NOT re-pass telemetry on the retry-on-empty attempt (one generation span per coach turn)', async () => {
+    // First attempt empty -> retry fires. Re-passing experimental_telemetry would emit a SECOND AI-SDK
+    // generation span (double cost + duplicate prompt/reply capture) for one logical turn.
+    generateText
+      .mockResolvedValueOnce({ text: '', usage: { totalTokens: 1 } })
+      .mockResolvedValueOnce({ text: 'recovered', usage: { totalTokens: 2 } });
+    const tracer = { __isolated: true } as any;
+    await generate('coach', {
+      prompt: 'p',
+      maxOutputTokens: 100,
+      retryOnEmpty: { temperature: 0.3 },
+      telemetry: { isEnabled: true, tracer, functionId: 'coach' },
+    });
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(generateText.mock.calls[0][0].experimental_telemetry).toBeDefined(); // first attempt traced
+    expect(generateText.mock.calls[1][0].experimental_telemetry).toBeUndefined(); // retry NOT traced
+  });
+
   it('normalises usage: only reported fields present, absent never coerced to zero', async () => {
     generateText.mockResolvedValue({ text: 'x', usage: { totalTokens: 50 } });
     const r = await generate('research', { prompt: 'p', maxOutputTokens: 100 });

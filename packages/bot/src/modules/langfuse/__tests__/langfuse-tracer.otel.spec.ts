@@ -20,6 +20,7 @@ describe('LangfuseTracer — OTEL crisis backstop + above-gate spans', () => {
   beforeEach(() => {
     process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-test';
     process.env.LANGFUSE_SECRET_KEY = 'sk-lf-test';
+    process.env.LANGFUSE_HOST = 'http://localhost:3999'; // self-hosted base url gates the exporter
     tracer = new LangfuseTracer();
     exporter = new InMemorySpanExporter();
     tracing = createLangfuseTracing({

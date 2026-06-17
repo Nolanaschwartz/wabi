@@ -70,7 +70,12 @@ export class OtelTracingService implements OnApplicationShutdown {
   }
 
   async onApplicationShutdown(): Promise<void> {
-    // Both the span exporter and the score client flush before the process exits (ADR-0038/0021).
-    await Promise.all([this.tracing.shutdown(flushTimeoutMs()), this.scorer.flush()]);
+    // Both the span exporter and the score client flush before the process exits (ADR-0038/0021). BOTH
+    // are deadline-bounded: a Langfuse endpoint that accepts the connection but never responds must not
+    // block process exit. tracing.shutdown races its own deadline; the scorer flush is raced here too.
+    const deadlineMs = flushTimeoutMs();
+    const bounded = (p: Promise<void>): Promise<void> =>
+      Promise.race([p.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, deadlineMs))]);
+    await Promise.all([this.tracing.shutdown(deadlineMs), bounded(this.scorer.flush())]);
   }
 }

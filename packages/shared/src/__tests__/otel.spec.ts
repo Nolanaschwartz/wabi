@@ -1,6 +1,7 @@
 import {
   createLangfuseTracing,
   createLangfuseScorer,
+  resolveLangfuseBaseUrl,
   startActiveObservation,
   getActiveTraceId,
 } from '../otel';
@@ -71,6 +72,7 @@ describe('createLangfuseTracing', () => {
   it('forwards a custom exporter and exports only spans passing shouldExportSpan, flushed on demand', async () => {
     process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-test';
     process.env.LANGFUSE_SECRET_KEY = 'sk-lf-test';
+    process.env.LANGFUSE_HOST = 'http://localhost:3999'; // self-hosted base url gates the exporter
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
@@ -96,6 +98,44 @@ describe('createLangfuseTracing', () => {
     const names = exporter.getFinishedSpans().map((s: { name: string }) => s.name);
     expect(names).toContain('keep');
     expect(names).not.toContain('drop');
+  });
+
+  it('does NOT export when creds are present but no self-hosted base URL is configured (no cloud egress)', async () => {
+    // Privacy by construction (ADR-0002/0017): without LANGFUSE_HOST/BASE_URL the SDK would default to
+    // cloud.langfuse.com, so the exporting processor must NOT be attached — nothing leaves infra.
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-test';
+    process.env.LANGFUSE_SECRET_KEY = 'sk-lf-test';
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_BASE_URL;
+    delete process.env.LANGFUSE_BASEURL;
+
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { InMemorySpanExporter } = require('@opentelemetry/sdk-trace-base');
+    const exporter = new InMemorySpanExporter();
+    const tracing = createLangfuseTracing({
+      serviceName: 'wabi-test',
+      sampleRate: 1,
+      exporter,
+      shouldExportSpan: () => true,
+    });
+
+    tracing.tracer.startSpan('turn').end();
+    await tracing.forceFlush();
+
+    expect(exporter.getFinishedSpans()).toEqual([]); // processor not attached → no export
+  });
+
+  it('resolveLangfuseBaseUrl prefers self-hosted LANGFUSE_HOST, falls back to LANGFUSE_BASE_URL, else undefined', () => {
+    delete process.env.LANGFUSE_HOST;
+    delete process.env.LANGFUSE_BASE_URL;
+    delete process.env.LANGFUSE_BASEURL;
+    expect(resolveLangfuseBaseUrl()).toBeUndefined();
+
+    process.env.LANGFUSE_BASE_URL = 'http://base';
+    expect(resolveLangfuseBaseUrl()).toBe('http://base');
+
+    process.env.LANGFUSE_HOST = 'http://self-hosted:3000';
+    expect(resolveLangfuseBaseUrl()).toBe('http://self-hosted:3000'); // HOST wins over BASE_URL
   });
 
   it('produces valid (non-zero) trace ids even when degraded, for log correlation', () => {

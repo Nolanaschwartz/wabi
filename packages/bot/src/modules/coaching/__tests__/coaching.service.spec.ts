@@ -398,13 +398,15 @@ describe('CoachingService', () => {
     expect(mockMessage.reply).toHaveBeenCalledWith(crisisPayload);
     expect(coach.generateDetailed).not.toHaveBeenCalled();
     expect(burstCoalescer.cancel).toHaveBeenCalled();
-    // The turn is crisis-latched synchronously so the OTEL export filter drops the whole tree (ADR-0024),
-    // and the classify observation is emitted (its content is dropped at export in prod, retained in dev).
+    // The turn is crisis-latched synchronously so the OTEL export filter drops the whole tree (ADR-0024).
+    // The classify observation is emitted, but FAIL-CLOSED on content: when not in local full fidelity
+    // (the mock leaves localFullFidelity falsy, i.e. prod) the raw crisis text is held back (input ''),
+    // so even if the trace-id export drop is defeated, no crisis content can leak.
     expect(langfuseTracer.latchCrisis).toHaveBeenCalled();
     expect(langfuseTracer.traceObservation).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'classify',
-        input: 'batch',
+        input: '',
         output: 'crisis',
       }),
     );

@@ -49,14 +49,28 @@ function noopHandle(serviceName: string): LangfuseTracing {
   return { tracer: trace.getTracer(serviceName), forceFlush: async () => {}, shutdown: async () => {} };
 }
 
+/**
+ * The self-hosted Langfuse base URL. Wabi configures the self-hosted instance via `LANGFUSE_HOST`, but
+ * the Langfuse v5 SDK only reads `LANGFUSE_BASE_URL`/`LANGFUSE_BASEURL` and otherwise defaults to
+ * `https://cloud.langfuse.com`. Resolve `LANGFUSE_HOST` FIRST so personal data never egresses to the
+ * public cloud (privacy by construction, ADR-0002/0017). Returns undefined when no self-hosted host is
+ * configured — callers treat that as "do not export" rather than silently falling back to the cloud.
+ */
+export function resolveLangfuseBaseUrl(): string | undefined {
+  return process.env.LANGFUSE_HOST || process.env.LANGFUSE_BASE_URL || process.env.LANGFUSE_BASEURL || undefined;
+}
+
 export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): LangfuseTracing {
   const { serviceName, sampleRate, shouldExportSpan, exporter } = opts;
 
   // We always build a real isolated provider (real, non-zero OTEL trace ids for log correlation),
-  // even when degraded. The exporting `LangfuseSpanProcessor` is attached only when creds are present
-  // — without it, spans get valid ids and a deterministic sampling decision but are never exported.
-  // Fail-open (ADR-0021): the processor reads LANGFUSE_PUBLIC_KEY/SECRET_KEY from env.
-  const hasCreds = !!process.env.LANGFUSE_PUBLIC_KEY && !!process.env.LANGFUSE_SECRET_KEY;
+  // even when degraded. The exporting `LangfuseSpanProcessor` is attached only when creds AND an
+  // explicit self-hosted base URL are present — never the SDK's cloud.langfuse.com default, which would
+  // egress personal data (ADR-0002/0017). Without the processor, spans get valid ids and a deterministic
+  // sampling decision but are never exported. Fail-open (ADR-0021).
+  const baseUrl = resolveLangfuseBaseUrl();
+  const hasCreds =
+    !!process.env.LANGFUSE_PUBLIC_KEY && !!process.env.LANGFUSE_SECRET_KEY && !!baseUrl;
 
   try {
     // Active-span propagation (so startActiveObservation makes the `turn` active and children nest
@@ -68,7 +82,7 @@ export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): Langf
     context.setGlobalContextManager(contextManager);
 
     const spanProcessors = hasCreds
-      ? [new LangfuseSpanProcessor({ shouldExportSpan, exporter })]
+      ? [new LangfuseSpanProcessor({ shouldExportSpan, exporter, baseUrl })]
       : [];
     const provider = new NodeTracerProvider({
       sampler: new TraceIdRatioBasedSampler(sampleRate),
@@ -106,10 +120,16 @@ export function createLangfuseTracing(opts: CreateLangfuseTracingOptions): Langf
  * Content-free per-turn quality scoring via the official `@langfuse/client` (ADR-0038).
  *
  * Scores post to the scores endpoint independent of the span sampler, so every turn is scored even
- * when its spans are sampled out. They are emitted below the crisis gate (inherently non-crisis), so
- * no crisis gating is needed here — and the `turn` root already creates the trace, so no content-free
- * trace-upsert hack. The `id` (`${traceId}-${name}`) preserves idempotency. Fail-open (ADR-0021):
- * missing `LANGFUSE_*` creds or any error yields a no-op scorer.
+ * when its spans are sampled out — aggregate SLA/quality rates (the ADR-0014 purpose) stay complete.
+ * They are emitted below the crisis gate (inherently non-crisis), so no crisis gating is needed here.
+ * The `id` (`${traceId}-${name}`) preserves idempotency. Fail-open (ADR-0021): missing creds/base URL
+ * or any error yields a no-op scorer.
+ *
+ * KNOWN LIMITATION (by design): under prod head sampling (~10%), a score may reference a trace whose
+ * spans were sampled out, so its Langfuse UI drill-through is empty. This is cosmetic — scores live in
+ * their own store and aggregate independently of trace ingestion. A content-free trace upsert is not
+ * re-introduced because v5 has no cheap client-side trace create (traces are born from exported spans);
+ * fixing drill-through would require a sampling redesign (always-export content-free roots), out of scope.
  */
 export interface LangfuseScorer {
   score(params: { traceId: string; name: string; value: number }): void;
@@ -135,9 +155,12 @@ export function createLangfuseScorer(opts?: { client?: ScoreClientLike }): Langf
 
   let client = opts?.client;
   if (!client) {
-    if (!process.env.LANGFUSE_PUBLIC_KEY || !process.env.LANGFUSE_SECRET_KEY) return noop;
+    // Same self-hosted gate as the span exporter: require creds AND an explicit base URL so scores never
+    // post to the SDK's cloud.langfuse.com default (ADR-0002/0017).
+    const baseUrl = resolveLangfuseBaseUrl();
+    if (!process.env.LANGFUSE_PUBLIC_KEY || !process.env.LANGFUSE_SECRET_KEY || !baseUrl) return noop;
     try {
-      client = new LangfuseClient() as unknown as ScoreClientLike;
+      client = new LangfuseClient({ baseUrl }) as unknown as ScoreClientLike;
     } catch {
       return noop;
     }
