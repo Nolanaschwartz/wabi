@@ -25,12 +25,21 @@ export interface SpokeCatalogueEntry {
  */
 export type SpokeCatalogue = SpokeCatalogueEntry[];
 
+/**
+ * Arguments the router extracted for the chosen tool. A per-tool bag — for now just the mood rating,
+ * the only tool that takes arguments. Validated in {@link IntentRouterService.parse} (the trust
+ * boundary) before it can reach a spoke writer; grows by tool, NOT into a generic arg-schema framework.
+ */
+export type ToolArgs = { rating?: number };
+
 export interface IntentResult {
   intent: Intent;
   /** Model confidence in [0, 1]. 0 means "no usable signal" (fail-soft default). */
   confidence: number;
   /** The chosen spoke tool. Present only when the verdict carried a tool the catalogue recognises. */
   tool?: string;
+  /** Validated arguments for the chosen tool. Present only when the verdict carried valid ones. */
+  args?: ToolArgs;
 }
 
 /**
@@ -113,6 +122,9 @@ export class IntentRouterService {
       'tool names the specific action within the chosen intent. Options by intent:',
       toolLines,
       'Include "tool" only when confident which action fits; otherwise omit it.',
+      // mood is the only tool that takes arguments; a static line keeps the catalogue arg-free.
+      'For "log_mood", include "args": {"rating": <1-5 integer>} when the person states their rating ' +
+        '(digits or words like "four"). Omit "args" when they give no rating.',
     ].join('\n');
   }
 
@@ -128,7 +140,7 @@ export class IntentRouterService {
       return FAIL_SOFT;
     }
 
-    const obj = parsed as { intent?: unknown; confidence?: unknown; tool?: unknown };
+    const obj = parsed as { intent?: unknown; confidence?: unknown; tool?: unknown; args?: unknown };
     const intent = obj.intent;
     const confidence = obj.confidence;
 
@@ -143,6 +155,15 @@ export class IntentRouterService {
     // tool is dropped, and the spoke's own default tool takes over downstream.
     if (typeof obj.tool === 'string' && entry.tools.some((t) => t.name === obj.tool)) {
       result.tool = obj.tool;
+    }
+    // Tool ARGUMENTS — the trust boundary on the LLM number. Only log_mood takes args, and only an
+    // integer 1–5 survives; anything else (out of range, non-integer, non-number, missing/malformed)
+    // is dropped, so the spoke falls back to its regex/prompt path. Fail-soft, like the tool drop.
+    if (result.tool === 'log_mood' && obj.args && typeof obj.args === 'object') {
+      const rating = (obj.args as { rating?: unknown }).rating;
+      if (typeof rating === 'number' && Number.isInteger(rating) && rating >= 1 && rating <= 5) {
+        result.args = { rating };
+      }
     }
     return result;
   }

@@ -1,5 +1,5 @@
 import type { DmTurnContext } from './coach-handler';
-import type { Intent } from '../intent-router/intent-router.service';
+import type { Intent, ToolArgs } from '../intent-router/intent-router.service';
 
 /** The access tier a tool requires at the tool boundary (ADR-0011): own-data reads 'any', writes 'active'. */
 export type AccessTier = 'any' | 'active';
@@ -45,8 +45,12 @@ export interface Spoke {
    * coach-fallback or no-tool turn.
    */
   readonly defaultTool: string;
-  /** Run a fresh turn the router routed here, on the named tool. Unknown tools fall to the spoke's safe default. */
-  invoke(tool: string, ctx: DmTurnContext): Promise<SpokeResult>;
+  /**
+   * Run a fresh turn the router routed here, on the named tool, with any tool arguments the router
+   * extracted (only mood reads them today; other spokes ignore the param). Unknown tools fall to the
+   * spoke's safe default.
+   */
+  invoke(tool: string, ctx: DmTurnContext, args?: ToolArgs): Promise<SpokeResult>;
   /** Continue a floor-held capture this spoke armed; `fallthrough` when the floor lapsed. */
   resume(ctx: DmTurnContext): Promise<SpokeResult>;
 }

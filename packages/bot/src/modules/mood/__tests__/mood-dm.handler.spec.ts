@@ -43,6 +43,44 @@ describe('MoodDmHandler', () => {
       expect(result).toEqual({ kind: 'handled' });
     });
 
+    // Tier 1: the router extracted the rating as a tool argument → log in one shot, no floor, no regex.
+    it('invoke logs the router-extracted rating in one shot (no prompt, no floor)', async () => {
+      const result = await handler.invoke('log_mood', ctx({ batch: 'set my mood to four' }), { rating: 4 });
+
+      expect(mood.create).toHaveBeenCalledWith('123', { rating: 4, emoji: expect.any(String) });
+      expect(spokeSession.setActive).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'handled' });
+    });
+
+    // Tier 2: no router arg, but the message itself carries a 1–5 → the regex still one-shots it.
+    it('invoke falls back to the batch regex when no router arg is given', async () => {
+      const result = await handler.invoke('log_mood', ctx({ batch: 'set my mood to 5' }));
+
+      expect(mood.create).toHaveBeenCalledWith('123', { rating: 5, emoji: expect.any(String) });
+      expect(spokeSession.setActive).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'handled' });
+    });
+
+    // Tier 3: neither arg nor a parseable number → prompt and arm the floor (the original behaviour).
+    it('invoke prompts when neither a router arg nor a batch number is present', async () => {
+      const result = await handler.invoke('log_mood', ctx({ batch: 'log my mood please' }));
+
+      expect(mood.create).not.toHaveBeenCalled();
+      expect(spokeSession.setActive).toHaveBeenCalledWith('123', 'mood');
+      expect(result).toEqual({ kind: 'handled' });
+    });
+
+    // The one-shot path produces the SAME confirmation as the two-turn capture (one writer).
+    it('invoke confirms a one-shot log with the (n/5) line and 7-day trend', async () => {
+      mood.trend.mockResolvedValue(3.4);
+      const c = ctx({ batch: 'set my mood to four' });
+
+      await handler.invoke('log_mood', c, { rating: 4 });
+
+      expect(c.message.reply).toHaveBeenCalledWith(expect.stringContaining('4/5'));
+      expect(c.message.reply).toHaveBeenCalledWith(expect.stringContaining('3.4'));
+    });
+
     it('resume consumes the floor and logs the rating when claimed', async () => {
       spokeSession.consume.mockResolvedValue('mood');
       const c = ctx({ batch: 'feeling like a 4' });

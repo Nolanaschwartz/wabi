@@ -172,6 +172,48 @@ describe('IntentRouterService', () => {
     expect(typeof opts.prompt).toBe('string');
   });
 
+  // Tool ARGUMENTS — the router extracts log_mood's rating so the mood spoke can log in one shot.
+  // parse() is the trust boundary: the LLM number is clamped (integer, 1–5) before it can reach the DB.
+  it('extracts args.rating for a valid 1–5 on log_mood', async () => {
+    generate.mockResolvedValue(reply('{"intent":"mood","confidence":0.95,"tool":"log_mood","args":{"rating":4}}'));
+
+    const result = await route('set my mood to four');
+
+    expect(result).toEqual({ intent: 'mood', confidence: 0.95, tool: 'log_mood', args: { rating: 4 } });
+  });
+
+  it.each([
+    ['0 (below range)', '{"intent":"mood","confidence":0.9,"tool":"log_mood","args":{"rating":0}}'],
+    ['6 (above range)', '{"intent":"mood","confidence":0.9,"tool":"log_mood","args":{"rating":6}}'],
+    ['2.5 (non-integer)', '{"intent":"mood","confidence":0.9,"tool":"log_mood","args":{"rating":2.5}}'],
+    ['"4" (string, not number)', '{"intent":"mood","confidence":0.9,"tool":"log_mood","args":{"rating":"4"}}'],
+    ['malformed args (no rating)', '{"intent":"mood","confidence":0.9,"tool":"log_mood","args":{"foo":1}}'],
+  ])('drops the rating when it is %s', async (_label, json) => {
+    generate.mockResolvedValue(reply(json));
+
+    const result = await route('mood thing');
+
+    expect(result).toEqual({ intent: 'mood', confidence: 0.9, tool: 'log_mood' });
+  });
+
+  it('ignores args entirely when the chosen tool is not log_mood', async () => {
+    generate.mockResolvedValue(reply('{"intent":"journal","confidence":0.9,"tool":"save_entry","args":{"rating":4}}'));
+
+    const result = await route('journal: had a 4 kind of day');
+
+    expect(result).toEqual({ intent: 'journal', confidence: 0.9, tool: 'save_entry' });
+  });
+
+  it('includes the log_mood args instruction in the generated system prompt', async () => {
+    generate.mockResolvedValue(reply('{"intent":"coach","confidence":0.9}'));
+
+    await route('hey');
+
+    const system = generate.mock.calls[0][1].system as string;
+    expect(system).toMatch(/log_mood/);
+    expect(system).toMatch(/rating/);
+  });
+
   it('fails soft to coach/0 on an unknown intent label', async () => {
     generate.mockResolvedValue(reply('{"intent":"billing","confidence":0.99}'));
 
