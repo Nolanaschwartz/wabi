@@ -15,7 +15,7 @@ const TIER_MAP: Record<string, EvidenceTier> = {
 
 /** Strip a ```json … ``` (or bare ``` … ```) fence some models wrap JSON in, so JSON.parse sees the
  * object. Returns the inner content trimmed, or the input unchanged when there is no fence. */
-function stripFences(s: string): string {
+export function stripFences(s: string): string {
   const m = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return (m ? m[1] : s).trim();
 }

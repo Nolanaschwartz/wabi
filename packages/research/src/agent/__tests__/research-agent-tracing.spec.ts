@@ -50,8 +50,8 @@ function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
     seen: jest.fn().mockResolvedValue(false),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1, trace: { input: 'A1', output: 'yes', model: 'm', latencyMs: 2 } }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({
-      candidate: candidate(p.sourceId.replace('PMID:', '')), tokens: 10,
-      trace: { input: 'body', output: '{json}', model: 'm', latencyMs: 5 },
+      candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10,
+      traces: [{ input: 'body', output: '{json}', model: 'm', latencyMs: 5 }],
     })),
     dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0, trace: { input: 'A vs B', output: 'different', model: 'm', latencyMs: 1 } }),
     ...over,
@@ -95,7 +95,7 @@ describe('ResearchAgent tracing', () => {
 
   it('does not emit a dedup span when extract produced no candidate', async () => {
     const tracer = fakeTracer();
-    const deps = baseDeps({ extract: jest.fn().mockResolvedValue({ candidate: null, tokens: 3, trace: { input: 'body', output: 'null' } }) });
+    const deps = baseDeps({ extract: jest.fn().mockResolvedValue({ candidates: [], tokens: 3, traces: [{ input: 'body', output: 'null' }] }) });
     const agent = new ResearchAgent(deps, bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);

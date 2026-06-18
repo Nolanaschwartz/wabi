@@ -7,7 +7,7 @@ import { PubMedTool } from '../sources/pubmed';
 import { MedrxivTool } from '../sources/medrxiv';
 import { PsyArxivTool } from '../sources/psyarxiv';
 import { relevanceGate } from '../agent/relevance-gate';
-import { extract } from '../agent/extract';
+import { extractWithLenses } from '../agent/extract-with-lenses';
 import { isDuplicateInRun } from '../agent/dedup';
 import { ResearchAgent } from '../agent/research-agent';
 import { ResearchTracer } from '../agent/research-tracer';
@@ -147,7 +147,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
+        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract: extractWithLenses, dedup: isDuplicateInRun },
         bounds,
         log,
         { tracer, runId },

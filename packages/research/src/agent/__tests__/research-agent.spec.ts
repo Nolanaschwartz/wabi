@@ -56,7 +56,7 @@ function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind
     sources,
     seen: jest.fn().mockResolvedValue(false),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
-    extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidate: candidate(p.sourceId.replace('PMID:', '')), tokens: 10 })),
+    extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
     dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0 }),
     ...over,
   };
@@ -166,7 +166,7 @@ describe('ResearchAgent', () => {
 
   it('falls back to the abstract when psyarxiv.fullText returns null', async () => {
     const extract = jest.fn().mockImplementation((p: Paper, body: string) =>
-      Promise.resolve({ candidate: { ...candidate('g1'), sourceText: body }, tokens: 1 }));
+      Promise.resolve({ candidates: [{ ...candidate('g1'), sourceText: body }], tokens: 1, traces: [] }));
     const deps = baseDeps({ extract }, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
       psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: jest.fn().mockResolvedValue(null) }),
@@ -174,7 +174,7 @@ describe('ResearchAgent', () => {
     const agent = new ResearchAgent(deps, bounds);
     await agent.run('topic');
     // extract received the abstract (PAg1) as the body, proving the abstract fallback path.
-    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' }), 'PAg1');
+    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' }), 'PAg1', expect.any(Array));
   });
 
   it('logs a swallowed psyarxiv search failure instead of aborting the run', async () => {
@@ -191,11 +191,35 @@ describe('ResearchAgent', () => {
     expect(fail![1]).toMatchObject({ err: 'OSF HTTP 503' });
   });
 
+  it('collects every distinct candidate one paper yields across lenses', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5, traces: [] });
+    const deps = baseDeps({ extract }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const { candidates, summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
+    expect(candidates).toHaveLength(2);
+    expect(summary.extracted).toBe(2);
+  });
+
+  it('fans a peer-reviewed paper across all five lenses', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 1, traces: [] });
+    const deps = baseDeps({ extract }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    await new ResearchAgent(deps, bounds).run('topic');
+    expect(extract.mock.calls[0][2]).toEqual(['behavioral', 'cognitive', 'social', 'environmental', 'physiological']);
+  });
+
+  it('collapses to a single lens under token-budget pressure (lenses fall before papers)', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 0, traces: [] });
+    // gate pre-spends 85 of a 100 budget, so <20% remains when the paper reaches extract.
+    const deps = baseDeps({ extract, gate: jest.fn().mockResolvedValue({ keep: true, tokens: 85 }) },
+      { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    await new ResearchAgent(deps, { ...bounds, tokenBudget: 100 }).run('topic');
+    expect(extract.mock.calls[0][2]).toHaveLength(1);
+  });
+
   it('continues when one paper errors (fail-open-empty)', async () => {
     const deps = baseDeps({
       extract: jest.fn()
         .mockRejectedValueOnce(new Error('boom'))
-        .mockImplementation((p: Paper) => Promise.resolve({ candidate: candidate(p.sourceId.replace('PMID:', '')), tokens: 10 })),
+        .mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
     });
     const agent = new ResearchAgent(deps, bounds);
     const { summary } = await agent.run('topic');

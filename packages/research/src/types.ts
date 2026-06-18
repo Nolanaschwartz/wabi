@@ -4,6 +4,10 @@ export type SourceKind = 'pubmed' | 'medrxiv' | 'psyarxiv';
  * weakest; drives the per-tier judge floor + cap (slice 05) and future retrieval re-ranking. */
 export type EvidenceTier = 'meta-analysis' | 'systematic-review' | 'rct' | 'observational' | 'preprint';
 
+/** Extraction lens — the angle a technique was surfaced through. Carried as in-flight provenance on a
+ * Candidate; slice 04 collapses agreeing lenses into a persisted lenses[] + lensAgreement count. */
+export type Lens = 'behavioral' | 'cognitive' | 'social' | 'environmental' | 'physiological';
+
 export interface Paper {
   sourceId: string;     // "PMID:12345" | "doi:10.1101/..." | "osf:<guid>"
   sourceKind: SourceKind;
@@ -25,6 +29,7 @@ export interface Candidate {
   sourceId: string;
   sourceKind: SourceKind;
   trustLevel: 'research-agent';
+  lens?: Lens;             // in-flight provenance: which lens surfaced this technique
 }
 
 export interface Bounds {
