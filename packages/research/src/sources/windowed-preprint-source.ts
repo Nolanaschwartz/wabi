@@ -6,17 +6,12 @@ import { contentTerms, minMatch, scoreRecord } from './term-match';
 import { fetchAndParsePdf } from './pdf';
 import { SourceConfig, loadSourceConfig } from '../config';
 
-/** Sources this core serves: the windowed preprint corpora (medRxiv, PsyArXiv). PubMed is id-based,
- * not window-scanned, so it is NOT one of these (ADR-0036). */
-type WindowedKind = 'medrxiv' | 'psyarxiv';
-
 /** Everything a {@link PreprintSpec} hook needs from the core: the shared fetch + rate limiter, the
- * resolved tuning caps, and the PDF parser. Built once per source and handed to every hook call. */
+ * resolved tuning caps, and the logger. Built once per source and handed to every hook call. */
 export interface PreprintCtx {
   fetchFn: typeof fetch;
   schedule: <T>(fn: () => Promise<T>) => Promise<T>; // the source's RateLimiter.schedule
   caps: SourceConfig;
-  parsePdf?: (buf: Uint8Array) => Promise<string>;
   log: Logger;
 }
 
@@ -65,17 +60,20 @@ export class WindowedPreprintSource<R> implements Source {
   private readonly caps: SourceConfig;
   private readonly now: () => Date;
   private readonly log: Logger;
+  private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
   private readonly ctx: PreprintCtx;
   // The fetched window, cached so every topic in a run filters the SAME records without re-paginating.
-  // `byId` indexes the raw records by their Paper sourceId so fullText can look the record back up.
-  private cache: { key: string; records: R[]; byId: Map<string, R> } | null = null;
+  // Indexed by Paper sourceId (Map keeps insertion order, so it doubles as the record list) so
+  // fullText can look the raw record back up.
+  private cache: { key: string; byId: Map<string, R> } | null = null;
 
   constructor(private readonly spec: PreprintSpec<R>, deps: PreprintDeps = {}) {
-    const cfg = loadSourceConfig(spec.kind as WindowedKind);
+    const cfg = loadSourceConfig(spec.kind as 'medrxiv' | 'psyarxiv');
     this.kind = spec.kind;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 1000);
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? noopLogger;
+    this.parsePdf = deps.parsePdf;
     this.caps = {
       windowDays: deps.windowDays ?? cfg.windowDays,
       maxRecords: deps.maxRecords ?? cfg.maxRecords,
@@ -87,7 +85,6 @@ export class WindowedPreprintSource<R> implements Source {
       fetchFn: deps.fetchFn ?? fetch,
       schedule: (fn) => this.limiter.schedule(fn),
       caps: this.caps,
-      parsePdf: deps.parsePdf,
       log: this.log,
     };
   }
@@ -97,27 +94,27 @@ export class WindowedPreprintSource<R> implements Source {
   }
 
   /** Fetch (or reuse) the recent window for the current clock, memoized by its date key. */
-  private async window(): Promise<{ records: R[]; byId: Map<string, R> }> {
+  private async window(): Promise<Map<string, R>> {
     const to = this.now();
     const from = new Date(to.getTime() - this.caps.windowDays * 86_400_000);
     const key = `${this.fmt(from)}/${this.fmt(to)}`;
-    if (this.cache?.key === key) return this.cache;
+    if (this.cache?.key === key) return this.cache.byId;
 
     const records = await this.spec.fetchWindow(this.fmt(from), this.fmt(to), this.ctx);
     const byId = new Map<string, R>();
     for (const r of records) byId.set(this.spec.toPaper(r).sourceId, r);
-    this.cache = { key, records, byId };
-    return this.cache;
+    this.cache = { key, byId };
+    return byId;
   }
 
   /** Keep records containing ENOUGH of the query's content terms, ranked by how many match, capped to
    * `limit`. Shared scoring (term-match.ts) so every windowed source ranks identically. */
   async search(query: string, limit: number): Promise<Paper[]> {
-    const { records } = await this.window();
+    const byId = await this.window();
     const terms = contentTerms(query);
     const need = minMatch(terms.length, this.caps.minTermFraction);
 
-    return records
+    return [...byId.values()]
       .map((r) => {
         const paper = this.spec.toPaper(r);
         return { paper, score: scoreRecord(`${paper.title} ${paper.abstract}`, terms) };
@@ -145,7 +142,7 @@ export class WindowedPreprintSource<R> implements Source {
       schedule: this.ctx.schedule,
       maxPdfBytes: this.caps.maxPdfBytes,
       maxTextChars: this.caps.maxTextChars,
-      parsePdf: this.ctx.parsePdf,
+      parsePdf: this.parsePdf,
       log: this.log,
     });
   }
