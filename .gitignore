@@ -44,5 +44,5 @@ __pycache__/
 
 graphify-out/
 
-# Local Railway ops helper (not for VCS)
-lf-toggle.sh
+# Local Railway ops helpers (not for VCS)
+*-toggle.sh
