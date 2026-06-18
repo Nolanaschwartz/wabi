@@ -5,8 +5,10 @@ import { safeFetch } from '../../lib/safe-fetch';
 
 const COLLECTION_NAME = 'wabi_strategies';
 // The personal/strategy embedding dimensionality, in ONE place (also imported by the integration
-// test so the two can't drift). If the embedding model changes, this is the single edit.
-export const VECTOR_SIZE = 768;
+// test so the two can't drift). Defaults to 768 (local bge/nomic); override via EMBEDDING_DIM when
+// the embedding model's output size differs (e.g. a 2048-dim hosted model). Changing this requires
+// recreating the qdrant collection, which is sized at creation.
+export const VECTOR_SIZE = Number(process.env.EMBEDDING_DIM) || 768;
 
 export interface StrategyPoint {
   id: string;
@@ -123,7 +125,12 @@ export class StrategyRetrievalService {
       `${config.baseUrl}/v1/embeddings`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Hosted, OpenAI-compatible providers (e.g. OpenRouter) require a Bearer key; a local
+          // keyless embedder leaves apiKey empty, in which case we omit the header.
+          ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+        },
         body: JSON.stringify({
           model: config.model,
           input: text,

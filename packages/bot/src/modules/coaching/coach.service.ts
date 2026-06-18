@@ -44,7 +44,7 @@ export class CoachService {
         system,
         prompt,
         temperature: 0.7,
-        maxOutputTokens: 2048,
+        maxOutputTokens: Number(process.env.COACH_MAX_OUTPUT_TOKENS) || 2048,
         retryOnEmpty: { temperature: 0.3 },
         // Below the crisis gate: the AI SDK auto-captures model/usage/latency (and prompt+reply when
         // recordInputs/Outputs are set) to the isolated Langfuse tracer. Above-gate callers omit this.

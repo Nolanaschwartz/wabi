@@ -21,7 +21,9 @@ export interface ClassifierContext {
 // Reasoning models (e.g. qwopus-3.6) burn output tokens on hidden reasoning before printing the
 // verdict. A 10-token cap left content empty for every message. 256 was the reliable floor against
 // qwopus-3.6; 512 gives margin without meaningfully slowing the turn.
-const CLASSIFIER_MAX_OUTPUT_TOKENS = 512;
+// Env-overridable: a reasoning model on a hosted provider may need a much larger cap so hidden
+// reasoning tokens don't crowd out the verdict (empty verdict -> fail-to-crisis on every message).
+const CLASSIFIER_MAX_OUTPUT_TOKENS = Number(process.env.CLASSIFIER_MAX_OUTPUT_TOKENS) || 512;
 
 // Sharpened from the original. The crisis criteria are unchanged in strength (genuine self-harm /
 // suicide intent / severe distress about being alive), and the fail-closed clause is retained but

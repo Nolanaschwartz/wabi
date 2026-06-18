@@ -44,7 +44,9 @@ export interface IntentContext {
 /** The fail-soft verdict: when in any doubt, fall through to coaching. Never a safety surface. */
 const FAIL_SOFT: IntentResult = { intent: 'coach', confidence: 0 };
 
-const ROUTER_MAX_OUTPUT_TOKENS = 256;
+// Env-overridable for reasoning models that spend output tokens on hidden reasoning before the
+// verdict. Fails soft to coach, so a too-small cap degrades routing rather than safety.
+const ROUTER_MAX_OUTPUT_TOKENS = Number(process.env.ROUTER_MAX_OUTPUT_TOKENS) || 256;
 
 /**
  * Stateless inference seam that classifies a DM's intent so the DM router can dispatch it. It is NOT a
