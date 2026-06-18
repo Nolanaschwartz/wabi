@@ -67,9 +67,12 @@ export class StrategyAdminService {
     });
   }
 
-  async submitDraft(draft: StrategyDraft): Promise<StrategyDraft> {
-    const result = await this.trustGate.evaluate(draft);
-    const wantsPublish = result.decision === 'publish';
+  /** Persist a draft, indexing first when the gate says publish. `decision` lets a caller that has
+   * already evaluated this draft (evaluateCandidate) reuse the verdict instead of paying for a second
+   * safety + faithfulness gate pass; standalone callers omit it and the gate runs here. */
+  async submitDraft(draft: StrategyDraft, decision?: EvaluationDecision): Promise<StrategyDraft> {
+    const verdict = decision ?? (await this.trustGate.evaluate(draft)).decision;
+    const wantsPublish = verdict === 'publish';
 
     // Index BEFORE declaring 'published', so a published Draft is always retrievable (ADR-0012). If
     // the index write fails, fall back to pending-review rather than persisting something invisible.
@@ -129,9 +132,9 @@ export class StrategyAdminService {
   /**
    * Evaluate ONE candidate without touching the ledger: library dedup → trust gate (which, for
    * research-agent, runs safety+faithfulness but can only queue or reject) → persist. The trust
-   * level is forced to 'research-agent' so this path can never auto-publish. Callers
-   * (ingestCandidate / ingestBatch) own the per-source ledger mark, since the ledger is keyed per
-   * source and one paper may now yield several drafts (ADR-0033).
+   * level is forced to 'research-agent' so this path can never auto-publish. ingestBatch owns the
+   * per-source ledger mark, since the ledger is keyed per source and one paper may now yield several
+   * drafts (ADR-0033).
    */
   private async evaluateCandidate(c: IngestCandidate): Promise<IngestResult> {
     if (await this.isDuplicate(c.title, c.technique)) {
@@ -155,13 +158,13 @@ export class StrategyAdminService {
     };
 
     // Evaluate up front so a safety/faithfulness rejection never persists (a reviewer must not see
-    // a failed draft). On non-reject, submitDraft re-evaluates and persists as pending-review.
+    // a failed draft). On non-reject we hand the verdict to submitDraft so the gate runs only once.
     const decision = await this.trustGate.evaluate(draft);
     if (decision.decision === 'reject') {
       return { status: 'rejected' };
     }
 
-    const persisted = await this.submitDraft(draft);
+    const persisted = await this.submitDraft(draft, decision.decision);
     return { status: 'submitted', draftId: persisted.id };
   }
 
@@ -175,6 +178,12 @@ export class StrategyAdminService {
     if (candidates.length === 0) return { results: [] };
 
     const { sourceId, sourceKind } = candidates[0];
+
+    // The ledger is marked once from candidates[0].sourceId, so the batch MUST be one paper. Reject a
+    // mixed-source batch at this HTTP boundary rather than silently leaving the other papers unmarked.
+    if (candidates.some((c) => c.sourceId !== sourceId)) {
+      throw new Error('ingestBatch requires a homogeneous sourceId (one paper per batch)');
+    }
 
     // Bot-side idempotency on the authoritative sourceId key. The worker's seen() check is an
     // optimization, not a guarantee; this hard gate prevents re-processing a paper from a prior

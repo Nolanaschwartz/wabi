@@ -617,4 +617,25 @@ describe('StrategyAdminService.ingestBatch', () => {
     expect(trustGate.evaluate).not.toHaveBeenCalled();
     expect(svc.markProcessed).not.toHaveBeenCalled();
   });
+
+  it('runs the trust gate exactly once per surviving draft (submitDraft reuses the decision)', async () => {
+    // evaluateCandidate evaluates up front to drop rejects before persisting; submitDraft must NOT
+    // re-run the gate (each eval is a safety + faithfulness LLM call, multiplied by fan-out).
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    (prisma.strategyDraft.create as jest.Mock).mockResolvedValue({ id: 'draft-1', status: 'pending-review' });
+    // submitDraft deliberately NOT mocked, so a redundant re-eval would show as a 2nd evaluate call.
+    await svc.ingestBatch([draftA] as any);
+    expect(trustGate.evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a batch whose candidates do not all share one sourceId (ledger is keyed per source)', async () => {
+    // The ingest/batch HTTP boundary trusts candidates[0].sourceId for the single ledger mark; a
+    // mixed-source batch would silently leave the other papers unmarked, so fail loud instead.
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    jest.spyOn(svc, 'submitDraft').mockResolvedValue({ id: 'd' } as any);
+    const mixed = [draftA, { ...draftB, sourceId: 'PMID:999' }];
+    await expect(svc.ingestBatch(mixed as any)).rejects.toThrow(/sourceId/);
+  });
 });
