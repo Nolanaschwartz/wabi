@@ -31,6 +31,27 @@ from mem0 import Memory
 
 from config import build_config
 
+# --- Patch: force float embedding encoding --------------------------------------------------
+# mem0's lmstudio embedder calls the OpenAI SDK without `encoding_format`, so the SDK defaults to
+# base64. Some OpenAI-compatible embedding models (e.g. OpenRouter's nvidia/* embedders) reject
+# base64 ("Nvidia embeddings do not support base64 encoding_format. Use float instead"), returning
+# 200 with empty data -> the SDK raises "No embedding data received". Force float so they work.
+from mem0.embeddings.lmstudio import LMStudioEmbedding  # noqa: E402
+
+
+def _embed_float(self, text, memory_action=None):
+    return (
+        self.client.embeddings.create(
+            input=[text], model=self.config.model, encoding_format="float"
+        )
+        .data[0]
+        .embedding
+    )
+
+
+LMStudioEmbedding.embed = _embed_float
+# --------------------------------------------------------------------------------------------
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 load_dotenv()
