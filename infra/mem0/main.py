@@ -31,25 +31,26 @@ from mem0 import Memory
 
 from config import build_config
 
-# --- Patch: force float embedding encoding --------------------------------------------------
+# --- Optional: override embedding encoding_format -------------------------------------------
 # mem0's lmstudio embedder calls the OpenAI SDK without `encoding_format`, so the SDK defaults to
-# base64. Some OpenAI-compatible embedding models (e.g. OpenRouter's nvidia/* embedders) reject
-# base64 ("Nvidia embeddings do not support base64 encoding_format. Use float instead"), returning
-# 200 with empty data -> the SDK raises "No embedding data received". Force float so they work.
-from mem0.embeddings.lmstudio import LMStudioEmbedding  # noqa: E402
+# base64. Some hosted OpenAI-compatible models (e.g. OpenRouter's nvidia/* embedders) reject base64
+# ("Use float instead") and return 200 with empty data -> the SDK raises "No embedding data
+# received". Set MEM0_EMBEDDER_ENCODING_FORMAT=float for those. UNSET (the local default) leaves
+# mem0's original behavior untouched, so local llama.cpp/vLLM embedding servers are unaffected.
+_EMBED_ENCODING_FORMAT = os.environ.get("MEM0_EMBEDDER_ENCODING_FORMAT")
+if _EMBED_ENCODING_FORMAT:
+    from mem0.embeddings.lmstudio import LMStudioEmbedding  # noqa: E402
 
-
-def _embed_float(self, text, memory_action=None):
-    return (
-        self.client.embeddings.create(
-            input=[text], model=self.config.model, encoding_format="float"
+    def _embed_with_format(self, text, memory_action=None):
+        return (
+            self.client.embeddings.create(
+                input=[text], model=self.config.model, encoding_format=_EMBED_ENCODING_FORMAT
+            )
+            .data[0]
+            .embedding
         )
-        .data[0]
-        .embedding
-    )
 
-
-LMStudioEmbedding.embed = _embed_float
+    LMStudioEmbedding.embed = _embed_with_format
 # --------------------------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
