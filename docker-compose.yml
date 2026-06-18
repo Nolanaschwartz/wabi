@@ -60,6 +60,9 @@ services:
       MEM0_EMBEDDER_MODEL: ${EMBEDDING_MODEL}
       MEM0_EMBEDDER_API_KEY: ${EMBEDDING_API_KEY:-not-needed}
       MEM0_EMBEDDING_DIMS: '768'
+      # Optional embedding encoding_format override; empty = mem0 default (base64). Set to `float`
+      # for hosted models that reject base64 (e.g. OpenRouter nvidia/* embedders). See .env.example.
+      MEM0_EMBEDDER_ENCODING_FORMAT: ${MEM0_EMBEDDER_ENCODING_FORMAT:-}
       # Vector store: self-hosted Qdrant (host+port; no api_key).
       MEM0_QDRANT_HOST: qdrant
       MEM0_QDRANT_PORT: '6333'
