@@ -13,6 +13,7 @@ export interface IngestCandidate {
   technique: string;
   source: string;
   evidence: string;
+  evidenceTier?: string;
   sourceText?: string;
   sourceUrl: string;
   sourceId: string;
@@ -79,6 +80,7 @@ export class StrategyAdminService {
         technique: draft.technique,
         source: draft.source,
         evidence: draft.evidence,
+        evidenceTier: draft.evidenceTier ?? null,
         sourceText: draft.sourceText ?? null,
         sourceUrl: draft.sourceUrl,
         trustLevel: draft.trustLevel,
@@ -133,6 +135,7 @@ export class StrategyAdminService {
       technique: c.technique,
       source: c.source,
       evidence: c.evidence,
+      evidenceTier: c.evidenceTier,
       sourceText: c.sourceText,
       sourceUrl: c.sourceUrl,
       trustLevel: 'research-agent',
@@ -300,6 +303,8 @@ export class StrategyAdminService {
       draft.id,
       `${draft.title}: ${draft.technique}`,
       draft.evidence,
+      undefined, // effectivenessScore (confidence) lands in slice 05
+      draft.evidenceTier,
     );
   }
 
@@ -344,6 +349,7 @@ export class StrategyAdminService {
       technique: row.technique,
       source: row.source,
       evidence: row.evidence,
+      evidenceTier: row.evidenceTier,
       sourceText: row.sourceText,
       sourceUrl: row.sourceUrl,
       trustLevel: row.trustLevel,

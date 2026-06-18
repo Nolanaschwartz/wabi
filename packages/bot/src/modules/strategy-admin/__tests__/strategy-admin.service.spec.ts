@@ -94,7 +94,29 @@ describe('StrategyAdminService', () => {
       '1',
       expect.stringContaining('Test technique'),
       'Test evidence',
+      undefined,
+      undefined,
     );
+  });
+
+  it('persists evidenceTier and writes it to the index on publish', async () => {
+    trustGate.evaluate.mockResolvedValue({ decision: 'publish', reason: 'ok' });
+    (prisma.strategyDraft.create as jest.Mock).mockResolvedValue({
+      id: '1', title: 'T', technique: 'Q', source: 'PubMed', evidence: 'peer-reviewed: RCT',
+      evidenceTier: 'rct', sourceText: null, sourceUrl: 'u', trustLevel: 'research-agent',
+      status: 'published', negativeCount: 0,
+    });
+
+    await service.submitDraft({
+      id: '1', title: 'T', technique: 'Q', source: 'PubMed', evidence: 'peer-reviewed: RCT',
+      evidenceTier: 'rct', sourceUrl: 'u', trustLevel: 'research-agent', status: 'draft',
+    });
+
+    expect(prisma.strategyDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ evidenceTier: 'rct' }) }),
+    );
+    // evidenceTier rides into the Qdrant payload (5th arg); confidence (4th) is still undefined here.
+    expect(retrieval.upsert).toHaveBeenCalledWith('1', expect.any(String), 'peer-reviewed: RCT', undefined, 'rct');
   });
 
   it('queues draft when decision is queue', async () => {
@@ -213,7 +235,7 @@ describe('StrategyAdminService', () => {
 
     const result = await service.approveDraft('1');
     expect(result?.status).toBe('published');
-    expect(retrieval.upsert).toHaveBeenCalledWith('1', expect.any(String), 'Test');
+    expect(retrieval.upsert).toHaveBeenCalledWith('1', expect.any(String), 'Test', undefined, undefined);
   });
 
   it('does NOT mark a draft published if the index upsert fails (published => retrievable)', async () => {
@@ -240,7 +262,7 @@ describe('StrategyAdminService', () => {
 
     const result = await service.reconcile();
 
-    expect(retrieval.upsert).toHaveBeenCalledWith('p1', expect.any(String), 'e');
+    expect(retrieval.upsert).toHaveBeenCalledWith('p1', expect.any(String), 'e', undefined, undefined);
     expect(retrieval.delete).toHaveBeenCalledWith('q1');
     expect(result).toEqual({ reindexed: 1, removed: 1 });
   });

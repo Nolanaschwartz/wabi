@@ -4,7 +4,7 @@
 // evidence tag — and its fail policy (failure/empty -> null).
 jest.mock('@wabi/shared/generate', () => ({ generate: jest.fn() }));
 
-import { extract, evidenceTag } from '../extract';
+import { extract, evidenceTag, evidenceTier } from '../extract';
 import { Paper } from '../../types';
 
 const paper: Paper = {
@@ -22,6 +22,20 @@ describe('evidenceTag', () => {
   });
   it('tags preprints', () => {
     expect(evidenceTag({ ...paper, isPreprint: true, pubTypes: [] })).toBe('preprint: not peer-reviewed');
+  });
+});
+
+describe('evidenceTier', () => {
+  it('maps each high-tier pub type to its structured tier', () => {
+    expect(evidenceTier({ ...paper, pubTypes: ['Meta-Analysis'] })).toBe('meta-analysis');
+    expect(evidenceTier({ ...paper, pubTypes: ['Systematic Review'] })).toBe('systematic-review');
+    expect(evidenceTier({ ...paper, pubTypes: ['Randomized Controlled Trial'] })).toBe('rct');
+  });
+  it('falls back to observational for peer-reviewed work with no high-tier type', () => {
+    expect(evidenceTier({ ...paper, pubTypes: ['Journal Article'] })).toBe('observational');
+  });
+  it('maps preprints to preprint regardless of pubTypes', () => {
+    expect(evidenceTier({ ...paper, isPreprint: true, pubTypes: ['Randomized Controlled Trial'] })).toBe('preprint');
   });
 });
 
@@ -47,6 +61,7 @@ describe('extract', () => {
     expect(r.candidate).not.toBeNull();
     expect(body).toContain(r.candidate!.sourceText);
     expect(r.candidate!.evidence).toBe('peer-reviewed: Randomized Controlled Trial');
+    expect(r.candidate!.evidenceTier).toBe('rct');
     expect(r.candidate!.trustLevel).toBe('research-agent');
     expect(r.candidate!.sourceId).toBe('PMID:1');
   });

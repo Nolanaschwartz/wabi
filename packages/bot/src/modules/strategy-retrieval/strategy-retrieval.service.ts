@@ -12,6 +12,7 @@ export interface StrategyPoint {
   id: string;
   content: string;
   evidence: string;
+  evidenceTier?: string;
   effectivenessScore?: number;
   score?: number;
 }
@@ -65,6 +66,7 @@ export class StrategyRetrievalService {
         id: String(point.id),
         content: (point.payload?.content as string) ?? '',
         evidence: (point.payload?.evidence as string) ?? '',
+        evidenceTier: point.payload?.evidenceTier as string | undefined,
         effectivenessScore: point.payload?.effectivenessScore as number,
         score: point.score as number,
       }));
@@ -80,6 +82,7 @@ export class StrategyRetrievalService {
     content: string,
     evidence: string,
     effectivenessScore?: number,
+    evidenceTier?: string,
   ): Promise<boolean> {
     try {
       const embedding = await this.embed(content);
@@ -91,6 +94,7 @@ export class StrategyRetrievalService {
             payload: {
               content,
               evidence,
+              evidenceTier,
               effectivenessScore,
             },
           },

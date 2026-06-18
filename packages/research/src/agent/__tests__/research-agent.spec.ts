@@ -18,7 +18,7 @@ function psyPaper(guid: string): Paper {
 }
 function candidate(id: string): Candidate {
   return { title: `Tech ${id}`, technique: `do ${id}`, sourceText: `A${id}`, evidence: 'peer-reviewed: RCT',
-    sourceUrl: `u${id}`, source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent' };
+    evidenceTier: 'rct', sourceUrl: `u${id}`, source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent' };
 }
 
 /** Fake PubMed Source: thin search hits, hydrate fills T/A/pubTypes, expand citation-graph (default none). */

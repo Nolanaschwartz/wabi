@@ -6,7 +6,7 @@ const bounds: Bounds = {
   maxDraftsPerRun: 3, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
 };
 const cand = (id: string): Candidate => ({
-  title: `t${id}`, technique: `q${id}`, sourceText: 's', evidence: 'e', sourceUrl: 'u',
+  title: `t${id}`, technique: `q${id}`, sourceText: 's', evidence: 'e', evidenceTier: 'rct', sourceUrl: 'u',
   source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent',
 });
 

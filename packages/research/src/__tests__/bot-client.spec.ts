@@ -1,7 +1,7 @@
 import { BotClient } from '../bot-client';
 
 const candidate = {
-  title: 't', technique: 'q', sourceText: 's', evidence: 'e', sourceUrl: 'u',
+  title: 't', technique: 'q', sourceText: 's', evidence: 'e', evidenceTier: 'rct' as const, sourceUrl: 'u',
   source: 'PubMed', sourceId: 'PMID:1', sourceKind: 'pubmed' as const, trustLevel: 'research-agent' as const,
 };
 

@@ -97,4 +97,23 @@ describe('StrategyRetrievalService', () => {
       }),
     );
   });
+
+  it('writes evidenceTier into the point payload (capture-now for future re-ranking)', async () => {
+    (global as any).fetch = jest.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ data: [{ embedding: new Array(768).fill(0.1) }] }), text: async () => '',
+    });
+    const mockUpsert = jest.fn().mockResolvedValue(true);
+    (service as any).qdrant.upsert = mockUpsert;
+
+    await service.upsert('strat_1', 'title: technique', 'peer-reviewed: RCT', 0.8, 'rct');
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      'wabi_strategies',
+      expect.objectContaining({
+        points: [expect.objectContaining({
+          payload: expect.objectContaining({ evidenceTier: 'rct', effectivenessScore: 0.8 }),
+        })],
+      }),
+    );
+  });
 });

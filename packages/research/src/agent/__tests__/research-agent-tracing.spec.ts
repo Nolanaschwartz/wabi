@@ -19,7 +19,7 @@ function pubmedThin(id: string): Paper {
 }
 function candidate(id: string): Candidate {
   return { title: `Tech ${id}`, technique: `do ${id}`, sourceText: `A${id}`, evidence: 'peer-reviewed: RCT',
-    sourceUrl: `u${id}`, source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent' };
+    evidenceTier: 'rct', sourceUrl: `u${id}`, source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent' };
 }
 function pubmedSource(over: Partial<Source> = {}): Source {
   return {
