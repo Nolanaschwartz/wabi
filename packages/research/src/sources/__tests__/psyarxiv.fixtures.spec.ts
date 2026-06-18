@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PsyArxivTool } from '../psyarxiv';
+import { createPsyArxivSource } from '../psyarxiv';
 import { Paper } from '../../types';
 
 /** A PsyArXiv paper as fullText() now takes it — only sourceId is read. */
@@ -59,7 +59,7 @@ describe('PsyArxivTool.fullText — recorded OSF shapes + real unpdf', () => {
     }) as unknown as jest.MockedFunction<typeof fetch>;
 
     // No parsePdf override -> uses the default unpdf parser.
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0 });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0 });
     const text = await tool.fullText(psy(`osf:${PREPRINT_GUID}`));
 
     expect(text).toContain('Hello unpdf fixture body');

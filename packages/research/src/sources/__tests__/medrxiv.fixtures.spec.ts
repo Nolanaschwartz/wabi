@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { MedrxivTool } from '../medrxiv';
+import { createMedrxivSource } from '../medrxiv';
 
 // Replays a REAL medRxiv details-window response (./fixtures/medrxiv-details.json, 100 records
 // captured from the live API). Pins the actual record shape the local-filter depends on, so a
@@ -15,7 +15,7 @@ function fixtureFetch(): jest.Mock {
 
 describe('MedrxivTool against a real captured fixture', () => {
   it('search filters the real collection by query terms and flags every hit as a preprint', async () => {
-    const tool = new MedrxivTool({
+    const tool = createMedrxivSource({
       fetchFn: fixtureFetch() as unknown as typeof fetch,
       minIntervalMs: 0,
       // The injected clock/window don't matter here — the mock returns the fixture regardless of URL.
@@ -37,7 +37,7 @@ describe('MedrxivTool against a real captured fixture', () => {
   });
 
   it('returns [] when no record in the real window matches the query terms', async () => {
-    const tool = new MedrxivTool({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
+    const tool = createMedrxivSource({ fetchFn: fixtureFetch() as unknown as typeof fetch, minIntervalMs: 0 });
     // Pure gibberish content terms — none appear as whole words in any real abstract.
     expect(await tool.search('zxqwvb plokmnq vbnmqwz', 8)).toEqual([]);
   });
@@ -47,7 +47,7 @@ describe('MedrxivTool against a real captured fixture', () => {
 const live = process.env.RESEARCH_LIVE === '1' ? describe : describe.skip;
 live('medRxiv LIVE drift (RESEARCH_LIVE=1)', () => {
   it('real details window still returns records with the expected fields', async () => {
-    const tool = new MedrxivTool({ minIntervalMs: 1000, windowDays: 30 });
+    const tool = createMedrxivSource({ minIntervalMs: 1000, windowDays: 30 });
     const papers = await tool.search('anxiety', 3);
     // Coverage varies by window, but the shape must hold: any hit is a well-formed preprint Paper.
     for (const p of papers) {

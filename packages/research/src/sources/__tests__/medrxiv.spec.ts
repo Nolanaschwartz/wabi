@@ -1,4 +1,4 @@
-import { MedrxivTool } from '../medrxiv';
+import { createMedrxivSource } from '../medrxiv';
 import { Paper } from '../../types';
 
 function jsonResponse(body: unknown) {
@@ -19,7 +19,7 @@ describe('MedrxivTool', () => {
 
   it('search returns only papers matching query terms, all flagged preprint', async () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(collection));
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
     const papers = await tool.search('tilt regulation', 8);
     expect(papers).toHaveLength(1);
     expect(papers[0].title).toContain('Tilt regulation');
@@ -39,7 +39,7 @@ describe('MedrxivTool', () => {
     const fetchFn = jest.fn()
       .mockReturnValueOnce(jsonResponse(page(0, 100, 150)))
       .mockReturnValueOnce(jsonResponse(page(100, 50, 150)));
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
     const papers = await tool.search('anxiety', 1000);
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(fetchFn.mock.calls[1][0]).toContain('/100/json'); // cursor advanced
@@ -50,7 +50,7 @@ describe('MedrxivTool', () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse({ messages: [{ total: 1 }], collection: [
       { doi: '10.1101/x.1', title: 'sleep study', abstract: 'sleep hygiene', date: '2024-01-01' },
     ] }));
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
     await tool.search('sleep', 8);
     await tool.search('hygiene', 8);
     expect(fetchFn).toHaveBeenCalledTimes(1); // one window fetch reused across both searches
@@ -66,7 +66,7 @@ describe('MedrxivTool', () => {
       { doi: '10.1101/a.3', title: 'Emotion regulation in competitive settings', abstract: 'arousal control', date: '2024-01-03' },
     ] };
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
     const papers = await tool.search('emotion regulation competitive gaming', 8);
     expect(papers.map((p) => p.sourceId)).toEqual(['doi:10.1101/a.3', 'doi:10.1101/a.2']);
   });
@@ -76,7 +76,7 @@ describe('MedrxivTool', () => {
       { doi: '10.1101/b.1', title: 'Rumination and reappraisal', abstract: 'cognitive process', date: '2024-01-01' },
     ] };
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
     // content terms = [rumination, after, loss, cognitive, reappraisal] minus stopword 'after' = 4 real terms;
     // record hits rumination + reappraisal + cognitive (3) -> passes the half threshold.
     const papers = await tool.search('rumination after loss cognitive reappraisal', 8);
@@ -104,7 +104,7 @@ describe('MedrxivTool', () => {
     ] };
     const parsePdf = jest.fn().mockResolvedValue('FULL MEDRXIV BODY');
     const fetchFn = routedFetch(collection);
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-05-31'), parsePdf });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-05-31'), parsePdf });
     await tool.search('tilt', 8); // primes the version cache
 
     const text = await tool.fullText(med('doi:10.1101/2024.05.05.5'));
@@ -123,7 +123,7 @@ describe('MedrxivTool', () => {
     ] };
     const parsePdf = jest.fn().mockResolvedValue('BODY');
     const fetchFn = routedFetch(collection);
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 60, now: () => new Date('2024-07-31'), parsePdf });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 60, now: () => new Date('2024-07-31'), parsePdf });
     await tool.search('reappraisal', 8); // primes the cache with both version rows
 
     await tool.fullText(med('doi:10.1101/2024.07.07.7'));
@@ -135,7 +135,7 @@ describe('MedrxivTool', () => {
   it('fullText falls back to v1 when the version is unknown (doi not in the window cache)', async () => {
     const parsePdf = jest.fn().mockResolvedValue('BODY');
     const fetchFn = routedFetch({ collection: [] });
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, parsePdf });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, parsePdf });
 
     await tool.fullText(med('doi:10.1101/2024.09.09.9'));
 
@@ -145,7 +145,7 @@ describe('MedrxivTool', () => {
 
   it('fullText fails safe to null when the PDF fetch errors (abstract fallback)', async () => {
     const fetchFn = routedFetch({ collection: [] }, false);
-    const tool = new MedrxivTool({ fetchFn, minIntervalMs: 0, parsePdf: jest.fn() });
+    const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, parsePdf: jest.fn() });
     expect(await tool.fullText(med('doi:10.1101/2024.09.09.9'))).toBeNull();
   });
 });
