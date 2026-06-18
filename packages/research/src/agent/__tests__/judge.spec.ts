@@ -64,3 +64,14 @@ it('is fail-open: a judge error keeps the candidate at a neutral score (never si
   expect(r.candidates).toHaveLength(1);
   expect(r.candidates[0].confidence).toBe(0.5);
 });
+
+it('counts the tokens generate spent even when the model returns unparseable JSON', async () => {
+  // generate succeeded (real spend) but the body is not JSON. The fail-open path must still keep the
+  // candidate AND report the spend — dropping it to 0 under-counts the run budget and defeats the
+  // tokenBudget stop / single-lens budget-pressure collapse downstream.
+  generate.mockResolvedValue({ text: 'sorry, here are my thoughts...', usage: { totalTokens: 42 }, model: 'm', latencyMs: 1 });
+  const r = await judgeCandidates([mk('A')], 'rct');
+  expect(r.candidates).toHaveLength(1);
+  expect(r.candidates[0].confidence).toBe(0.5);
+  expect(r.tokens).toBe(42);
+});

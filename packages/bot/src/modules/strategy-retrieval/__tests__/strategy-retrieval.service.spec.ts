@@ -95,6 +95,20 @@ describe('StrategyRetrievalService', () => {
     expect(results[0].id).toBe('close');
   });
 
+  it('skips the re-rank and over-fetch when rerank is disabled (the dedup path)', async () => {
+    const mockSearch = jest.fn().mockResolvedValue([
+      point('weak', 0.80, 'preprint', 0.1),
+      point('strong', 0.78, 'meta-analysis', 0.9),
+    ]);
+    (service as any).qdrant.search = mockSearch;
+    jest.spyOn(service as any, 'embed').mockResolvedValue(new Array(768).fill(0));
+    const results = await service.search('q', 2, false);
+    // Raw cosine order preserved — the high-evidence item is NOT promoted over the closer one.
+    expect(results.map((r) => r.id)).toEqual(['weak', 'strong']);
+    // No over-fetch: ask Qdrant for exactly topK so dedup sees the true nearest neighbours.
+    expect(mockSearch.mock.calls[0][1].limit).toBe(2);
+  });
+
   it('returns only topK after re-ranking an over-fetched pool', async () => {
     (service as any).qdrant.search = jest.fn().mockResolvedValue([
       point('a', 0.9, 'rct', 0.5), point('b', 0.8, 'rct', 0.5), point('c', 0.7, 'rct', 0.5),

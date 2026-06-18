@@ -99,10 +99,11 @@ export class StrategyAdminService {
 
   /** True when the published library already contains a near-identical strategy. Queries the same
    * "title: technique" string the index is built from (publishToQdrant), so query and corpus match.
-   * Checks raw cosine across the top matches (not just the #1), since retrieval re-ranks by
-   * evidence/confidence — dedup must judge similarity, not the re-ranked order. */
+   * Uses the raw-cosine path (rerank=false): retrieval's re-rank + slice can evict a true duplicate
+   * from the returned window behind lower-cosine, higher-evidence items — dedup must judge raw
+   * similarity, not the re-ranked order. */
   async isDuplicate(title: string, technique: string): Promise<boolean> {
-    const top = await this.retrieval.search(`${title}: ${technique}`, 5);
+    const top = await this.retrieval.search(`${title}: ${technique}`, 5, false);
     return top.some((p) => typeof p.score === 'number' && p.score >= dedupThreshold());
   }
 

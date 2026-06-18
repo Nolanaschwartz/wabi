@@ -70,13 +70,16 @@ export class StrategyRetrievalService {
     this.initialized = true;
   }
 
-  async search(query: string, topK = 3): Promise<StrategyPoint[]> {
+  /** Vector search. `rerank` (default) over-fetches a wider cosine pool and blends tier/confidence so
+   * a near-tie can be promoted — the coaching retrieval path. Dedup passes `rerank=false` to get the
+   * raw nearest neighbours by cosine: re-ranking + slicing can otherwise evict a true duplicate from
+   * the returned window behind lower-cosine, higher-evidence items. */
+  async search(query: string, topK = 3, rerank = true): Promise<StrategyPoint[]> {
     try {
       const embedding = await this.embed(query);
-      // Over-fetch a wider cosine pool, then re-rank it so tier/confidence can promote a near-tie.
       const results = await this.qdrant.search(COLLECTION_NAME, {
         vector: embedding,
-        limit: Math.max(topK * RERANK_POOL, topK),
+        limit: rerank ? Math.max(topK * RERANK_POOL, topK) : topK,
         with_payload: true,
       });
 
@@ -93,6 +96,8 @@ export class StrategyRetrievalService {
         score: point.score as number,
       }));
 
+      // Qdrant already returns by cosine desc; only re-rank when asked.
+      if (!rerank) return points;
       points.sort((a, b) => rerankScore(b) - rerankScore(a));
       return points.slice(0, topK);
     } catch {

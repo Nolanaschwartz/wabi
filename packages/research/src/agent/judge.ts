@@ -52,32 +52,40 @@ async function judgeOne(
     `Return JSON: {"faithful": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n\n` +
     `Title: ${c.title}\nTechnique: ${c.technique}\nSourceText: ${c.sourceText}`;
 
+  let out;
   try {
-    const out = await generate('research', { prompt, maxOutputTokens: extractMaxTokens() });
-    const tokens = out.usage?.totalTokens ?? 0;
-    const trace: StepTrace = { input: prompt, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage };
-
-    const v = JSON.parse(stripFences(out.text.trim())) as {
-      faithful?: boolean; score?: number; title?: string; technique?: string; rationale?: string;
-    };
-
-    if (!v.faithful || typeof v.score !== 'number' || v.score < floorForTier(tier)) {
-      return { candidate: null, tokens, trace };
-    }
-    return {
-      candidate: {
-        ...c,
-        title: v.title ?? c.title,
-        technique: v.technique ?? c.technique,
-        // sourceText deliberately untouched — faithfulness grounding is immutable.
-        confidence: v.score,
-        rationale: v.rationale ?? '',
-      },
-      tokens,
-      trace,
-    };
+    out = await generate('research', { prompt, maxOutputTokens: extractMaxTokens() });
   } catch {
-    // Fail-open: keep at a neutral score, no rewrite — never silently drop on a provider/parse failure.
+    // Provider failure: nothing was spent. Fail-open — keep at a neutral score, never silently drop.
     return { candidate: { ...c, confidence: 0.5, rationale: 'judge unavailable' }, tokens: 0 };
   }
+
+  // generate() succeeded, so the spend is real and must be counted even if the body won't parse —
+  // dropping it to 0 under-counts the run budget and defeats the tokenBudget/budget-pressure stops.
+  const tokens = out.usage?.totalTokens ?? 0;
+  const trace: StepTrace = { input: prompt, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage };
+
+  let v: { faithful?: boolean; score?: number; title?: string; technique?: string; rationale?: string };
+  try {
+    v = JSON.parse(stripFences(out.text.trim()));
+  } catch {
+    // Fail-open on an unparseable reply, but still report the spend above.
+    return { candidate: { ...c, confidence: 0.5, rationale: 'judge unavailable' }, tokens, trace };
+  }
+
+  if (!v.faithful || typeof v.score !== 'number' || v.score < floorForTier(tier)) {
+    return { candidate: null, tokens, trace };
+  }
+  return {
+    candidate: {
+      ...c,
+      title: v.title ?? c.title,
+      technique: v.technique ?? c.technique,
+      // sourceText deliberately untouched — faithfulness grounding is immutable.
+      confidence: v.score,
+      rationale: v.rationale ?? '',
+    },
+    tokens,
+    trace,
+  };
 }
