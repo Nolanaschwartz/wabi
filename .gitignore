@@ -43,3 +43,6 @@ __pycache__/
 .claude/worktrees/
 
 graphify-out/
+
+# Local Railway ops helper (not for VCS)
+lf-toggle.sh
