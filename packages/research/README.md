@@ -50,7 +50,11 @@ implementations and is invoked by the `research-run` consumer.
 - `seed-topics.ts` — the initial topic list seeded into `ResearchTopic` on first boot.
 - `bot-client.ts` — HTTP client to the bot: `seen(id)` and `submit(candidate)` (maps HTTP
   status → `submitted | deduped | rejected | error`).
-- `sources/` — `pubmed.ts` (NCBI E-utilities), `medrxiv.ts`; fixture-backed tests.
+- `sources/` — `pubmed.ts` (NCBI E-utilities, id-based), and the windowed preprint sources
+  `medrxiv.ts` / `psyarxiv.ts`, which are thin `PreprintSpec`s over the shared
+  `windowed-preprint-source.ts` core (window cache, term-match search, identity hydrate, PDF
+  download/parse). Each spec supplies only its pagination, record→Paper mapping, and PDF-URL
+  resolution. Fixture-backed tests.
 - `agent/` — `relevance-gate.ts`, `extract.ts`, `dedup.ts`, `research-agent.ts`.
 - `util/` — `load-env.ts`, `logger.ts`, `rate-limiter.ts`.
 

@@ -4,8 +4,8 @@ import { runResearch as defaultRunResearch, RunDeps, RunResult } from '../run';
 import { BotClient, SubmitOutcome } from '../bot-client';
 import { Source } from '../sources/source';
 import { PubMedTool } from '../sources/pubmed';
-import { MedrxivTool } from '../sources/medrxiv';
-import { PsyArxivTool } from '../sources/psyarxiv';
+import { createMedrxivSource } from '../sources/medrxiv';
+import { createPsyArxivSource } from '../sources/psyarxiv';
 import { relevanceGate } from '../agent/relevance-gate';
 import { extractWithLenses } from '../agent/extract-with-lenses';
 import { mergeWithinPaper } from '../agent/merge-within-paper';
@@ -131,8 +131,8 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   // here (per-run, after ConfigModule loads), never frozen at import.
   const sources = new Map<SourceKind, Source>([
     ['pubmed', new PubMedTool({ apiKey: process.env.NCBI_API_KEY })],
-    ['medrxiv', new MedrxivTool({ log })],
-    ['psyarxiv', new PsyArxivTool({ token: process.env.OSF_TOKEN, log })],
+    ['medrxiv', createMedrxivSource({ log })],
+    ['psyarxiv', createPsyArxivSource({ token: process.env.OSF_TOKEN, log })],
   ]);
 
   // One tracer + one runId for the whole run (every topic's agent hangs under the same parent trace).

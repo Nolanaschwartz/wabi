@@ -1,4 +1,4 @@
-import { PsyArxivTool } from '../psyarxiv';
+import { createPsyArxivSource } from '../psyarxiv';
 import { Paper } from '../../types';
 
 function jsonResponse(body: unknown) {
@@ -25,7 +25,7 @@ describe('PsyArxivTool', () => {
       rec('xyz99', 'Knee surgery outcomes', 'orthopedic recovery'),
     ]);
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
 
     const papers = await tool.search('emotion regulation', 8);
 
@@ -47,7 +47,7 @@ describe('PsyArxivTool', () => {
       .mockReturnValueOnce(jsonResponse(page([rec('a', 'anxiety coping', 'anxiety study'), rec('b', 'anxiety habits', 'anxiety')], next)))
       // 'a' repeats on page 2 -> deduped; only 'c' is new.
       .mockReturnValueOnce(jsonResponse(page([rec('a', 'anxiety coping', 'anxiety study'), rec('c', 'anxiety relief', 'anxiety')], null)));
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
 
     const papers = await tool.search('anxiety', 1000);
 
@@ -66,7 +66,7 @@ describe('PsyArxivTool', () => {
       .mockReturnValueOnce(jsonResponse(page(dup, next1)))
       .mockReturnValueOnce(jsonResponse(page(dup, next2)))                                   // all duplicates
       .mockReturnValueOnce(jsonResponse(page([rec('c', 'anxiety three', 'anxiety')], null))); // fresh record beyond
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
 
     const papers = await tool.search('anxiety', 1000);
 
@@ -79,7 +79,7 @@ describe('PsyArxivTool', () => {
     const fetchFn = jest.fn()
       .mockReturnValueOnce(jsonResponse(page([rec('a', 'sleep hygiene', 'sleep'), rec('b', 'sleep timing', 'sleep')], next)))
       .mockReturnValueOnce(jsonResponse(page([rec('c', 'sleep more', 'sleep')], null)));
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, maxRecords: 2, now: () => new Date('2026-06-17') });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, maxRecords: 2, now: () => new Date('2026-06-17') });
 
     await tool.search('sleep', 1000);
 
@@ -88,7 +88,7 @@ describe('PsyArxivTool', () => {
 
   it('caches the window so a second topic in the same run does not refetch', async () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(page([rec('a', 'sleep hygiene', 'sleep quality')])));
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
 
     await tool.search('sleep', 8);
     await tool.search('hygiene', 8);
@@ -103,7 +103,7 @@ describe('PsyArxivTool', () => {
       rec('three', 'Emotion regulation in competitive settings', 'arousal control'), // 3 -> kept, ranked first
     ]);
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
 
     const papers = await tool.search('emotion regulation competitive gaming', 8);
 
@@ -112,12 +112,12 @@ describe('PsyArxivTool', () => {
 
   it('sends an Authorization: Bearer header only when a token is configured', async () => {
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(page([rec('a', 'sleep study', 'sleep')])));
-    const withToken = new PsyArxivTool({ fetchFn, token: 'secret-tok', minIntervalMs: 0, now: () => new Date('2026-06-17') });
+    const withToken = createPsyArxivSource({ fetchFn, token: 'secret-tok', minIntervalMs: 0, now: () => new Date('2026-06-17') });
     await withToken.search('sleep', 8);
     expect((fetchFn.mock.calls[0][1] as any)?.headers?.Authorization).toBe('Bearer secret-tok');
 
     const fetchFn2 = jest.fn().mockReturnValue(jsonResponse(page([rec('a', 'sleep study', 'sleep')])));
-    const noToken = new PsyArxivTool({ fetchFn: fetchFn2, minIntervalMs: 0, now: () => new Date('2026-06-17') });
+    const noToken = createPsyArxivSource({ fetchFn: fetchFn2, minIntervalMs: 0, now: () => new Date('2026-06-17') });
     await noToken.search('sleep', 8);
     expect((fetchFn2.mock.calls[0][1] as any)?.headers?.Authorization).toBeUndefined();
   });
@@ -145,7 +145,7 @@ describe('PsyArxivTool', () => {
   it('fullText resolves guid -> primary_file -> download URL and returns parsed text', async () => {
     const parsePdf = jest.fn().mockResolvedValue('PSYARXIV FULL BODY');
     const fetchFn = fullTextFetch();
-    const tool = new PsyArxivTool({ fetchFn, minIntervalMs: 0, parsePdf });
+    const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, parsePdf });
 
     const text = await tool.fullText(psy('osf:g1'));
 
@@ -157,17 +157,17 @@ describe('PsyArxivTool', () => {
   });
 
   it('fullText fails safe to null when the preprint has no primary_file', async () => {
-    const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ fileHref: null }), minIntervalMs: 0, parsePdf: jest.fn() });
+    const tool = createPsyArxivSource({ fetchFn: fullTextFetch({ fileHref: null }), minIntervalMs: 0, parsePdf: jest.fn() });
     expect(await tool.fullText(psy('osf:g1'))).toBeNull();
   });
 
   it('fullText fails safe to null when the file node has no download link', async () => {
-    const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ downloadUrl: null }), minIntervalMs: 0, parsePdf: jest.fn() });
+    const tool = createPsyArxivSource({ fetchFn: fullTextFetch({ downloadUrl: null }), minIntervalMs: 0, parsePdf: jest.fn() });
     expect(await tool.fullText(psy('osf:g1'))).toBeNull();
   });
 
   it('fullText fails safe to null when the PDF download errors', async () => {
-    const tool = new PsyArxivTool({ fetchFn: fullTextFetch({ pdfOk: false }), minIntervalMs: 0, parsePdf: jest.fn() });
+    const tool = createPsyArxivSource({ fetchFn: fullTextFetch({ pdfOk: false }), minIntervalMs: 0, parsePdf: jest.fn() });
     expect(await tool.fullText(psy('osf:g1'))).toBeNull();
   });
 });
