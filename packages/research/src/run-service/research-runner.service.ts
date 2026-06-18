@@ -7,7 +7,9 @@ import { PubMedTool } from '../sources/pubmed';
 import { MedrxivTool } from '../sources/medrxiv';
 import { PsyArxivTool } from '../sources/psyarxiv';
 import { relevanceGate } from '../agent/relevance-gate';
-import { extract } from '../agent/extract';
+import { extractWithLenses } from '../agent/extract-with-lenses';
+import { mergeWithinPaper } from '../agent/merge-within-paper';
+import { judgeCandidates } from '../agent/judge';
 import { isDuplicateInRun } from '../agent/dedup';
 import { ResearchAgent } from '../agent/research-agent';
 import { ResearchTracer } from '../agent/research-tracer';
@@ -50,7 +52,7 @@ export interface RunnerDeps {
  * (a `summary` the core ignores is carried for type-compatibility with {@link RunDeps}). */
 interface BuiltAgent {
   runAgent: RunDeps['runAgent'];
-  submit: (candidate: Candidate) => Promise<SubmitOutcome>;
+  submitBatch: (candidates: Candidate[]) => Promise<SubmitOutcome[]>;
   tokens: () => number;
   topicsRun: () => number;
   /** Optional: flush any in-flight Langfuse ingestion once the run is done so the last spans aren't
@@ -72,7 +74,7 @@ function strategyApiUrl(): string {
  * Wraps the untouched `runResearch` core to produce a real run summary (ADR-0034, ADR-0012).
  *
  * `execute()` builds the production agent + submit wiring (PubMed/medRxiv → relevance gate → extract
- * → in-run dedup → BotClient.submit), runs the core over the DB-sourced topics under the DB-sourced
+ * → in-run dedup → BotClient.submitBatch), runs the core over the DB-sourced topics under the DB-sourced
  * bounds, and returns the {@link RunResult} counts plus `tokensUsed`/`topicsRun`. Candidate ingest
  * ALWAYS goes HTTP → the bot's trust gate (the only path into `StrategyDraft`); the worker never
  * writes the strategy library directly.
@@ -95,14 +97,14 @@ export class ResearchRunnerService {
   /** Perform one run over the given topics+bounds; map the core's result onto a {@link RunnerResult}. */
   async execute(input: RunnerInput): Promise<RunnerResult> {
     const built = this.buildAgent(input.bounds, this.log);
-    const { runAgent, submit, tokens, topicsRun } = built;
+    const { runAgent, submitBatch, tokens, topicsRun } = built;
 
     try {
       const result = await this.runFn({
         topics: input.topics,
         bounds: input.bounds,
         log: this.log,
-        submit,
+        submitBatch,
         runAgent,
       });
 
@@ -146,10 +148,10 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   let topicsRun = 0;
 
   return {
-    submit: (c) => client.submit(c),
+    submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
+        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
         bounds,
         log,
         { tracer, runId },

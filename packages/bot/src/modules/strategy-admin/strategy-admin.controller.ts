@@ -8,7 +8,6 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
-  ConflictException,
 } from '@nestjs/common';
 import { StrategyAdminService, IngestCandidate } from './strategy-admin.service';
 import { AdminGuard } from './admin.guard';
@@ -52,15 +51,12 @@ export class StrategyAdminController {
     return this.admin.setEvidenceLevel(id, evidence);
   }
 
-  @Post('ingest')
+  @Post('ingest/batch')
   @HttpCode(HttpStatus.CREATED)
-  async ingest(@Body() body: IngestCandidate) {
-    const result = await this.admin.ingestCandidate(body);
-    if (result.status === 'deduped') {
-      // 409 so the worker can count it as a near-duplicate without treating it as an error.
-      throw new ConflictException({ status: 'deduped' });
-    }
-    return result;
+  async ingestBatch(@Body() body: { candidates: IngestCandidate[] }) {
+    // A batch from one paper may carry mixed per-draft outcomes, so there is no single 409 to throw.
+    // The worker reads the per-draft results array instead.
+    return this.admin.ingestBatch(body.candidates ?? []);
   }
 
   @Get('seen')

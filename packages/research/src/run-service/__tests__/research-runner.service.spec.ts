@@ -8,7 +8,7 @@ const bounds: Bounds = {
 };
 
 const cand = (id: string): Candidate => ({
-  title: `t${id}`, technique: `q${id}`, sourceText: 's', evidence: 'e', sourceUrl: 'u',
+  title: `t${id}`, technique: `q${id}`, sourceText: 's', evidence: 'e', evidenceTier: 'rct', sourceUrl: 'u',
   source: 'PubMed', sourceId: `PMID:${id}`, sourceKind: 'pubmed', trustLevel: 'research-agent',
 });
 
@@ -20,7 +20,7 @@ describe('ResearchRunnerService', () => {
     const runFn = jest.fn().mockResolvedValue(runResult);
     const buildAgent = jest.fn().mockReturnValue({
       runAgent: jest.fn(),
-      submit: jest.fn(),
+      submitBatch: jest.fn(),
       tokens: () => 12_345,
       topicsRun: () => 3,
     });
@@ -36,8 +36,8 @@ describe('ResearchRunnerService', () => {
 
   it('drives the core with the DB-sourced topics + bounds and the built agent/submit closures', async () => {
     const runAgent = jest.fn();
-    const submit = jest.fn();
-    const buildAgent = jest.fn().mockReturnValue({ runAgent, submit, tokens: () => 0, topicsRun: () => 0 });
+    const submitBatch = jest.fn();
+    const buildAgent = jest.fn().mockReturnValue({ runAgent, submitBatch, tokens: () => 0, topicsRun: () => 0 });
     let captured: RunDeps | undefined;
     const runFn = jest.fn().mockImplementation((deps: RunDeps) => {
       captured = deps;
@@ -51,13 +51,13 @@ describe('ResearchRunnerService', () => {
     expect(captured?.topics).toEqual(['stress', 'sleep']);
     expect(captured?.bounds).toBe(bounds);
     expect(captured?.runAgent).toBe(runAgent);
-    expect(captured?.submit).toBe(submit);
+    expect(captured?.submitBatch).toBe(submitBatch);
   });
 
   it('propagates a thrown core error to the caller (the consumer maps it onto a failed row)', async () => {
     const runFn = jest.fn().mockRejectedValue(new Error('boom'));
     const buildAgent = jest.fn().mockReturnValue({
-      runAgent: jest.fn(), submit: jest.fn(), tokens: () => 0, topicsRun: () => 0,
+      runAgent: jest.fn(), submitBatch: jest.fn(), tokens: () => 0, topicsRun: () => 0,
     });
 
     const svc = new ResearchRunnerService({ runFn, buildAgent });
@@ -71,7 +71,7 @@ describe('ResearchRunnerService', () => {
     let topicsRun = 0;
     const buildAgent = jest.fn().mockReturnValue({
       runAgent: async (_topic: string) => { topicsRun++; tokensUsed += 100; return { candidates: [cand('1')], tokens: 100 }; },
-      submit: jest.fn().mockResolvedValue('submitted'),
+      submitBatch: jest.fn().mockResolvedValue(['submitted']),
       tokens: () => tokensUsed,
       topicsRun: () => topicsRun,
     });

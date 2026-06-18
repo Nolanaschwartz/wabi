@@ -13,10 +13,19 @@ export interface IngestCandidate {
   technique: string;
   source: string;
   evidence: string;
+  evidenceTier?: string;
+  lenses?: string[];
+  confidence?: number;
+  rationale?: string;
   sourceText?: string;
   sourceUrl: string;
   sourceId: string;
   sourceKind: string;
+}
+
+export interface IngestResult {
+  status: 'submitted' | 'deduped' | 'rejected';
+  draftId?: string;
 }
 
 // Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
@@ -58,9 +67,12 @@ export class StrategyAdminService {
     });
   }
 
-  async submitDraft(draft: StrategyDraft): Promise<StrategyDraft> {
-    const result = await this.trustGate.evaluate(draft);
-    const wantsPublish = result.decision === 'publish';
+  /** Persist a draft, indexing first when the gate says publish. `decision` lets a caller that has
+   * already evaluated this draft (evaluateCandidate) reuse the verdict instead of paying for a second
+   * safety + faithfulness gate pass; standalone callers omit it and the gate runs here. */
+  async submitDraft(draft: StrategyDraft, decision?: EvaluationDecision): Promise<StrategyDraft> {
+    const verdict = decision ?? (await this.trustGate.evaluate(draft)).decision;
+    const wantsPublish = verdict === 'publish';
 
     // Index BEFORE declaring 'published', so a published Draft is always retrievable (ADR-0012). If
     // the index write fails, fall back to pending-review rather than persisting something invisible.
@@ -74,6 +86,10 @@ export class StrategyAdminService {
         technique: draft.technique,
         source: draft.source,
         evidence: draft.evidence,
+        evidenceTier: draft.evidenceTier ?? null,
+        lenses: draft.lenses ?? [],
+        confidence: draft.confidence ?? null,
+        rationale: draft.rationale ?? null,
         sourceText: draft.sourceText ?? null,
         sourceUrl: draft.sourceUrl,
         trustLevel: draft.trustLevel,
@@ -85,10 +101,13 @@ export class StrategyAdminService {
   }
 
   /** True when the published library already contains a near-identical strategy. Queries the same
-   * "title: technique" string the index is built from (publishToQdrant), so query and corpus match. */
+   * "title: technique" string the index is built from (publishToQdrant), so query and corpus match.
+   * Uses the raw-cosine path (rerank=false): retrieval's re-rank + slice can evict a true duplicate
+   * from the returned window behind lower-cosine, higher-evidence items — dedup must judge raw
+   * similarity, not the re-ranked order. */
   async isDuplicate(title: string, technique: string): Promise<boolean> {
-    const [top] = await this.retrieval.search(`${title}: ${technique}`, 1);
-    return !!top && typeof top.score === 'number' && top.score >= dedupThreshold();
+    const top = await this.retrieval.search(`${title}: ${technique}`, 5, false);
+    return top.some((p) => typeof p.score === 'number' && p.score >= dedupThreshold());
   }
 
   /** Source-level idempotency: has this paper been processed on any prior run? (ADR-0033) */
@@ -111,22 +130,14 @@ export class StrategyAdminService {
   }
 
   /**
-   * Ingest one research candidate (ADR-0033). Layered: library dedup → trust gate (which, for
-   * research-agent, runs safety+faithfulness but can only queue or reject) → ledger record. The
-   * trust level is forced to 'research-agent' here so this endpoint can never auto-publish.
+   * Evaluate ONE candidate without touching the ledger: library dedup → trust gate (which, for
+   * research-agent, runs safety+faithfulness but can only queue or reject) → persist. The trust
+   * level is forced to 'research-agent' so this path can never auto-publish. ingestBatch owns the
+   * per-source ledger mark, since the ledger is keyed per source and one paper may now yield several
+   * drafts (ADR-0033).
    */
-  async ingestCandidate(
-    c: IngestCandidate,
-  ): Promise<{ status: 'submitted' | 'deduped' | 'rejected'; draftId?: string }> {
-    // Bot-side idempotency on the authoritative sourceId key (ADR-0033). The worker's seen() check is
-    // an optimization, not a guarantee — if it ever misses (e.g. a key-format mismatch), this hard
-    // gate still prevents a duplicate draft. No re-mark: the ledger already holds the terminal status.
-    if (await this.hasSeen(c.sourceId)) {
-      return { status: 'deduped' };
-    }
-
+  private async evaluateCandidate(c: IngestCandidate): Promise<IngestResult> {
     if (await this.isDuplicate(c.title, c.technique)) {
-      await this.markProcessed(c.sourceId, c.sourceKind, 'deduped');
       return { status: 'deduped' };
     }
 
@@ -136,6 +147,10 @@ export class StrategyAdminService {
       technique: c.technique,
       source: c.source,
       evidence: c.evidence,
+      evidenceTier: c.evidenceTier,
+      lenses: c.lenses,
+      confidence: c.confidence,
+      rationale: c.rationale,
       sourceText: c.sourceText,
       sourceUrl: c.sourceUrl,
       trustLevel: 'research-agent',
@@ -143,16 +158,55 @@ export class StrategyAdminService {
     };
 
     // Evaluate up front so a safety/faithfulness rejection never persists (a reviewer must not see
-    // a failed draft). On non-reject, submitDraft re-evaluates and persists as pending-review.
+    // a failed draft). On non-reject we hand the verdict to submitDraft so the gate runs only once.
     const decision = await this.trustGate.evaluate(draft);
     if (decision.decision === 'reject') {
-      await this.markProcessed(c.sourceId, c.sourceKind, 'rejected');
       return { status: 'rejected' };
     }
 
-    const persisted = await this.submitDraft(draft);
-    await this.markProcessed(c.sourceId, c.sourceKind, 'submitted');
+    const persisted = await this.submitDraft(draft, decision.decision);
     return { status: 'submitted', draftId: persisted.id };
+  }
+
+  /**
+   * Ingest all drafts mined from ONE paper (a single sourceId) — a paper may now yield several
+   * distinct techniques. Source-level idempotency is checked once and the ledger is marked once
+   * for the whole batch; each draft is dedup'd and gated independently so a duplicate sibling
+   * never sinks the others (ADR-0033). The batch is assumed homogeneous in sourceId/sourceKind.
+   */
+  async ingestBatch(candidates: IngestCandidate[]): Promise<{ results: IngestResult[] }> {
+    if (candidates.length === 0) return { results: [] };
+
+    const { sourceId, sourceKind } = candidates[0];
+
+    // The ledger is marked once from candidates[0].sourceId, so the batch MUST be one paper. Reject a
+    // mixed-source batch at this HTTP boundary rather than silently leaving the other papers unmarked.
+    if (candidates.some((c) => c.sourceId !== sourceId)) {
+      throw new Error('ingestBatch requires a homogeneous sourceId (one paper per batch)');
+    }
+
+    // Bot-side idempotency on the authoritative sourceId key. The worker's seen() check is an
+    // optimization, not a guarantee; this hard gate prevents re-processing a paper from a prior
+    // run. No re-mark — the ledger already holds the terminal status.
+    if (await this.hasSeen(sourceId)) {
+      return { results: candidates.map(() => ({ status: 'deduped' as const })) };
+    }
+
+    const results: IngestResult[] = [];
+    for (const c of candidates) {
+      results.push(await this.evaluateCandidate(c));
+    }
+
+    // One ledger mark for the whole source. Precedence submitted > deduped > rejected: the paper's
+    // terminal status reflects the best outcome any of its drafts achieved.
+    const status: 'submitted' | 'deduped' | 'rejected' = results.some((r) => r.status === 'submitted')
+      ? 'submitted'
+      : results.some((r) => r.status === 'deduped')
+        ? 'deduped'
+        : 'rejected';
+    await this.markProcessed(sourceId, sourceKind, status);
+
+    return { results };
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {
@@ -286,6 +340,8 @@ export class StrategyAdminService {
       draft.id,
       `${draft.title}: ${draft.technique}`,
       draft.evidence,
+      draft.confidence, // effectivenessScore = judge confidence (capture-now for future re-ranking)
+      draft.evidenceTier,
     );
   }
 
@@ -330,6 +386,10 @@ export class StrategyAdminService {
       technique: row.technique,
       source: row.source,
       evidence: row.evidence,
+      evidenceTier: row.evidenceTier,
+      lenses: row.lenses,
+      confidence: row.confidence,
+      rationale: row.rationale,
       sourceText: row.sourceText,
       sourceUrl: row.sourceUrl,
       trustLevel: row.trustLevel,

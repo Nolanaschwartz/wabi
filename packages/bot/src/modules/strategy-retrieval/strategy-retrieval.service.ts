@@ -14,8 +14,30 @@ export interface StrategyPoint {
   id: string;
   content: string;
   evidence: string;
+  evidenceTier?: string;
   effectivenessScore?: number;
   score?: number;
+}
+
+// Re-rank weights (capture-now consumer of evidenceTier + confidence). Cosine similarity dominates;
+// these small bonuses mainly break near-ties toward better-supported strategies. Tunable.
+const TIER_BONUS: Record<string, number> = {
+  'meta-analysis': 0.05,
+  'systematic-review': 0.04,
+  rct: 0.03,
+  observational: 0.01,
+  preprint: 0,
+};
+const CONFIDENCE_WEIGHT = 0.05;
+// Over-fetch factor: pull a wider cosine pool so the re-rank has runners-up to promote.
+const RERANK_POOL = 4;
+
+/** Blend cosine similarity with evidence tier + judge confidence. Cosine-dominant by design. */
+function rerankScore(p: StrategyPoint): number {
+  const cosine = p.score ?? 0;
+  const tierBonus = p.evidenceTier ? TIER_BONUS[p.evidenceTier] ?? 0 : 0;
+  const confidence = typeof p.effectivenessScore === 'number' ? p.effectivenessScore : 0;
+  return cosine + tierBonus + CONFIDENCE_WEIGHT * confidence;
 }
 
 @Injectable()
@@ -50,12 +72,16 @@ export class StrategyRetrievalService {
     this.initialized = true;
   }
 
-  async search(query: string, topK = 3): Promise<StrategyPoint[]> {
+  /** Vector search. `rerank` (default) over-fetches a wider cosine pool and blends tier/confidence so
+   * a near-tie can be promoted — the coaching retrieval path. Dedup passes `rerank=false` to get the
+   * raw nearest neighbours by cosine: re-ranking + slicing can otherwise evict a true duplicate from
+   * the returned window behind lower-cosine, higher-evidence items. */
+  async search(query: string, topK = 3, rerank = true): Promise<StrategyPoint[]> {
     try {
       const embedding = await this.embed(query);
       const results = await this.qdrant.search(COLLECTION_NAME, {
         vector: embedding,
-        limit: topK,
+        limit: rerank ? Math.max(topK * RERANK_POOL, topK) : topK,
         with_payload: true,
       });
 
@@ -63,13 +89,19 @@ export class StrategyRetrievalService {
         return [];
       }
 
-      return results.map((point: any) => ({
+      const points: StrategyPoint[] = results.map((point: any) => ({
         id: String(point.id),
         content: (point.payload?.content as string) ?? '',
         evidence: (point.payload?.evidence as string) ?? '',
+        evidenceTier: point.payload?.evidenceTier as string | undefined,
         effectivenessScore: point.payload?.effectivenessScore as number,
         score: point.score as number,
       }));
+
+      // Qdrant already returns by cosine desc; only re-rank when asked.
+      if (!rerank) return points;
+      points.sort((a, b) => rerankScore(b) - rerankScore(a));
+      return points.slice(0, topK);
     } catch {
       return [];
     }
@@ -82,6 +114,7 @@ export class StrategyRetrievalService {
     content: string,
     evidence: string,
     effectivenessScore?: number,
+    evidenceTier?: string,
   ): Promise<boolean> {
     try {
       const embedding = await this.embed(content);
@@ -93,6 +126,7 @@ export class StrategyRetrievalService {
             payload: {
               content,
               evidence,
+              evidenceTier,
               effectivenessScore,
             },
           },

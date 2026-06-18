@@ -18,6 +18,10 @@ export interface StrategyDraft {
   technique: string;
   source: string;
   evidence: string;
+  evidenceTier?: string;
+  lenses?: string[];
+  confidence?: number;
+  rationale?: string;
   sourceText?: string;
   sourceUrl: string;
   trustLevel: 'allowlisted' | 'community' | 'session-mined' | 'research-agent';

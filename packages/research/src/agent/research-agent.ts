@@ -1,8 +1,14 @@
-import { Bounds, Candidate, Paper, RunSummary, SourceKind } from '../types';
+import { Bounds, Candidate, EvidenceTier, Lens, Paper, RunSummary, SourceKind } from '../types';
 import { Source } from '../sources/source';
 import { Logger, noopLogger } from '../util/logger';
 import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-tracer';
 import { StepTrace } from './relevance-gate';
+import { evidenceTier } from './extract';
+import { lensesForTier } from './lenses';
+
+// Below this fraction of the token budget remaining, fan a paper out across a SINGLE lens instead of
+// the full set — lenses fall before papers, so a near-exhausted run still mines something per paper.
+const BUDGET_PRESSURE_FRACTION = 0.2;
 
 export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
@@ -10,7 +16,12 @@ export interface AgentDeps {
   sources: Map<SourceKind, Source>;
   seen: (sourceId: string) => Promise<boolean>;
   gate: (abstract: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
-  extract: (paper: Paper, body: string) => Promise<{ candidate: Candidate | null; tokens: number; trace?: StepTrace }>;
+  /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
+  extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
+  /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
+  merge: (candidates: Candidate[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
+  /** Score, faithfulness-check, sharpen, and tier-cap a paper's candidates (slice 05). */
+  judge: (candidates: Candidate[], tier: EvidenceTier) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
   dedup: (candidate: Candidate, kept: Candidate[]) => Promise<{ duplicate: boolean; tokens: number; trace?: StepTrace }>;
 }
 
@@ -145,25 +156,45 @@ export class ResearchAgent {
         papersRead++;
         this.log.debug('body', { id: paper.sourceId, source: full ? 'fullText' : 'abstract', chars: body.length });
 
-        const { candidate, tokens, trace: extractTrace } = await this.deps.extract(paper, body);
-        this.tokens += tokens;
-        this.emitSpan('extract', extractTrace);
-        if (!candidate) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
-        summary.extracted++;
-        this.log.info('extracted', { id: paper.sourceId, title: candidate.title, tokens });
-
-        const dd = await this.deps.dedup(candidate, kept);
-        this.tokens += dd.tokens;
-        this.emitSpan('dedup', dd.trace);
-        if (dd.duplicate) {
-          summary.inRunDeduped++;
-          this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });
-          continue;
+        // Tier-scaled lens fan-out; under budget pressure collapse to one lens (lenses fall before papers).
+        const tier = evidenceTier(paper);
+        let lenses = lensesForTier(tier);
+        if (this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * BUDGET_PRESSURE_FRACTION) {
+          lenses = lenses.slice(0, 1);
         }
 
-        kept.push(candidate);
-        summary.collected++;
-        this.log.info('collected', { id: paper.sourceId, title: candidate.title, kept: kept.length });
+        const { candidates, tokens, traces } = await this.deps.extract(paper, body, lenses);
+        this.tokens += tokens;
+        for (const t of traces) this.emitSpan('extract', t);
+        if (candidates.length === 0) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
+
+        // Collapse the lens candidates into the paper's distinct techniques, then score + tier-cap them.
+        const m = await this.deps.merge(candidates);
+        this.tokens += m.tokens;
+        for (const t of m.traces) this.emitSpan('merge', t);
+
+        const j = await this.deps.judge(m.candidates, tier);
+        this.tokens += j.tokens;
+        for (const t of j.traces) this.emitSpan('judge', t);
+        const distinct = j.candidates;
+        summary.extracted += distinct.length;
+        this.log.info('extracted', { id: paper.sourceId, candidates: distinct.length, tokens });
+
+        // Each candidate dedups against the run's kept set independently; the topic cap stops mid-paper.
+        for (const candidate of distinct) {
+          if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
+          const dd = await this.deps.dedup(candidate, kept);
+          this.tokens += dd.tokens;
+          this.emitSpan('dedup', dd.trace);
+          if (dd.duplicate) {
+            summary.inRunDeduped++;
+            this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });
+            continue;
+          }
+          kept.push(candidate);
+          summary.collected++;
+          this.log.info('collected', { id: paper.sourceId, title: candidate.title, kept: kept.length });
+        }
       } catch (err) {
         summary.errors++;
         this.log.info('error processing item', { id: item.sourceId, err: (err as Error)?.message ?? String(err) });

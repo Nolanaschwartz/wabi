@@ -8,7 +8,7 @@ import { isDuplicateInRun } from '../dedup';
 import { Candidate } from '../../types';
 
 const mk = (title: string, technique: string): Candidate => ({
-  title, technique, sourceText: 's', evidence: 'e', sourceUrl: 'u',
+  title, technique, sourceText: 's', evidence: 'e', evidenceTier: 'rct', sourceUrl: 'u',
   source: 'PubMed', sourceId: 'PMID:x', sourceKind: 'pubmed', trustLevel: 'research-agent',
 });
 

@@ -159,6 +159,10 @@ model StrategyDraft {
   technique   String
   source      String
   evidence    String
+  evidenceTier String?
+  lenses      String[] @default([])
+  confidence  Float?
+  rationale   String?
   sourceText  String?
   sourceUrl   String
   trustLevel  String   @default("community")
