@@ -74,7 +74,7 @@ function strategyApiUrl(): string {
  * Wraps the untouched `runResearch` core to produce a real run summary (ADR-0034, ADR-0012).
  *
  * `execute()` builds the production agent + submit wiring (PubMed/medRxiv → relevance gate → extract
- * → in-run dedup → BotClient.submit), runs the core over the DB-sourced topics under the DB-sourced
+ * → in-run dedup → BotClient.submitBatch), runs the core over the DB-sourced topics under the DB-sourced
  * bounds, and returns the {@link RunResult} counts plus `tokensUsed`/`topicsRun`. Candidate ingest
  * ALWAYS goes HTTP → the bot's trust gate (the only path into `StrategyDraft`); the worker never
  * writes the strategy library directly.

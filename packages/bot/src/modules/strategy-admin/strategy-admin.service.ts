@@ -164,12 +164,6 @@ export class StrategyAdminService {
     return { status: 'submitted', draftId: persisted.id };
   }
 
-  /** Ingest a single research candidate. Thin wrapper over the per-source batch path. */
-  async ingestCandidate(c: IngestCandidate): Promise<IngestResult> {
-    const { results } = await this.ingestBatch([c]);
-    return results[0];
-  }
-
   /**
    * Ingest all drafts mined from ONE paper (a single sourceId) — a paper may now yield several
    * distinct techniques. Source-level idempotency is checked once and the ledger is marked once

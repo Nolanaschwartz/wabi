@@ -1,4 +1,3 @@
-import { ConflictException } from '@nestjs/common';
 import { StrategyAdminController } from '../strategy-admin.controller';
 import { StrategyAdminService } from '../strategy-admin.service';
 
@@ -34,7 +33,6 @@ describe('StrategyAdminController', () => {
       submitDraft: jest.fn(),
       recordNegativeFeedback: jest.fn(),
       setEvidenceLevel: jest.fn(),
-      ingestCandidate: jest.fn(),
       ingestBatch: jest.fn(),
       hasSeen: jest.fn(),
     } as any;
@@ -76,15 +74,6 @@ describe('StrategyAdminController', () => {
     expect(service.setEvidenceLevel).toHaveBeenCalledWith('1', 'RCT meta-analysis');
   });
 
-  it('ingests a novel candidate and returns the draft id', async () => {
-    service.ingestCandidate.mockResolvedValue({ status: 'submitted', draftId: 'd1' });
-    const res = await controller.ingest({ sourceId: 'PMID:1' } as any);
-    expect(res).toEqual({ status: 'submitted', draftId: 'd1' });
-  });
-  it('maps a deduped candidate to 409 Conflict', async () => {
-    service.ingestCandidate.mockResolvedValue({ status: 'deduped' });
-    await expect(controller.ingest({ sourceId: 'PMID:1' } as any)).rejects.toBeInstanceOf(ConflictException);
-  });
   it('ingests a batch of drafts for one paper and returns per-draft results (no 409 for mixed outcomes)', async () => {
     service.ingestBatch.mockResolvedValue({
       results: [{ status: 'submitted', draftId: 'd1' }, { status: 'deduped' }],

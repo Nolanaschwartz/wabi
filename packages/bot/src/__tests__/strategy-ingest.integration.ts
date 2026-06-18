@@ -1,5 +1,5 @@
 // pg-boss is ESM and only touched by StrategyAdminService.init() (which this test never calls —
-// it drives ingestCandidate directly). Mock it so jest can parse the import while Postgres +
+// it drives ingestBatch directly). Mock it so jest can parse the import while Postgres +
 // Qdrant remain real.
 jest.mock('pg-boss', () => ({
   PgBoss: jest.fn().mockImplementation(() => ({
@@ -84,7 +84,7 @@ describe('strategy ingest integration', () => {
       shouldQuarantine: jest.fn().mockReturnValue(false),
     };
 
-    // Scheduler is unused by ingestCandidate (only init() registers workers, which the test
+    // Scheduler is unused by ingestBatch (only init() registers workers, which the test
     // never calls). Degraded shape is enough.
     const scheduler = {
       available: false,
@@ -106,7 +106,7 @@ describe('strategy ingest integration', () => {
   }, 30000);
 
   it('queues a novel candidate, records the ledger, and reports it seen — not yet retrievable', async () => {
-    const res = await svc.ingestCandidate({
+    const { results } = await svc.ingestBatch([{
       title: 'Box Breathing',
       technique: 'inhale 4 hold 4 exhale 4',
       source: 'PubMed',
@@ -115,7 +115,8 @@ describe('strategy ingest integration', () => {
       sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/111',
       sourceId: 'PMID:111',
       sourceKind: 'pubmed',
-    });
+    }]);
+    const [res] = results;
     expect(res.status).toBe('submitted');
     expect(res.draftId).toBeTruthy();
 
@@ -144,7 +145,7 @@ describe('strategy ingest integration', () => {
     // Qdrant upserts are applied asynchronously; let the indexer catch up before the dedup search.
     await new Promise((r) => setTimeout(r, 1000));
 
-    const res = await svc.ingestCandidate({
+    const { results } = await svc.ingestBatch([{
       title: 'Box Breathing',
       technique: 'inhale 4 hold 4 exhale 4',
       source: 'PubMed',
@@ -153,7 +154,8 @@ describe('strategy ingest integration', () => {
       sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/222',
       sourceId: 'PMID:222',
       sourceKind: 'pubmed',
-    });
+    }]);
+    const [res] = results;
     // Same "Box Breathing: ..." content → identical vector → cosine 1.0 ≥ 0.95 → deduped.
     expect(res.status).toBe('deduped');
     expect(res.draftId).toBeUndefined();
