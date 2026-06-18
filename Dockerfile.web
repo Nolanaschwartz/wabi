@@ -20,6 +20,9 @@ COPY packages/shared ./packages/shared
 # Generate Prisma client
 RUN pnpm -F @wabi/shared db:generate
 
+# Build shared first — web imports @wabi/shared from its built dist/
+RUN pnpm -F @wabi/shared build
+
 # Build
 RUN pnpm -F @wabi/web build
 
@@ -40,6 +43,7 @@ RUN pnpm install --prod --frozen-lockfile
 # Copy built artifacts
 COPY --from=builder /app/packages/web/.next ./packages/web/.next
 COPY --from=builder /app/packages/web/public ./packages/web/public
+COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/shared/generated ./packages/shared/generated
 
 # Copy Prisma schema for runtime
