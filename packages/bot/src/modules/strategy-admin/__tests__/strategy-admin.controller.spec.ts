@@ -35,6 +35,7 @@ describe('StrategyAdminController', () => {
       recordNegativeFeedback: jest.fn(),
       setEvidenceLevel: jest.fn(),
       ingestCandidate: jest.fn(),
+      ingestBatch: jest.fn(),
       hasSeen: jest.fn(),
     } as any;
     controller = new StrategyAdminController(service);
@@ -84,6 +85,16 @@ describe('StrategyAdminController', () => {
     service.ingestCandidate.mockResolvedValue({ status: 'deduped' });
     await expect(controller.ingest({ sourceId: 'PMID:1' } as any)).rejects.toBeInstanceOf(ConflictException);
   });
+  it('ingests a batch of drafts for one paper and returns per-draft results (no 409 for mixed outcomes)', async () => {
+    service.ingestBatch.mockResolvedValue({
+      results: [{ status: 'submitted', draftId: 'd1' }, { status: 'deduped' }],
+    });
+    const candidates = [{ sourceId: 'PMID:1', title: 'a' }, { sourceId: 'PMID:1', title: 'b' }];
+    const res = await controller.ingestBatch({ candidates } as any);
+    expect(res).toEqual({ results: [{ status: 'submitted', draftId: 'd1' }, { status: 'deduped' }] });
+    expect(service.ingestBatch).toHaveBeenCalledWith(candidates);
+  });
+
   it('reports seen status', async () => {
     service.hasSeen.mockResolvedValue(true);
     expect(await controller.seen('PMID:1')).toEqual({ seen: true });

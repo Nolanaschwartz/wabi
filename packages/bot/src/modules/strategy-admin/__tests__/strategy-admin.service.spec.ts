@@ -460,6 +460,94 @@ describe('StrategyAdminService ledger', () => {
   });
 });
 
+describe('StrategyAdminService.ingestBatch', () => {
+  let svc: StrategyAdminService;
+  let trustGate: { evaluate: jest.Mock };
+  let retrieval: { search: jest.Mock };
+
+  // Two distinct techniques mined from ONE paper (same sourceId) — the case the 1-row-per-source
+  // ledger used to block. Shared per-paper fields are identical; title/technique differ.
+  const base = {
+    source: 'PubMed', evidence: 'peer-reviewed: RCT',
+    sourceUrl: 'https://pubmed.ncbi.nlm.nih.gov/12345',
+    sourceId: 'PMID:12345', sourceKind: 'pubmed',
+  };
+  const draftA = { ...base, title: 'PMR', technique: 'tense and release', sourceText: 'a' };
+  const draftB = { ...base, title: 'Box breathing', technique: 'inhale 4 hold 4', sourceText: 'b' };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
+    trustGate = { evaluate: jest.fn() };
+    retrieval = { search: jest.fn() };
+    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any, {} as any);
+    jest.spyOn(svc, 'markProcessed').mockResolvedValue();
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue(null);
+  });
+
+  it('persists N drafts from one source and marks the ledger exactly once', async () => {
+    retrieval.search.mockResolvedValue([]); // neither is a library duplicate
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    jest.spyOn(svc, 'submitDraft')
+      .mockResolvedValueOnce({ id: 'draft-1', status: 'pending-review' } as any)
+      .mockResolvedValueOnce({ id: 'draft-2', status: 'pending-review' } as any);
+
+    const res = await svc.ingestBatch([draftA, draftB] as any);
+
+    expect(res.results).toEqual([
+      { status: 'submitted', draftId: 'draft-1' },
+      { status: 'submitted', draftId: 'draft-2' },
+    ]);
+    expect(svc.submitDraft).toHaveBeenCalledTimes(2);
+    // The ledger is keyed per-source, so it is marked ONCE for the whole batch — never per draft.
+    expect(svc.markProcessed).toHaveBeenCalledTimes(1);
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'submitted');
+  });
+
+  it('evaluates each draft independently; per-draft library dedup does not sink its siblings', async () => {
+    // draftA is already in the library, draftB is novel.
+    retrieval.search
+      .mockResolvedValueOnce([{ id: 'x', content: '', evidence: '', score: 0.99 }])
+      .mockResolvedValueOnce([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+    jest.spyOn(svc, 'submitDraft').mockResolvedValue({ id: 'draft-2', status: 'pending-review' } as any);
+
+    const res = await svc.ingestBatch([draftA, draftB] as any);
+
+    expect(res.results[0].status).toBe('deduped');
+    expect(res.results[1]).toEqual({ status: 'submitted', draftId: 'draft-2' });
+    // Aggregate precedence: at least one submitted ⇒ the source's terminal status is 'submitted'.
+    expect(svc.markProcessed).toHaveBeenCalledTimes(1);
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'submitted');
+  });
+
+  it('marks the source rejected only when every draft is rejected', async () => {
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'reject', reason: 'unsafe' });
+    jest.spyOn(svc, 'submitDraft');
+
+    const res = await svc.ingestBatch([draftA, draftB] as any);
+
+    expect(res.results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+    expect(svc.submitDraft).not.toHaveBeenCalled();
+    expect(svc.markProcessed).toHaveBeenCalledWith('PMID:12345', 'pubmed', 'rejected');
+  });
+
+  it('short-circuits the whole batch to deduped when the source is already in the ledger', async () => {
+    // Re-run idempotency: a paper processed on a prior run is never re-evaluated or re-marked,
+    // regardless of how many drafts the batch carries.
+    (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue({ sourceId: 'PMID:12345' });
+    retrieval.search.mockResolvedValue([]);
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'ok' });
+
+    const res = await svc.ingestBatch([draftA, draftB] as any);
+
+    expect(res.results.map((r) => r.status)).toEqual(['deduped', 'deduped']);
+    expect(trustGate.evaluate).not.toHaveBeenCalled();
+    expect(svc.markProcessed).not.toHaveBeenCalled();
+  });
+});
+
 describe('StrategyAdminService.ingestCandidate', () => {
   let svc: StrategyAdminService;
   let trustGate: { evaluate: jest.Mock };

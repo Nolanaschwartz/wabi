@@ -43,4 +43,22 @@ export class BotClient {
       return 'error';
     }
   }
+
+  /** Submit all drafts mined from ONE paper in a single call. The bot evaluates each independently
+   * and marks the per-source ledger once; the response carries a per-draft outcome we map in order.
+   * Any transport failure fails the whole batch closed to 'error' (the run can retry the paper). */
+  async submitBatch(candidates: Candidate[]): Promise<SubmitOutcome[]> {
+    const url = `${this.deps.baseUrl}/admin/strategies/ingest/batch`;
+    try {
+      const res = await this.fetchFn(url, { method: 'POST', headers: this.headers(), body: JSON.stringify({ candidates }) });
+      if (!res.ok) return candidates.map(() => 'error');
+      const body = (await res.json().catch(() => ({}))) as { results?: { status?: string }[] };
+      if (!Array.isArray(body.results)) return candidates.map(() => 'error');
+      return body.results.map((r) =>
+        r.status === 'submitted' || r.status === 'deduped' || r.status === 'rejected' ? r.status : 'error',
+      );
+    } catch {
+      return candidates.map(() => 'error');
+    }
+  }
 }

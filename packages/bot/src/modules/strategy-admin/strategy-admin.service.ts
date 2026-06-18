@@ -19,6 +19,11 @@ export interface IngestCandidate {
   sourceKind: string;
 }
 
+export interface IngestResult {
+  status: 'submitted' | 'deduped' | 'rejected';
+  draftId?: string;
+}
+
 // Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
 const RECONCILE_CRON = '0 * * * *';
 
@@ -111,22 +116,14 @@ export class StrategyAdminService {
   }
 
   /**
-   * Ingest one research candidate (ADR-0033). Layered: library dedup → trust gate (which, for
-   * research-agent, runs safety+faithfulness but can only queue or reject) → ledger record. The
-   * trust level is forced to 'research-agent' here so this endpoint can never auto-publish.
+   * Evaluate ONE candidate without touching the ledger: library dedup → trust gate (which, for
+   * research-agent, runs safety+faithfulness but can only queue or reject) → persist. The trust
+   * level is forced to 'research-agent' so this path can never auto-publish. Callers
+   * (ingestCandidate / ingestBatch) own the per-source ledger mark, since the ledger is keyed per
+   * source and one paper may now yield several drafts (ADR-0033).
    */
-  async ingestCandidate(
-    c: IngestCandidate,
-  ): Promise<{ status: 'submitted' | 'deduped' | 'rejected'; draftId?: string }> {
-    // Bot-side idempotency on the authoritative sourceId key (ADR-0033). The worker's seen() check is
-    // an optimization, not a guarantee — if it ever misses (e.g. a key-format mismatch), this hard
-    // gate still prevents a duplicate draft. No re-mark: the ledger already holds the terminal status.
-    if (await this.hasSeen(c.sourceId)) {
-      return { status: 'deduped' };
-    }
-
+  private async evaluateCandidate(c: IngestCandidate): Promise<IngestResult> {
     if (await this.isDuplicate(c.title, c.technique)) {
-      await this.markProcessed(c.sourceId, c.sourceKind, 'deduped');
       return { status: 'deduped' };
     }
 
@@ -146,13 +143,52 @@ export class StrategyAdminService {
     // a failed draft). On non-reject, submitDraft re-evaluates and persists as pending-review.
     const decision = await this.trustGate.evaluate(draft);
     if (decision.decision === 'reject') {
-      await this.markProcessed(c.sourceId, c.sourceKind, 'rejected');
       return { status: 'rejected' };
     }
 
     const persisted = await this.submitDraft(draft);
-    await this.markProcessed(c.sourceId, c.sourceKind, 'submitted');
     return { status: 'submitted', draftId: persisted.id };
+  }
+
+  /** Ingest a single research candidate. Thin wrapper over the per-source batch path. */
+  async ingestCandidate(c: IngestCandidate): Promise<IngestResult> {
+    const { results } = await this.ingestBatch([c]);
+    return results[0];
+  }
+
+  /**
+   * Ingest all drafts mined from ONE paper (a single sourceId) — a paper may now yield several
+   * distinct techniques. Source-level idempotency is checked once and the ledger is marked once
+   * for the whole batch; each draft is dedup'd and gated independently so a duplicate sibling
+   * never sinks the others (ADR-0033). The batch is assumed homogeneous in sourceId/sourceKind.
+   */
+  async ingestBatch(candidates: IngestCandidate[]): Promise<{ results: IngestResult[] }> {
+    if (candidates.length === 0) return { results: [] };
+
+    const { sourceId, sourceKind } = candidates[0];
+
+    // Bot-side idempotency on the authoritative sourceId key. The worker's seen() check is an
+    // optimization, not a guarantee; this hard gate prevents re-processing a paper from a prior
+    // run. No re-mark — the ledger already holds the terminal status.
+    if (await this.hasSeen(sourceId)) {
+      return { results: candidates.map(() => ({ status: 'deduped' as const })) };
+    }
+
+    const results: IngestResult[] = [];
+    for (const c of candidates) {
+      results.push(await this.evaluateCandidate(c));
+    }
+
+    // One ledger mark for the whole source. Precedence submitted > deduped > rejected: the paper's
+    // terminal status reflects the best outcome any of its drafts achieved.
+    const status: 'submitted' | 'deduped' | 'rejected' = results.some((r) => r.status === 'submitted')
+      ? 'submitted'
+      : results.some((r) => r.status === 'deduped')
+        ? 'deduped'
+        : 'rejected';
+    await this.markProcessed(sourceId, sourceKind, status);
+
+    return { results };
   }
 
   async getPendingDrafts(): Promise<StrategyDraft[]> {

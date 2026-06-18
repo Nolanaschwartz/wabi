@@ -57,6 +57,14 @@ export class StrategyAdminController {
     return result;
   }
 
+  @Post('ingest/batch')
+  @HttpCode(HttpStatus.CREATED)
+  async ingestBatch(@Body() body: { candidates: IngestCandidate[] }) {
+    // A batch from one paper may carry mixed per-draft outcomes, so there is no single 409 to throw
+    // (unlike the single ingest). The worker reads the per-draft results array instead.
+    return this.admin.ingestBatch(body.candidates ?? []);
+  }
+
   @Get('seen')
   async seen(@Query('sourceId') sourceId: string) {
     return { seen: await this.admin.hasSeen(sourceId) };

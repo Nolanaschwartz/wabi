@@ -38,4 +38,31 @@ describe('BotClient', () => {
     const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
     expect(await client.submit(candidate)).toBe('error');
   });
+
+  it('submitBatch posts all drafts for one paper and maps each result in order', async () => {
+    const fetchFn = jest.fn().mockResolvedValue({
+      ok: true, status: 201,
+      json: async () => ({ results: [{ status: 'submitted', draftId: 'd1' }, { status: 'deduped' }] }),
+    });
+    const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
+
+    const outcomes = await client.submitBatch([candidate, candidate]);
+
+    expect(outcomes).toEqual(['submitted', 'deduped']);
+    const [url, opts] = fetchFn.mock.calls[0];
+    expect(url).toBe('http://bot/admin/strategies/ingest/batch');
+    expect(JSON.parse(opts.body)).toEqual({ candidates: [candidate, candidate] });
+  });
+
+  it('submitBatch maps a transport failure to error for every draft', async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
+    expect(await client.submitBatch([candidate, candidate])).toEqual(['error', 'error']);
+  });
+
+  it('submitBatch maps a thrown fetch to error for every draft', async () => {
+    const fetchFn = jest.fn().mockRejectedValue(new Error('network'));
+    const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
+    expect(await client.submitBatch([candidate])).toEqual(['error']);
+  });
 });

@@ -50,7 +50,7 @@ export interface RunnerDeps {
  * (a `summary` the core ignores is carried for type-compatibility with {@link RunDeps}). */
 interface BuiltAgent {
   runAgent: RunDeps['runAgent'];
-  submit: (candidate: Candidate) => Promise<SubmitOutcome>;
+  submitBatch: (candidates: Candidate[]) => Promise<SubmitOutcome[]>;
   tokens: () => number;
   topicsRun: () => number;
   /** Optional: flush any in-flight Langfuse ingestion once the run is done so the last spans aren't
@@ -95,14 +95,14 @@ export class ResearchRunnerService {
   /** Perform one run over the given topics+bounds; map the core's result onto a {@link RunnerResult}. */
   async execute(input: RunnerInput): Promise<RunnerResult> {
     const built = this.buildAgent(input.bounds, this.log);
-    const { runAgent, submit, tokens, topicsRun } = built;
+    const { runAgent, submitBatch, tokens, topicsRun } = built;
 
     try {
       const result = await this.runFn({
         topics: input.topics,
         bounds: input.bounds,
         log: this.log,
-        submit,
+        submitBatch,
         runAgent,
       });
 
@@ -144,7 +144,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   let topicsRun = 0;
 
   return {
-    submit: (c) => client.submit(c),
+    submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
         { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract, dedup: isDuplicateInRun },
