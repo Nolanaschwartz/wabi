@@ -29,7 +29,9 @@ export interface Candidate {
   sourceId: string;
   sourceKind: SourceKind;
   trustLevel: 'research-agent';
-  lens?: Lens;             // in-flight provenance: which lens surfaced this technique
+  lens?: Lens;             // in-flight provenance: which single lens surfaced this technique
+  lenses?: Lens[];         // after within-paper merge: every lens that surfaced it
+  lensAgreement?: number;  // distinct-lens count (robustness signal)
 }
 
 export interface Bounds {

@@ -18,6 +18,8 @@ export interface AgentDeps {
   gate: (abstract: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
   extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
+  /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
+  merge: (candidates: Candidate[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
   dedup: (candidate: Candidate, kept: Candidate[]) => Promise<{ duplicate: boolean; tokens: number; trace?: StepTrace }>;
 }
 
@@ -162,11 +164,17 @@ export class ResearchAgent {
         this.tokens += tokens;
         for (const t of traces) this.emitSpan('extract', t);
         if (candidates.length === 0) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
-        summary.extracted += candidates.length;
-        this.log.info('extracted', { id: paper.sourceId, candidates: candidates.length, tokens });
+
+        // Collapse the lens candidates into the paper's distinct techniques before they reach the run.
+        const m = await this.deps.merge(candidates);
+        this.tokens += m.tokens;
+        for (const t of m.traces) this.emitSpan('merge', t);
+        const distinct = m.candidates;
+        summary.extracted += distinct.length;
+        this.log.info('extracted', { id: paper.sourceId, candidates: distinct.length, tokens });
 
         // Each candidate dedups against the run's kept set independently; the topic cap stops mid-paper.
-        for (const candidate of candidates) {
+        for (const candidate of distinct) {
           if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
           const dd = await this.deps.dedup(candidate, kept);
           this.tokens += dd.tokens;

@@ -57,6 +57,7 @@ function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind
     seen: jest.fn().mockResolvedValue(false),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
+    merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
     dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0 }),
     ...over,
   };
@@ -197,6 +198,17 @@ describe('ResearchAgent', () => {
     const { candidates, summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
     expect(candidates).toHaveLength(2);
     expect(summary.extracted).toBe(2);
+  });
+
+  it('runs within-paper merge on the extracted candidates before dedup, keeping only the distinct set', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5, traces: [] });
+    // merge collapses the two lens hits into one technique.
+    const merge = jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: [cands[0]], tokens: 2, traces: [] }));
+    const deps = baseDeps({ extract, merge }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const { candidates, summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
+    expect(merge).toHaveBeenCalledWith([candidate('a'), candidate('b')]);
+    expect(candidates).toHaveLength(1);
+    expect(summary.extracted).toBe(1);
   });
 
   it('fans a peer-reviewed paper across all five lenses', async () => {

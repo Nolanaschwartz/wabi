@@ -14,6 +14,7 @@ export interface IngestCandidate {
   source: string;
   evidence: string;
   evidenceTier?: string;
+  lenses?: string[];
   sourceText?: string;
   sourceUrl: string;
   sourceId: string;
@@ -81,6 +82,7 @@ export class StrategyAdminService {
         source: draft.source,
         evidence: draft.evidence,
         evidenceTier: draft.evidenceTier ?? null,
+        lenses: draft.lenses ?? [],
         sourceText: draft.sourceText ?? null,
         sourceUrl: draft.sourceUrl,
         trustLevel: draft.trustLevel,
@@ -136,6 +138,7 @@ export class StrategyAdminService {
       source: c.source,
       evidence: c.evidence,
       evidenceTier: c.evidenceTier,
+      lenses: c.lenses,
       sourceText: c.sourceText,
       sourceUrl: c.sourceUrl,
       trustLevel: 'research-agent',
@@ -350,6 +353,7 @@ export class StrategyAdminService {
       source: row.source,
       evidence: row.evidence,
       evidenceTier: row.evidenceTier,
+      lenses: row.lenses,
       sourceText: row.sourceText,
       sourceUrl: row.sourceUrl,
       trustLevel: row.trustLevel,

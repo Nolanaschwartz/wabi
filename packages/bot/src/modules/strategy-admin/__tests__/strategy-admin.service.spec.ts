@@ -152,6 +152,24 @@ describe('StrategyAdminService', () => {
     expect(retrieval.upsert).not.toHaveBeenCalled();
   });
 
+  it('persists the contributing lenses on the draft', async () => {
+    trustGate.evaluate.mockResolvedValue({ decision: 'queue', reason: 'queued' });
+    (prisma.strategyDraft.create as jest.Mock).mockResolvedValue({
+      id: '9', title: 'T', technique: 'Q', source: 'PubMed', evidence: 'e', evidenceTier: 'rct',
+      lenses: ['behavioral', 'physiological'], sourceText: null, sourceUrl: 'u',
+      trustLevel: 'research-agent', status: 'pending-review', negativeCount: 0,
+    });
+
+    await service.submitDraft({
+      id: '9', title: 'T', technique: 'Q', source: 'PubMed', evidence: 'e', evidenceTier: 'rct',
+      lenses: ['behavioral', 'physiological'], sourceUrl: 'u', trustLevel: 'research-agent', status: 'draft',
+    });
+
+    expect(prisma.strategyDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ lenses: ['behavioral', 'physiological'] }) }),
+    );
+  });
+
   it('persists draft in Postgres and survives restart', async () => {
     trustGate.evaluate.mockResolvedValue({
       decision: 'queue',
