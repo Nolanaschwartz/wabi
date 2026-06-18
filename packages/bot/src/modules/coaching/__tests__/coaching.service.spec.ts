@@ -342,7 +342,7 @@ describe('CoachingService', () => {
     await service.handle(mockMessage);
 
     // A read survives the lapsed tier: the read-back tool runs, and the user is NOT handed a subscribe prompt.
-    expect(journalDmHandler.invoke).toHaveBeenCalledWith('get_entry', expect.anything());
+    expect(journalDmHandler.invoke).toHaveBeenCalledWith('get_entry', expect.anything(), undefined);
     expect(mockMessage.reply).not.toHaveBeenCalledWith(
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
@@ -679,6 +679,7 @@ describe('CoachingService', () => {
     expect(journalDmHandler.invoke).toHaveBeenCalledWith(
       'save_entry',
       expect.objectContaining({ userId: '123', batch: 'had a rough ranked night, feel worthless at the game' }),
+      undefined,
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
   });

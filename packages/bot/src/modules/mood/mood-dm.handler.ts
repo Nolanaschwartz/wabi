@@ -2,13 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { MoodService } from './mood.service';
 import { parseMoodRating } from './mood-rating';
 import { SpokeSessionService } from '../spoke-session/spoke-session.service';
+import type { ToolArgs } from '../intent-router/intent-router.service';
 import type { DmTurnContext } from '../coaching/coach-handler';
 import type { Spoke, SpokeResult, ToolSpec } from '../coaching/spoke';
 
 /**
- * The mood spoke, a two-turn capture (mirrors journal give_prompt → capture). The hub routes a mood
- * intent here to PROMPT for a 1–5 and arm the floor; the person's next turn is routed straight back as
- * the rating. Safety and access are upstream; mood logging is gated active-only at the tool boundary.
+ * The mood spoke. A fresh turn logs in ONE shot when the rating is already known — the router extracted
+ * it as a tool argument ("set my mood to four"), or the message itself carries a 1–5 (regex fallback).
+ * Otherwise it falls back to the two-turn capture (mirrors journal give_prompt → capture): PROMPT for a
+ * 1–5 and arm the floor, and the person's next turn is routed straight back as the rating. Safety and
+ * access are upstream; mood logging is gated active-only at the tool boundary.
  */
 @Injectable()
 export class MoodDmHandler implements Spoke {
@@ -25,9 +28,18 @@ export class MoodDmHandler implements Spoke {
     { name: 'log_mood', description: 'Ask for a 1–5 mood rating and log it', access: 'active' },
   ];
 
-  /** A fresh mood turn: prompt for the rating and arm the floor. Unknown tools take the same safe path. */
-  async invoke(_tool: string, ctx: DmTurnContext): Promise<SpokeResult> {
-    await this.promptForRating(ctx);
+  /**
+   * A fresh mood turn, resolving the rating in priority order: router-extracted arg → batch regex →
+   * prompt. The first two log in one shot (no floor); only an unknown rating arms the two-turn capture.
+   * Unknown tools take the same safe path.
+   */
+  async invoke(_tool: string, ctx: DmTurnContext, args?: ToolArgs): Promise<SpokeResult> {
+    const rating = args?.rating ?? parseMoodRating(ctx.batch);
+    if (rating != null) {
+      await this.logRating(ctx, rating);
+    } else {
+      await this.promptForRating(ctx);
+    }
     return { kind: 'handled' };
   }
 
@@ -56,12 +68,21 @@ export class MoodDmHandler implements Spoke {
       await ctx.message.reply("I didn't catch a number 1–5 — no worries, you can log your mood anytime.");
       return;
     }
+    await this.logRating(ctx, rating);
+  }
+
+  /**
+   * The single mood writer + confirmation, shared by the one-shot `invoke` and the two-turn `capture`,
+   * so both surfaces produce identical copy.
+   *
+   * Structured-only write: rating + emoji, NEVER a free-text note. The turn is already crisis-screened
+   * upstream (the coaching classifier runs before dispatch), and with no minable text there is nothing
+   * for InnerStateLogger to screen or derive — so a direct create() is the rating-only equivalent of
+   * /feeling and upholds the screened-record invariant (ADR-0028/0029). If this spoke ever captures a
+   * note, it must route through InnerStateLoggerService instead of calling create() directly.
+   */
+  private async logRating(ctx: DmTurnContext, rating: number): Promise<void> {
     const emoji = MoodService.ratingToEmoji(rating);
-    // Structured-only write: rating + emoji, NEVER a free-text note. The capture turn is already
-    // crisis-screened upstream (the coaching classifier runs before dispatch), and with no minable text
-    // there is nothing for InnerStateLogger to screen or derive — so a direct create() is the rating-only
-    // equivalent of /feeling and upholds the screened-record invariant (ADR-0028/0029). If this spoke ever
-    // captures a note, it must route through InnerStateLoggerService instead of calling create() directly.
     await this.mood.create(ctx.userId, { rating, emoji });
     const avg = await this.mood.trend(ctx.userId);
     const trendLine = avg > 0 ? ` Your 7-day average is ${avg}.` : '';

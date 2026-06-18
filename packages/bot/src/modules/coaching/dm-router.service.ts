@@ -12,6 +12,7 @@ import {
   type IntentContext,
   type Intent,
   type SpokeCatalogue,
+  type ToolArgs,
 } from '../intent-router/intent-router.service';
 
 /**
@@ -34,7 +35,7 @@ export const INTENT_DISPATCH_THRESHOLD = 0.75;
  * pair the registry dispatches uniformly (ADR-0032).
  */
 export type RoutingPlan =
-  | { kind: 'invoke'; intent: Intent; tool: string }
+  | { kind: 'invoke'; intent: Intent; tool: string; args?: ToolArgs }
   | { kind: 'resume'; intent: Intent };
 
 /**
@@ -139,7 +140,8 @@ export class DmRouterService {
       const spoke = this.registry[verdict.intent];
       const tool = this.resolveTool(spoke, verdict.tool);
       return {
-        plan: { kind: 'invoke', intent: verdict.intent, tool },
+        // Carry any router-extracted tool args (e.g. mood's rating) so the spoke can act in one shot.
+        plan: { kind: 'invoke', intent: verdict.intent, tool, args: verdict.args },
         verdict,
         access: this.toolAccess(spoke, tool),
         isCapture: false,
@@ -162,7 +164,7 @@ export class DmRouterService {
   async dispatch(ctx: DmTurnContext, plan: RoutingPlan): Promise<void> {
     const spoke = this.registry[plan.intent];
     const result =
-      plan.kind === 'resume' ? await spoke.resume(ctx) : await spoke.invoke(plan.tool, ctx);
+      plan.kind === 'resume' ? await spoke.resume(ctx) : await spoke.invoke(plan.tool, ctx, plan.args);
 
     // A spoke that declines the turn (tilt offer pending, crisis aftermath, capture floor expired,
     // unknown tool) falls through to coach — the one universal fallback, uniform across every spoke.

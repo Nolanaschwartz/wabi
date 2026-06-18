@@ -210,6 +210,14 @@ describe('DmRouterService', () => {
       expect(decision.plan).toEqual({ kind: 'invoke', intent: 'mood', tool: 'log_mood' });
     });
 
+    it('threads router-extracted args onto the mood invoke plan', async () => {
+      intentRouter.route.mockResolvedValue({ intent: 'mood', confidence: 0.95, tool: 'log_mood', args: { rating: 4 } });
+
+      const decision = await router.prepare('123', 'set my mood to four', {});
+
+      expect(decision.plan).toEqual({ kind: 'invoke', intent: 'mood', tool: 'log_mood', args: { rating: 4 } });
+    });
+
     it('routes back to the mood spoke (resume) when the mood floor is held, skipping the LLM', async () => {
       spokeSession.active.mockResolvedValue('mood');
 
@@ -250,7 +258,7 @@ describe('DmRouterService', () => {
       const c = ctx();
       await router.dispatch(c, invoke('journal', 'get_entry'));
 
-      expect(journalHandler.invoke).toHaveBeenCalledWith('get_entry', c);
+      expect(journalHandler.invoke).toHaveBeenCalledWith('get_entry', c, undefined);
       expect(coachHandler.invoke).not.toHaveBeenCalled();
     });
 
@@ -260,7 +268,7 @@ describe('DmRouterService', () => {
 
       await router.dispatch(c, invoke('tilt', 'offer_session'));
 
-      expect(tiltHandler.invoke).toHaveBeenCalledWith('offer_session', c);
+      expect(tiltHandler.invoke).toHaveBeenCalledWith('offer_session', c, undefined);
       expect(coachHandler.invoke).not.toHaveBeenCalled();
     });
 
@@ -277,7 +285,14 @@ describe('DmRouterService', () => {
       const c = ctx();
       await router.dispatch(c, invoke('mood', 'log_mood'));
 
-      expect(moodHandler.invoke).toHaveBeenCalledWith('log_mood', c);
+      expect(moodHandler.invoke).toHaveBeenCalledWith('log_mood', c, undefined);
+    });
+
+    it('passes the invoke plan args through to the spoke invoke', async () => {
+      const c = ctx();
+      await router.dispatch(c, { kind: 'invoke', intent: 'mood', tool: 'log_mood', args: { rating: 4 } });
+
+      expect(moodHandler.invoke).toHaveBeenCalledWith('log_mood', c, { rating: 4 });
     });
 
     it('resumes the mood capture on a resume plan (spoke owns the consume)', async () => {
@@ -303,7 +318,7 @@ describe('DmRouterService', () => {
       const c = ctx();
       await router.dispatch(c, invoke('coach', 'coach'));
 
-      expect(coachHandler.invoke).toHaveBeenCalledWith('coach', c);
+      expect(coachHandler.invoke).toHaveBeenCalledWith('coach', c, undefined);
       expect(journalHandler.invoke).not.toHaveBeenCalled();
     });
 
@@ -311,7 +326,7 @@ describe('DmRouterService', () => {
       const c = ctx();
       await router.dispatch(c, invoke('journal', 'save_entry'));
 
-      expect(journalHandler.invoke).toHaveBeenCalledWith('save_entry', c);
+      expect(journalHandler.invoke).toHaveBeenCalledWith('save_entry', c, undefined);
       expect(coachHandler.invoke).not.toHaveBeenCalled();
     });
 
@@ -319,7 +334,7 @@ describe('DmRouterService', () => {
       const c = ctx();
       await router.dispatch(c, invoke('journal', 'give_prompt'));
 
-      expect(journalHandler.invoke).toHaveBeenCalledWith('give_prompt', c);
+      expect(journalHandler.invoke).toHaveBeenCalledWith('give_prompt', c, undefined);
     });
 
     it('resumes the journal capture on a resume plan (spoke owns the consume)', async () => {
