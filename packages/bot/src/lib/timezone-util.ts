@@ -25,11 +25,3 @@ export function startOfDayInTZ(tz: string, d: Date = new Date()): Date {
     return fallback;
   }
 }
-
-export function dateInTZ(tz: string, d: Date = new Date()): string {
-  try {
-    return d.toLocaleString('en-US', { timeZone: tz });
-  } catch {
-    return d.toLocaleString();
-  }
-}
