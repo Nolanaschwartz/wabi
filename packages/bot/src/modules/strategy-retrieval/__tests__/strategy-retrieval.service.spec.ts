@@ -71,6 +71,39 @@ describe('StrategyRetrievalService', () => {
     expect(mockSearch).toHaveBeenCalled();
   });
 
+  const point = (id: string, score: number, evidenceTier: string, effectivenessScore: number) => ({
+    id, score, payload: { content: `${id}: tech`, evidence: 'e', evidenceTier, effectivenessScore },
+  });
+
+  it('re-ranks a near-cosine-tie toward the higher-evidence, higher-confidence strategy', async () => {
+    (service as any).qdrant.search = jest.fn().mockResolvedValue([
+      point('weak', 0.80, 'preprint', 0.1),
+      point('strong', 0.78, 'meta-analysis', 0.9),
+    ]);
+    jest.spyOn(service as any, 'embed').mockResolvedValue(new Array(768).fill(0));
+    const results = await service.search('q', 2);
+    expect(results.map((r) => r.id)).toEqual(['strong', 'weak']);
+  });
+
+  it('keeps cosine dominant when the similarity gap is large', async () => {
+    (service as any).qdrant.search = jest.fn().mockResolvedValue([
+      point('close', 0.95, 'preprint', 0.0),
+      point('far', 0.60, 'meta-analysis', 1.0),
+    ]);
+    jest.spyOn(service as any, 'embed').mockResolvedValue(new Array(768).fill(0));
+    const results = await service.search('q', 2);
+    expect(results[0].id).toBe('close');
+  });
+
+  it('returns only topK after re-ranking an over-fetched pool', async () => {
+    (service as any).qdrant.search = jest.fn().mockResolvedValue([
+      point('a', 0.9, 'rct', 0.5), point('b', 0.8, 'rct', 0.5), point('c', 0.7, 'rct', 0.5),
+    ]);
+    jest.spyOn(service as any, 'embed').mockResolvedValue(new Array(768).fill(0));
+    const results = await service.search('q', 2);
+    expect(results).toHaveLength(2);
+  });
+
   it('embeds against the OpenAI-compatible /v1/embeddings path and upserts the vector', async () => {
     // The embedding server is OpenAI-compatible: the path is /v1/embeddings and the response is
     // { data: [{ embedding: [...] }] }. Hitting the Ollama-native /api/embeddings 404s, which made

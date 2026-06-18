@@ -17,6 +17,27 @@ export interface StrategyPoint {
   score?: number;
 }
 
+// Re-rank weights (capture-now consumer of evidenceTier + confidence). Cosine similarity dominates;
+// these small bonuses mainly break near-ties toward better-supported strategies. Tunable.
+const TIER_BONUS: Record<string, number> = {
+  'meta-analysis': 0.05,
+  'systematic-review': 0.04,
+  rct: 0.03,
+  observational: 0.01,
+  preprint: 0,
+};
+const CONFIDENCE_WEIGHT = 0.05;
+// Over-fetch factor: pull a wider cosine pool so the re-rank has runners-up to promote.
+const RERANK_POOL = 4;
+
+/** Blend cosine similarity with evidence tier + judge confidence. Cosine-dominant by design. */
+function rerankScore(p: StrategyPoint): number {
+  const cosine = p.score ?? 0;
+  const tierBonus = p.evidenceTier ? TIER_BONUS[p.evidenceTier] ?? 0 : 0;
+  const confidence = typeof p.effectivenessScore === 'number' ? p.effectivenessScore : 0;
+  return cosine + tierBonus + CONFIDENCE_WEIGHT * confidence;
+}
+
 @Injectable()
 export class StrategyRetrievalService {
   private qdrant: QdrantClient;
@@ -52,9 +73,10 @@ export class StrategyRetrievalService {
   async search(query: string, topK = 3): Promise<StrategyPoint[]> {
     try {
       const embedding = await this.embed(query);
+      // Over-fetch a wider cosine pool, then re-rank it so tier/confidence can promote a near-tie.
       const results = await this.qdrant.search(COLLECTION_NAME, {
         vector: embedding,
-        limit: topK,
+        limit: Math.max(topK * RERANK_POOL, topK),
         with_payload: true,
       });
 
@@ -62,7 +84,7 @@ export class StrategyRetrievalService {
         return [];
       }
 
-      return results.map((point: any) => ({
+      const points: StrategyPoint[] = results.map((point: any) => ({
         id: String(point.id),
         content: (point.payload?.content as string) ?? '',
         evidence: (point.payload?.evidence as string) ?? '',
@@ -70,6 +92,9 @@ export class StrategyRetrievalService {
         effectivenessScore: point.payload?.effectivenessScore as number,
         score: point.score as number,
       }));
+
+      points.sort((a, b) => rerankScore(b) - rerankScore(a));
+      return points.slice(0, topK);
     } catch {
       return [];
     }

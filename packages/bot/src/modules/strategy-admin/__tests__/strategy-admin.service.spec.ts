@@ -483,10 +483,19 @@ describe('StrategyAdminService.isDuplicate', () => {
     svc = new StrategyAdminService({} as any, retrieval as any, {} as any, {} as any);
   });
 
-  it('is a duplicate when the top match scores at/above threshold', async () => {
+  it('is a duplicate when a match scores at/above threshold', async () => {
     retrieval.search.mockResolvedValue([{ id: 'a', content: 'x', evidence: 'y', score: 0.97 }]);
     expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(true);
-    expect(retrieval.search).toHaveBeenCalledWith('PMR: tense and release', 1);
+    expect(retrieval.search).toHaveBeenCalledWith('PMR: tense and release', 5);
+  });
+
+  it('is a duplicate when a lower-ranked pool member still exceeds the cosine threshold', async () => {
+    // Re-rank may put a higher-evidence item first; dedup must still catch a strong-cosine match below it.
+    retrieval.search.mockResolvedValue([
+      { id: 'reranked', content: 'x', evidence: 'y', score: 0.50 },
+      { id: 'truedup', content: 'x', evidence: 'y', score: 0.98 },
+    ]);
+    expect(await svc.isDuplicate('PMR', 'tense and release')).toBe(true);
   });
   it('is not a duplicate below threshold', async () => {
     retrieval.search.mockResolvedValue([{ id: 'a', content: 'x', evidence: 'y', score: 0.4 }]);
