@@ -9,6 +9,7 @@ import { PsyArxivTool } from '../sources/psyarxiv';
 import { relevanceGate } from '../agent/relevance-gate';
 import { extractWithLenses } from '../agent/extract-with-lenses';
 import { mergeWithinPaper } from '../agent/merge-within-paper';
+import { judgeCandidates } from '../agent/judge';
 import { isDuplicateInRun } from '../agent/dedup';
 import { ResearchAgent } from '../agent/research-agent';
 import { ResearchTracer } from '../agent/research-tracer';
@@ -148,7 +149,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, dedup: isDuplicateInRun },
+        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
         bounds,
         log,
         { tracer, runId },

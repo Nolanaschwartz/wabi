@@ -54,6 +54,7 @@ function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
       traces: [{ input: 'body', output: '{json}', model: 'm', latencyMs: 5 }],
     })),
     merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
+    judge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
     dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0, trace: { input: 'A vs B', output: 'different', model: 'm', latencyMs: 1 } }),
     ...over,
   };

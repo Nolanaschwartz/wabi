@@ -32,6 +32,8 @@ export interface Candidate {
   lens?: Lens;             // in-flight provenance: which single lens surfaced this technique
   lenses?: Lens[];         // after within-paper merge: every lens that surfaced it
   lensAgreement?: number;  // distinct-lens count (robustness signal)
+  confidence?: number;     // judge score 0..1 (slice 05); -> Qdrant effectivenessScore
+  rationale?: string;      // judge's one-line justification (reviewer audit)
 }
 
 export interface Bounds {

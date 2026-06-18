@@ -1,4 +1,4 @@
-import { Bounds, Candidate, Lens, Paper, RunSummary, SourceKind } from '../types';
+import { Bounds, Candidate, EvidenceTier, Lens, Paper, RunSummary, SourceKind } from '../types';
 import { Source } from '../sources/source';
 import { Logger, noopLogger } from '../util/logger';
 import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-tracer';
@@ -20,6 +20,8 @@ export interface AgentDeps {
   extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
   /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
   merge: (candidates: Candidate[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
+  /** Score, faithfulness-check, sharpen, and tier-cap a paper's candidates (slice 05). */
+  judge: (candidates: Candidate[], tier: EvidenceTier) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
   dedup: (candidate: Candidate, kept: Candidate[]) => Promise<{ duplicate: boolean; tokens: number; trace?: StepTrace }>;
 }
 
@@ -155,7 +157,8 @@ export class ResearchAgent {
         this.log.debug('body', { id: paper.sourceId, source: full ? 'fullText' : 'abstract', chars: body.length });
 
         // Tier-scaled lens fan-out; under budget pressure collapse to one lens (lenses fall before papers).
-        let lenses = lensesForTier(evidenceTier(paper));
+        const tier = evidenceTier(paper);
+        let lenses = lensesForTier(tier);
         if (this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * BUDGET_PRESSURE_FRACTION) {
           lenses = lenses.slice(0, 1);
         }
@@ -165,11 +168,15 @@ export class ResearchAgent {
         for (const t of traces) this.emitSpan('extract', t);
         if (candidates.length === 0) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
 
-        // Collapse the lens candidates into the paper's distinct techniques before they reach the run.
+        // Collapse the lens candidates into the paper's distinct techniques, then score + tier-cap them.
         const m = await this.deps.merge(candidates);
         this.tokens += m.tokens;
         for (const t of m.traces) this.emitSpan('merge', t);
-        const distinct = m.candidates;
+
+        const j = await this.deps.judge(m.candidates, tier);
+        this.tokens += j.tokens;
+        for (const t of j.traces) this.emitSpan('judge', t);
+        const distinct = j.candidates;
         summary.extracted += distinct.length;
         this.log.info('extracted', { id: paper.sourceId, candidates: distinct.length, tokens });
 

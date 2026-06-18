@@ -1,0 +1,83 @@
+import { generate } from '@wabi/shared/generate';
+import { extractMaxTokens } from '../config';
+import { Candidate, EvidenceTier } from '../types';
+import { StepTrace } from './relevance-gate';
+import { stripFences } from './extract';
+
+export interface JudgeResult {
+  candidates: Candidate[];
+  tokens: number;
+  traces: StepTrace[];
+}
+
+// Per-tier policy: preprints face a stricter faithfulness floor and a tighter cap (precision-leaning);
+// peer-reviewed work is recall-leaning. Source quality sets the bar automatically.
+function floorForTier(tier: EvidenceTier): number {
+  return tier === 'preprint' ? 0.7 : 0.5;
+}
+function capForTier(tier: EvidenceTier): number {
+  return tier === 'preprint' ? 2 : 5;
+}
+
+/** Score, faithfulness-check, optionally sharpen, and cap a paper's candidates. The judge may rewrite
+ * the human-facing title/technique but NEVER sourceText (faithfulness can't be laundered). Candidates
+ * below the tier floor or marked unfaithful are dropped; survivors are capped top-N by score. Fail-open
+ * (ADR-0021): a judge error/parse failure keeps the candidate at a neutral score rather than dropping
+ * it silently. */
+export async function judgeCandidates(candidates: Candidate[], tier: EvidenceTier): Promise<JudgeResult> {
+  const judged = await Promise.all(candidates.map((c) => judgeOne(c, tier)));
+
+  let tokens = 0;
+  const traces: StepTrace[] = [];
+  const kept: Candidate[] = [];
+  for (const j of judged) {
+    tokens += j.tokens;
+    if (j.trace) traces.push(j.trace);
+    if (j.candidate) kept.push(j.candidate);
+  }
+
+  kept.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+  return { candidates: kept.slice(0, capForTier(tier)), tokens, traces };
+}
+
+async function judgeOne(
+  c: Candidate,
+  tier: EvidenceTier,
+): Promise<{ candidate: Candidate | null; tokens: number; trace?: StepTrace }> {
+  const prompt =
+    `Judge this coping/wellbeing technique extracted from a research source.\n` +
+    `Score "faithful" (does the verbatim sourceText actually support the technique?) and "score" ` +
+    `(0..1 overall quality: grounded, actionable, audience-neutral, non-trivial).\n` +
+    `You MAY sharpen the title/technique wording, but do NOT invent claims and do NOT change meaning.\n` +
+    `Return JSON: {"faithful": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n\n` +
+    `Title: ${c.title}\nTechnique: ${c.technique}\nSourceText: ${c.sourceText}`;
+
+  try {
+    const out = await generate('research', { prompt, maxOutputTokens: extractMaxTokens() });
+    const tokens = out.usage?.totalTokens ?? 0;
+    const trace: StepTrace = { input: prompt, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage };
+
+    const v = JSON.parse(stripFences(out.text.trim())) as {
+      faithful?: boolean; score?: number; title?: string; technique?: string; rationale?: string;
+    };
+
+    if (!v.faithful || typeof v.score !== 'number' || v.score < floorForTier(tier)) {
+      return { candidate: null, tokens, trace };
+    }
+    return {
+      candidate: {
+        ...c,
+        title: v.title ?? c.title,
+        technique: v.technique ?? c.technique,
+        // sourceText deliberately untouched — faithfulness grounding is immutable.
+        confidence: v.score,
+        rationale: v.rationale ?? '',
+      },
+      tokens,
+      trace,
+    };
+  } catch {
+    // Fail-open: keep at a neutral score, no rewrite — never silently drop on a provider/parse failure.
+    return { candidate: { ...c, confidence: 0.5, rationale: 'judge unavailable' }, tokens: 0 };
+  }
+}

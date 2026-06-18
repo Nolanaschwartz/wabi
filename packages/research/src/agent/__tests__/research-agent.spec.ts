@@ -58,6 +58,7 @@ function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
     merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
+    judge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
     dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0 }),
     ...over,
   };
@@ -209,6 +210,18 @@ describe('ResearchAgent', () => {
     expect(merge).toHaveBeenCalledWith([candidate('a'), candidate('b')]);
     expect(candidates).toHaveLength(1);
     expect(summary.extracted).toBe(1);
+  });
+
+  it('judges merged candidates with the paper tier and collects only the survivors', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5, traces: [] });
+    // judge drops one and keeps the other with a confidence score.
+    const judge = jest.fn().mockImplementation((cands: Candidate[]) =>
+      Promise.resolve({ candidates: [{ ...cands[0], confidence: 0.8 }], tokens: 3, traces: [] }));
+    const deps = baseDeps({ extract, judge }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const { candidates } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
+    expect(judge).toHaveBeenCalledWith([candidate('a'), candidate('b')], 'rct'); // tier from the hydrated RCT paper
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].confidence).toBe(0.8);
   });
 
   it('fans a peer-reviewed paper across all five lenses', async () => {

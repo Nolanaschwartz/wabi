@@ -170,6 +170,26 @@ describe('StrategyAdminService', () => {
     );
   });
 
+  it('persists confidence + rationale and writes confidence into the index on publish', async () => {
+    trustGate.evaluate.mockResolvedValue({ decision: 'publish', reason: 'ok' });
+    (prisma.strategyDraft.create as jest.Mock).mockResolvedValue({
+      id: '7', title: 'T', technique: 'Q', source: 'PubMed', evidence: 'peer-reviewed: RCT', evidenceTier: 'rct',
+      lenses: [], confidence: 0.82, rationale: 'grounded', sourceText: null, sourceUrl: 'u',
+      trustLevel: 'research-agent', status: 'published', negativeCount: 0,
+    });
+
+    await service.submitDraft({
+      id: '7', title: 'T', technique: 'Q', source: 'PubMed', evidence: 'peer-reviewed: RCT', evidenceTier: 'rct',
+      confidence: 0.82, rationale: 'grounded', sourceUrl: 'u', trustLevel: 'research-agent', status: 'draft',
+    });
+
+    expect(prisma.strategyDraft.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ confidence: 0.82, rationale: 'grounded' }) }),
+    );
+    // confidence rides into the Qdrant payload as effectivenessScore (4th arg); evidenceTier is 5th.
+    expect(retrieval.upsert).toHaveBeenCalledWith('7', expect.any(String), 'peer-reviewed: RCT', 0.82, 'rct');
+  });
+
   it('persists draft in Postgres and survives restart', async () => {
     trustGate.evaluate.mockResolvedValue({
       decision: 'queue',
