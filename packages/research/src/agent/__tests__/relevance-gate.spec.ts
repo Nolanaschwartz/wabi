@@ -33,6 +33,7 @@ describe('relevanceGate', () => {
     await relevanceGate('x');
     expect(generate.mock.calls[0][0]).toBe('research-triage');
     expect(generate.mock.calls[0][1].retryOnEmpty).toBeUndefined();
+    expect(generate.mock.calls[0][1].temperature).toBe(0); // deterministic binary gate
   });
 
   it('fails open (keep) on provider error so coverage is not silently lost', async () => {

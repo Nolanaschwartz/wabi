@@ -30,6 +30,7 @@ export async function relevanceGate(abstract: string): Promise<GateResult> {
     const { text, usage, model, latencyMs } = await generate('research-triage', {
       prompt,
       maxOutputTokens: triageMaxTokens(),
+      temperature: 0, // deterministic binary gate — same abstract must yield the same verdict run-to-run
     });
     const t = (text ?? '').trim().toLowerCase();
     return {
