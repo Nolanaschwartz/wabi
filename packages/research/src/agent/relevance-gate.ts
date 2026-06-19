@@ -24,8 +24,12 @@ export async function relevanceGate(abstract: string): Promise<GateResult> {
     // role, its cap, and its fail-OPEN policy. No retry-on-empty — an empty/starved reply maps to keep
     // below, same as a transport error, so a second attempt buys nothing on this high-volume path.
     const prompt =
-      `Does this abstract describe a concrete behavioral or psychological coping/wellbeing ` +
-      `technique that could inform a coaching strategy? Answer only "yes" or "no".\n\n` +
+      `Could an adult use this on their own to manage mood, stress, rumination, ` +
+      `sleep, focus, motivation, or social anxiety in daily life — either a ` +
+      `technique it describes OR a finding that directly supports one? ` +
+      `Answer "no" for sports/athletic-performance, clinical treatment protocols ` +
+      `(drugs, brain stimulation, surgery), child/parenting programs, and ` +
+      `epidemiology with no actionable takeaway. Answer only "yes" or "no".\n\n` +
       `Abstract: ${abstract}`;
     const { text, usage, model, latencyMs } = await generate('research-triage', {
       prompt,
