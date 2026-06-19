@@ -34,9 +34,11 @@ async function extractOneLens(
   try {
     out = await generate('research', {
       prompt:
-        `Through the ${lens} lens, extract EVERY transferable, actionable coping/wellbeing technique ` +
-        `the source describes that fits that angle. Return an empty array if none fit.\n` +
+        `Through the ${lens} lens, extract the transferable, actionable coping/wellbeing techniques ` +
+        `the source describes whose PRIMARY mechanism is ${lens}. If a technique belongs more naturally ` +
+        `to another angle, skip it — another lens will catch it. Return an empty array if none fit.\n` +
         `Rules:\n` +
+        `- "title" MUST be short, plain, and action-oriented (what the person does) — not an academic label.\n` +
         `- Write each technique in audience-neutral language. Do NOT mention games, gamers, ranked, ` +
         `tilt, or any specific population — describe the general mechanism only.\n` +
         `- Each "sourceText" MUST be a verbatim quote copied exactly from the source (a real substring).\n` +

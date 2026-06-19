@@ -49,6 +49,7 @@ async function judgeOne(
     `Score "faithful" (does the verbatim sourceText actually support the technique?) and "score" ` +
     `(0..1 overall quality: grounded, actionable, audience-neutral, non-trivial).\n` +
     `You MAY sharpen the title/technique wording, but do NOT invent claims and do NOT change meaning.\n` +
+    `If you rewrite the title, keep it short, plain, and action-oriented (what the person does) — not an academic label.\n` +
     `Return JSON: {"faithful": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n\n` +
     `Title: ${c.title}\nTechnique: ${c.technique}\nSourceText: ${c.sourceText}`;
 
