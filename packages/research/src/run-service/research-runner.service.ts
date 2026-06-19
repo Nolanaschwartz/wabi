@@ -151,7 +151,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { sources, seen: (id) => client.seen(id), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
+        { sources, seen: (id) => client.seen(id), markGated: (id, source) => client.markGated(id, source), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
         bounds,
         log,
         { tracer, runId },

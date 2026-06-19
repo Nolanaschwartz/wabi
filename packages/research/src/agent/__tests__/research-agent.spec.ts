@@ -55,6 +55,7 @@ function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind
   return {
     sources,
     seen: jest.fn().mockResolvedValue(false),
+    markGated: jest.fn().mockResolvedValue(undefined),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
     merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
@@ -111,6 +112,16 @@ describe('ResearchAgent', () => {
     expect(summary.seenSkipped).toBe(3);
     expect(pubmed.hydrate).not.toHaveBeenCalled();
     expect(deps.gate).not.toHaveBeenCalled();
+    expect(deps.extract).not.toHaveBeenCalled();
+  });
+
+  it('negative-caches a gated-out paper (markGated with sourceId + kind) so it is not re-gated next run', async () => {
+    const pubmed = pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('40299806')]) });
+    const deps = baseDeps({ gate: jest.fn().mockResolvedValue({ keep: false, tokens: 1 }) }, { pubmed });
+    const agent = new ResearchAgent(deps, bounds);
+    const { summary } = await agent.run('topic');
+    expect(summary.gatedOut).toBe(1);
+    expect(deps.markGated).toHaveBeenCalledWith('PMID:40299806', 'pubmed');
     expect(deps.extract).not.toHaveBeenCalled();
   });
 

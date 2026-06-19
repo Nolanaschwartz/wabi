@@ -48,6 +48,7 @@ function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
   return {
     sources,
     seen: jest.fn().mockResolvedValue(false),
+    markGated: jest.fn().mockResolvedValue(undefined),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1, trace: { input: 'A1', output: 'yes', model: 'm', latencyMs: 2 } }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({
       candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10,

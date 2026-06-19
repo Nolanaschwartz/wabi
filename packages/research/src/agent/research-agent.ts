@@ -15,6 +15,8 @@ export interface AgentDeps {
    * The agent dispatches hydrate/fullText/expand to `sources.get(paper.sourceKind)` (ADR-0036). */
   sources: Map<SourceKind, Source>;
   seen: (sourceId: string) => Promise<boolean>;
+  /** Negative-cache a gate rejection so seen() skips this paper next run (never re-gated). */
+  markGated: (sourceId: string, source: string) => Promise<void>;
   gate: (abstract: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
   extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
@@ -138,7 +140,12 @@ export class ResearchAgent {
         this.tokens += gate.tokens;
         this.emitSpan('gate', gate.trace);
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
-        if (!gate.keep) { summary.gatedOut++; papersRead++; this.log.info('gated out', { id: paper.sourceId }); continue; }
+        if (!gate.keep) {
+          summary.gatedOut++; papersRead++;
+          await this.deps.markGated(paper.sourceId, paper.sourceKind); // negative-cache: don't re-gate next run
+          this.log.info('gated out', { id: paper.sourceId });
+          continue;
+        }
 
         // Citation-graph discovery, where the source offers it (pubmed). Expanded papers re-enter the
         // queue as thin hits and flow through the same hydrate path.

@@ -36,6 +36,7 @@ describe('StrategyAdminController', () => {
       setEvidenceLevel: jest.fn(),
       ingestBatch: jest.fn(),
       hasSeen: jest.fn(),
+      markProcessed: jest.fn(),
     } as any;
     controller = new StrategyAdminController(service);
   });
@@ -96,5 +97,11 @@ describe('StrategyAdminController', () => {
     service.hasSeen.mockResolvedValue(true);
     expect(await controller.seen('PMID:1')).toEqual({ seen: true });
     expect(service.hasSeen).toHaveBeenCalledWith('PMID:1');
+  });
+
+  it('negative-caches a gated source via markProcessed with status "gated"', async () => {
+    service.markProcessed.mockResolvedValue(undefined);
+    expect(await controller.gated({ sourceId: 'PMID:1', source: 'pubmed' })).toEqual({ ok: true });
+    expect(service.markProcessed).toHaveBeenCalledWith('PMID:1', 'pubmed', 'gated');
   });
 });

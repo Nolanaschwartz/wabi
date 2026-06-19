@@ -27,6 +27,17 @@ export class BotClient {
     }
   }
 
+  /** Negative-cache a relevance-gate rejection in the bot's ledger so seen() skips this paper next
+   * run instead of re-gating it every cycle. Fail-open: a transport error just means it re-gates. */
+  async markGated(sourceId: string, source: string): Promise<void> {
+    const url = `${this.deps.baseUrl}/admin/strategies/gated`;
+    try {
+      await this.fetchFn(url, { method: 'POST', headers: this.headers(), body: JSON.stringify({ sourceId, source }) });
+    } catch {
+      // swallow — re-gating next run is the harmless worst case
+    }
+  }
+
   /** Submit all drafts mined from ONE paper in a single call. The bot evaluates each independently
    * and marks the per-source ledger once; the response carries a per-draft outcome we map in order.
    * Any transport failure fails the whole batch closed to 'error' (the run can retry the paper). */

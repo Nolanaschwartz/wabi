@@ -15,6 +15,23 @@ describe('BotClient', () => {
     expect(opts.headers['x-admin-secret']).toBe('sek');
   });
 
+  it('markGated posts the sourceId + source to the gated endpoint with the admin secret', async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
+    await client.markGated('PMID:1', 'pubmed');
+    const [url, opts] = fetchFn.mock.calls[0];
+    expect(url).toBe('http://bot/admin/strategies/gated');
+    expect(opts.method).toBe('POST');
+    expect(opts.headers['x-admin-secret']).toBe('sek');
+    expect(JSON.parse(opts.body)).toEqual({ sourceId: 'PMID:1', source: 'pubmed' });
+  });
+
+  it('markGated swallows a transport error (re-gating next run is harmless)', async () => {
+    const fetchFn = jest.fn().mockRejectedValue(new Error('network'));
+    const client = new BotClient({ baseUrl: 'http://bot', secret: 'sek', fetchFn });
+    await expect(client.markGated('PMID:1', 'pubmed')).resolves.toBeUndefined();
+  });
+
   it('submitBatch posts all drafts for one paper and maps each result in order', async () => {
     const fetchFn = jest.fn().mockResolvedValue({
       ok: true, status: 201,
