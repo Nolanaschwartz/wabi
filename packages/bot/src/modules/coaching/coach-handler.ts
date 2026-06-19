@@ -89,12 +89,10 @@ export class CoachHandler implements Spoke {
     const memories = await this.memoryStore.search(userId, batch).catch(() => []);
     const memoryLatency = Date.now() - memoryStart;
 
-    // Diagnose "the coach brought up old/irrelevant stuff": record how many memories were recalled and
-    // their similarity scores / ids — never the verbatim memory text or transcript (ADR-0013). Tracing
+    // Diagnose "the coach brought up old/irrelevant stuff": record counts/ids/similarities only — the
+    // verbatim memory text is held back at the boundary in prod (ADR-0013); outside production the call
+    // site includes the query + recalled facts so a local trace shows exactly what was recalled. Tracing
     // never breaks the hot path (ADR-0021).
-    // Verbatim memory text is held back at the boundary (ADR-0013) in prod — only counts/ids/
-    // similarities cross. Outside production the call site includes the query + recalled facts so a
-    // local trace shows exactly what was recalled.
     const fullFidelity = this.langfuseTracer.localFullFidelity;
     this.langfuseTracer.traceObservation({
       name: 'memory',

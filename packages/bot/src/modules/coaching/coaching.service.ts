@@ -210,12 +210,10 @@ export class CoachingService {
         usage: decision.verdictTelemetry?.usage,
       });
 
-      // Which evidence-based strategies fed the coach prompt — counts/scores/ids only, never the
-      // strategy body text or transcript (ADR-0013). Diagnoses "the coach surfaced something
-      // irrelevant" on the strategy side. Tracing never breaks the hot path (ADR-0021).
-      // Verbatim strategy text is held back at the boundary (ADR-0013) in prod — only counts/ids/
-      // scores cross. Outside production the call site includes the query + strategy bodies so a
-      // local trace shows exactly what fed the coach.
+      // Which evidence-based strategies fed the coach prompt — counts/scores/ids only; the verbatim
+      // strategy body is held back at the boundary in prod (ADR-0013), while outside production the call
+      // site includes the query + strategy bodies so a local trace shows exactly what fed the coach.
+      // Diagnoses "the coach surfaced something irrelevant"; tracing never breaks the hot path (ADR-0021).
       const fullFidelity = this.langfuseTracer.localFullFidelity;
       this.langfuseTracer.traceObservation({
         name: 'retrieval',

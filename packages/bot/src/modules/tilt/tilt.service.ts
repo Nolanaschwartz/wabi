@@ -118,7 +118,6 @@ export class TiltService {
   /**
    * Interpret a turn against any pending offer: accept → start a session, decline → drop the offer,
    * anything else → leave it to lapse. `none` means there was no offer (caller continues normally).
-   * The intent parsing (`accept`/`decline`) used to be inlined in CoachingService.handle.
    */
   async respondToPendingOffer(discordId: string, text: string): Promise<PendingOfferOutcome> {
     const trigger = this.getPendingOffer(discordId);
@@ -140,7 +139,6 @@ export class TiltService {
   /**
    * Detection-driven offer: if the turn reads as gameplay frustration AND no offer is already
    * pending, store a pending offer and return the accept-prompt to send. Returns null otherwise.
-   * Self-suppressing on an existing offer replaces the caller's old `!pendingTrigger` guard.
    */
   maybeOffer(discordId: string, text: string): string | null {
     if (this.getPendingOffer(discordId)) return null;
