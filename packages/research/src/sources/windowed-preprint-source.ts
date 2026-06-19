@@ -2,7 +2,7 @@ import { RateLimiter } from '../util/rate-limiter';
 import { Paper, SourceKind } from '../types';
 import { Source } from './source';
 import { Logger, noopLogger } from '../util/logger';
-import { contentTerms, minMatch, scoreRecord } from './term-match';
+import { contentTerms, idf, minMatch, scoreRecord, weightedScore } from './term-match';
 import { fetchAndParsePdf } from './pdf';
 import { SourceConfig, loadSourceConfig } from '../config';
 
@@ -107,18 +107,33 @@ export class WindowedPreprintSource<R> implements Source {
     return byId;
   }
 
-  /** Keep records containing ENOUGH of the query's content terms, ranked by how many match, capped to
-   * `limit`. Shared scoring (term-match.ts) so every windowed source ranks identically. */
+  /** Keep records containing ENOUGH of the query's content terms, ranked by match strength, capped to
+   * `limit`. Shared scoring (term-match.ts) so every windowed source ranks identically.
+   *
+   * ≤2 terms: a flat whole-word count, require (near) all — a 1–2 word query is already specific.
+   * ≥3 terms: rarity-weight the terms by IDF over THIS window, keep records reaching a fraction of the
+   * query's total weight. Without weighting, a generic term ("cognitive") that matches a whole clinical
+   * window lets dementia/neuro papers clear a flat count; weighting makes the rare topical terms
+   * ("rumination", "reappraisal") carry the threshold so off-topic floods drop out. */
   async search(query: string, limit: number): Promise<Paper[]> {
     const byId = await this.window();
     const terms = contentTerms(query);
-    const need = minMatch(terms.length, this.caps.minTermFraction);
+    const frac = this.caps.minTermFraction;
+    const papers = [...byId.values()].map((r) => this.spec.toPaper(r));
+    const docOf = (p: Paper) => `${p.title} ${p.abstract}`;
 
-    return [...byId.values()]
-      .map((r) => {
-        const paper = this.spec.toPaper(r);
-        return { paper, score: scoreRecord(`${paper.title} ${paper.abstract}`, terms) };
-      })
+    let scored: { paper: Paper; score: number }[];
+    let need: number;
+    if (terms.length <= 2) {
+      need = minMatch(terms.length, frac);
+      scored = papers.map((paper) => ({ paper, score: scoreRecord(docOf(paper), terms) }));
+    } else {
+      const weights = idf(terms, papers.map(docOf));
+      need = frac * terms.reduce((sum, t) => sum + (weights.get(t) ?? 0), 0);
+      scored = papers.map((paper) => ({ paper, score: weightedScore(docOf(paper), terms, weights) }));
+    }
+
+    return scored
       .filter((x) => x.score >= need)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)

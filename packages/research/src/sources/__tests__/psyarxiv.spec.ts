@@ -96,18 +96,19 @@ describe('PsyArxivTool', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it('ranks kept papers by how many query content-terms they match', async () => {
+  it('IDF-weights a multi-word query: the rare term carries the match, window-common terms cannot float a paper alone', async () => {
+    // emotion+regulation are window-common here (down-weighted); 'competitive' is rare.
     const body = page([
-      rec('one', 'Gaming habits survey', 'screen time'), // 1 of 4 -> below threshold -> excluded
-      rec('two', 'Emotion regulation training', 'reappraisal of feelings'), // emotion+regulation = 2 -> kept
-      rec('three', 'Emotion regulation in competitive settings', 'arousal control'), // 3 -> kept, ranked first
+      rec('one', 'Gaming habits survey', 'screen time'), // 1 term -> below threshold -> excluded
+      rec('two', 'Emotion regulation training', 'reappraisal of feelings'), // only the common pair -> below weight threshold -> excluded
+      rec('three', 'Emotion regulation in competitive settings', 'arousal control'), // adds rare 'competitive' -> kept
     ]);
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
     const tool = createPsyArxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2026-06-17') });
 
     const papers = await tool.search('emotion regulation competitive gaming', 8);
 
-    expect(papers.map((p) => p.sourceId)).toEqual(['osf:three', 'osf:two']);
+    expect(papers.map((p) => p.sourceId)).toEqual(['osf:three']);
   });
 
   it('sends an Authorization: Bearer header only when a token is configured', async () => {

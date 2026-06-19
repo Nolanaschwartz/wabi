@@ -1,4 +1,4 @@
-import { STOPWORDS, contentTerms, escapeRegExp, minMatch, scoreRecord } from '../term-match';
+import { STOPWORDS, contentTerms, escapeRegExp, idf, minMatch, scoreRecord, weightedScore } from '../term-match';
 
 describe('term-match', () => {
   describe('contentTerms', () => {
@@ -88,6 +88,47 @@ describe('term-match', () => {
 
     it('returns 0 when no terms match', () => {
       expect(scoreRecord('orthopedic recovery', ['emotion', 'regulation'])).toBe(0);
+    });
+  });
+
+  describe('idf', () => {
+    it('weights a rare term above a term common across the corpus', () => {
+      // "cognitive" is in every doc; "rumination" in one. The rare term must score higher.
+      const docs = ['cognitive decline', 'cognitive therapy', 'cognitive rumination'];
+      const w = idf(['cognitive', 'rumination'], docs);
+      expect(w.get('rumination')!).toBeGreaterThan(w.get('cognitive')!);
+    });
+
+    it('keeps every weight strictly positive (smoothed), even a term in every doc', () => {
+      const w = idf(['cognitive'], ['cognitive a', 'cognitive b']);
+      expect(w.get('cognitive')!).toBeGreaterThan(0);
+    });
+
+    it('matches whole words only when counting document frequency', () => {
+      // "term" appears as a whole word in 1 of 2 docs (not inside "determine").
+      const w = idf(['term'], ['we determine x', 'the term y']);
+      const wOnce = idf(['z'], ['the z y', 'a z b']); // z in both docs → more common → lower weight
+      expect(w.get('term')!).toBeGreaterThan(wOnce.get('z')!);
+    });
+  });
+
+  describe('weightedScore', () => {
+    it('sums the idf weights of the matched terms', () => {
+      const weights = new Map([['rumination', 5], ['cognitive', 1]]);
+      expect(weightedScore('cognitive rumination spiral', ['rumination', 'cognitive'], weights)).toBe(6);
+    });
+
+    it('a single rare-term match outranks several common-term matches', () => {
+      const weights = new Map([['rumination', 5], ['cognitive', 1], ['loss', 1]]);
+      const rare = weightedScore('rumination only', ['rumination', 'cognitive', 'loss'], weights);
+      const common = weightedScore('cognitive loss', ['rumination', 'cognitive', 'loss'], weights);
+      expect(rare).toBeGreaterThan(common);
+    });
+
+    it('counts whole words only and treats missing weights as 0', () => {
+      const weights = new Map([['term', 3]]);
+      expect(weightedScore('we determine', ['term', 'unknown'], weights)).toBe(0);
+      expect(weightedScore('the term', ['term', 'unknown'], weights)).toBe(3);
     });
   });
 });

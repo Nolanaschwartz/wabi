@@ -65,6 +65,22 @@ describe('WindowedPreprintSource', () => {
     expect(papers.map((p) => p.sourceId)).toEqual(['fake:a', 'fake:c']); // b dropped (0 terms), a outranks c
   });
 
+  it('IDF-weights ≥3-term queries so a window-wide generic term cannot float off-topic papers', async () => {
+    // "cognitive" is in EVERY record (a clinical window); only the on-topic paper has the rare terms.
+    // A flat count would keep the dementia papers (cognitive + one more); IDF must drop them.
+    const f = fakeSpec([
+      rec('on', 'Cognitive reappraisal for rumination', 'reappraising thoughts after a loss'),
+      rec('dem1', 'Cognitive decline in dementia', 'memory loss and cognitive testing'),
+      rec('dem2', 'Cognitive impairment after stroke', 'cognitive rehabilitation'),
+      rec('dem3', 'Cognitive screening tools', 'cognitive assessment batteries'),
+    ]);
+    const src = new WindowedPreprintSource(f.spec, { minIntervalMs: 0, now: () => FIXED_NOW });
+
+    const papers = await src.search('rumination loss cognitive reappraisal', 5);
+
+    expect(papers.map((p) => p.sourceId)).toEqual(['fake:on']); // dementia papers dropped despite "cognitive"
+  });
+
   it('respects the limit', async () => {
     const f = fakeSpec([
       rec('a', 'Box breathing exercise', 'a breathing technique'),

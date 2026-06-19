@@ -39,3 +39,29 @@ export function scoreRecord(text: string, terms: string[]): number {
   }
   return score;
 }
+
+/** Inverse document frequency of each term over `docs` (a window's title+abstract strings). Rare
+ * terms score high; a term common across the whole window (e.g. "cognitive" in a clinical preprint
+ * corpus) scores low and stops dominating the match. Smoothed (`+1` numerator/denominator, `+1`
+ * floor) so a term in every — or no — doc is still well-defined and strictly positive. */
+export function idf(terms: string[], docs: string[]): Map<string, number> {
+  const lowered = docs.map((d) => d.toLowerCase());
+  const weights = new Map<string, number>();
+  for (const t of terms) {
+    const re = new RegExp(`\\b${escapeRegExp(t)}\\b`);
+    const df = lowered.filter((d) => re.test(d)).length;
+    weights.set(t, Math.log((lowered.length + 1) / (df + 1)) + 1);
+  }
+  return weights;
+}
+
+/** Sum of the idf weights of the query terms present in `text` as whole words — the rarity-weighted
+ * counterpart to {@link scoreRecord}. Missing weights count as 0. */
+export function weightedScore(text: string, terms: string[], weights: Map<string, number>): number {
+  const hay = text.toLowerCase();
+  let score = 0;
+  for (const t of terms) {
+    if (new RegExp(`\\b${escapeRegExp(t)}\\b`).test(hay)) score += weights.get(t) ?? 0;
+  }
+  return score;
+}

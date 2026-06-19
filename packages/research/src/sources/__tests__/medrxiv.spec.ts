@@ -56,19 +56,20 @@ describe('MedrxivTool', () => {
     expect(fetchFn).toHaveBeenCalledTimes(1); // one window fetch reused across both searches
   });
 
-  it('matches a record on a SUBSET of a multi-word query and ranks by how many terms hit', async () => {
+  it('IDF-weights a multi-word query: rare terms carry the match, window-common terms cannot float a paper alone', async () => {
+    // emotion+regulation appear in MOST of this window, so IDF down-weights them; 'competitive' is rare.
     const body = { collection: [
-      // 'gaming' is the only hit -> below the half-of-4 threshold (needs 2) -> excluded.
+      // 'gaming' alone -> 1 term, below threshold -> excluded.
       { doi: '10.1101/a.1', title: 'Gaming habits survey', abstract: 'screen time', date: '2024-01-01' },
-      // hits emotion + regulation (2 of 4) -> included.
+      // only the window-COMMON pair (emotion+regulation) -> below half the query's total weight -> excluded.
       { doi: '10.1101/a.2', title: 'Emotion regulation training', abstract: 'reappraisal of feelings', date: '2024-01-02' },
-      // hits emotion + regulation + competitive (3 of 4) -> included and ranked first.
+      // adds the RARE 'competitive' -> clears the weight threshold -> kept.
       { doi: '10.1101/a.3', title: 'Emotion regulation in competitive settings', abstract: 'arousal control', date: '2024-01-03' },
     ] };
     const fetchFn = jest.fn().mockReturnValue(jsonResponse(body));
     const tool = createMedrxivSource({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-31') });
     const papers = await tool.search('emotion regulation competitive gaming', 8);
-    expect(papers.map((p) => p.sourceId)).toEqual(['doi:10.1101/a.3', 'doi:10.1101/a.2']);
+    expect(papers.map((p) => p.sourceId)).toEqual(['doi:10.1101/a.3']);
   });
 
   it('drops stopwords/short tokens so they do not count toward the match threshold', async () => {
