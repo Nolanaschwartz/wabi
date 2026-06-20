@@ -359,15 +359,15 @@ export class StrategyAdminService {
       prisma.strategyDraft.findMany({ where: { status: 'quarantined' } }),
     ]);
 
-    let reindexed = 0;
-    for (const row of published) {
-      if (await this.publishToQdrant(this.toDraft(row))) reindexed++;
-    }
-
-    let removed = 0;
-    for (const row of quarantined) {
-      if (await this.retrieval.delete(row.id)) removed++;
-    }
+    // Each draft is independent and the index ops are idempotent, so re-index and removal both fan out
+    // concurrently instead of one Qdrant round-trip at a time. ponytail: fine for a small library
+    // (comment above); chunk into batches if the published set ever grows large.
+    const [reindexedResults, removedResults] = await Promise.all([
+      Promise.all(published.map((row) => this.publishToQdrant(this.toDraft(row)))),
+      Promise.all(quarantined.map((row) => this.retrieval.delete(row.id))),
+    ]);
+    const reindexed = reindexedResults.filter(Boolean).length;
+    const removed = removedResults.filter(Boolean).length;
 
     return { reindexed, removed };
   }

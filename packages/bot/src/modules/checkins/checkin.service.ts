@@ -32,17 +32,23 @@ export class CheckInService {
   private async handleCheckIns(): Promise<void> {
     const dueUsers = await this.scheduler.findDueUsers();
 
-    for (const user of dueUsers) {
-      try {
-        await this.client.users.send(user.discordId, {
-          content: 'Hey there! How are you doing today?',
-        });
+    // Fan the DMs out concurrently — each user is independent, so the cron no longer waits for one
+    // user's send+record before starting the next. discord.js serializes under its own per-route rate
+    // limiter, and the per-user try/catch keeps one blocked-DM failure from sinking the batch.
+    // ponytail: unbounded fan-out is fine at current scale; add a concurrency cap if dueUsers gets large.
+    await Promise.all(
+      dueUsers.map(async (user) => {
+        try {
+          await this.client.users.send(user.discordId, {
+            content: 'Hey there! How are you doing today?',
+          });
 
-        await this.scheduler.recordCheckIn(user.discordId);
-      } catch {
-        // User may have blocked DMs
-      }
-    }
+          await this.scheduler.recordCheckIn(user.discordId);
+        } catch {
+          // User may have blocked DMs
+        }
+      }),
+    );
   }
 
   async toggleCheckIn(discordId: string, enabled: boolean): Promise<void> {
