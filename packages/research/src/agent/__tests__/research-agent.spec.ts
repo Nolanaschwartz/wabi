@@ -79,8 +79,8 @@ describe('ResearchAgent', () => {
     const gate = jest.fn().mockResolvedValue({ keep: true, tokens: 1 });
     const agent = new ResearchAgent(baseDeps({ gate }), bounds);
     await agent.run('topic');
-    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with the hydrated abstract.
-    expect(gate).toHaveBeenCalledWith('A1');
+    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with the hydrated abstract + topic.
+    expect(gate).toHaveBeenCalledWith('A1', 'topic');
   });
 
   it('emits progress through the injected logger (topic start + collected + topic done)', async () => {
@@ -114,6 +114,22 @@ describe('ResearchAgent', () => {
     expect(pubmed.hydrate).not.toHaveBeenCalled();
     expect(deps.gate).not.toHaveBeenCalled();
     expect(deps.extract).not.toHaveBeenCalled();
+  });
+
+  it('pre-screens a clearly out-of-scope abstract: dropped before the gate, no gate LLM call', async () => {
+    const pubmed = pubmedSource({
+      search: jest.fn().mockResolvedValue([pubmedThin('40299806')]),
+      hydrate: jest.fn(async (p: Paper) => ({ ...p, title: 'T', abstract: 'Vitamin D supplementation improved mood.', pubTypes: ['Randomized Controlled Trial'] })),
+    });
+    const deps = baseDeps({}, { pubmed });
+    const agent = new ResearchAgent(deps, bounds);
+    const { summary } = await agent.run('topic');
+    expect(deps.gate).not.toHaveBeenCalled();
+    expect(deps.extract).not.toHaveBeenCalled();
+    expect(summary.gatedOut).toBe(1);
+    // NOT negative-cached: a blunt-keyword prescreen drop must stay reversible (fail-open mining,
+    // ADR-0021) so an in-scope paper that merely mentions a supplement isn't permanently blacklisted.
+    expect(deps.markGated).not.toHaveBeenCalled();
   });
 
   it('negative-caches a gated-out paper (markGated with sourceId + kind) so it is not re-gated next run', async () => {

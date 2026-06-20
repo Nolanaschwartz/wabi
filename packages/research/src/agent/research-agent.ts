@@ -4,6 +4,7 @@ import { Logger, noopLogger } from '../util/logger';
 import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-tracer';
 import { StepTrace } from './relevance-gate';
 import { evidenceTier } from './extract';
+import { prescreen } from './scope-policy';
 import { lensesForTier } from './lenses';
 import { Concepts } from '../sources/query/concepts';
 import { queryForKind } from '../sources/query/for-kind';
@@ -22,7 +23,7 @@ export interface AgentDeps {
   seen: (sourceId: string) => Promise<boolean>;
   /** Negative-cache a gate rejection so seen() skips this paper next run (never re-gated). */
   markGated: (sourceId: string, source: string) => Promise<void>;
-  gate: (abstract: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
+  gate: (abstract: string, topic: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
   extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
   /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
@@ -159,7 +160,19 @@ export class ResearchAgent {
         const paper = await src.hydrate(item);
         this.log.info('paper', { id: paper.sourceId, kind: paper.sourceKind, title: paper.title });
 
-        const gate = await this.deps.gate(paper.abstract);
+        // Deterministic scope pre-screen before any model call: a clear supplement/drug/clinical
+        // abstract is dropped here without a gate generation (scope-policy module, ADR-0001/0003).
+        // NOT negative-cached: prescreen is a blunt keyword heuristic and fail-open mining (ADR-0021)
+        // forbids a deterministic false-positive permanently blacklisting an in-scope paper. The gate
+        // LLM is the real arbiter, so a re-fetch next run can still reach it if the policy improves.
+        // ponytail: re-screening the same paper each run is the accepted cost of keeping the drop reversible.
+        if (!prescreen(paper.abstract)) {
+          summary.gatedOut++; papersRead++;
+          this.log.info('prescreened out', { id: paper.sourceId }); // distinct from the gate-LLM 'gated out'
+          continue;
+        }
+
+        const gate = await this.deps.gate(paper.abstract, topic);
         this.tokens += gate.tokens;
         this.emitSpan('gate', gate.trace);
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
