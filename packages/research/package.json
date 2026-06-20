@@ -7,6 +7,7 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "dev": "RESEARCH_PORT=3002 nest start --watch",
     "start:prod": "node dist/main.js",
+    "eval:bootstrap": "ts-node scripts/eval-bootstrap.ts",
     "eval:seed": "ts-node scripts/eval-seed.ts",
     "eval:gate": "ts-node scripts/eval-gate.ts"
   },
