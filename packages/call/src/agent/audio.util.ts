@@ -20,7 +20,8 @@ export function buildWav(
   buf.writeUInt16LE(16, 34); // bits per sample
   buf.write('data', 36);
   buf.writeUInt32LE(bytes, 40);
-  for (let i = 0; i < pcm.length; i++) buf.writeInt16LE(pcm[i], 44 + i * 2);
+  // ponytail: bulk byte copy; assumes host is little-endian (all our targets are).
+  Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).copy(buf, 44);
   return buf;
 }
 
@@ -53,7 +54,15 @@ export function parseWav(buf: Buffer): {
     throw new Error(`TTS returned ${bits}-bit WAV; expected 16-bit PCM`);
   const count = Math.floor(dataLen / 2);
   const data = new Int16Array(count);
-  for (let i = 0; i < count; i++) data[i] = buf.readInt16LE(dataOff + i * 2);
+  // ponytail: copy the data bytes straight into the fresh (aligned) Int16Array backing store;
+  // host is little-endian, so the int16 interpretation matches the WAV bytes 1:1. Copying into
+  // `data` (rather than viewing `buf`) dodges Buffer-pool byteOffset misalignment.
+  buf.copy(
+    Buffer.from(data.buffer, data.byteOffset, data.byteLength),
+    0,
+    dataOff,
+    dataOff + count * 2,
+  );
   return { data, rate, channels };
 }
 
