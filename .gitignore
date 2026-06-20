@@ -46,3 +46,6 @@ graphify-out/
 
 # Local Railway ops helpers (not for VCS)
 *-toggle.sh
+
+# Research worker scratch output (downloaded PDFs)
+packages/research/research-pdfs/
