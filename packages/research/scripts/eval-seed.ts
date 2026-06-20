@@ -8,30 +8,17 @@
  */
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { evalClient, evalKeys, GATE_DATASET } from './eval-env';
-
-interface Row {
-  input: { abstract: string };
-  expectedOutput: 'keep' | 'reject';
-  metadata: { source: string; id: string; topic: string; bucket: string; modelLabel: string; reviewed: boolean };
-}
+import { DatasetRow, evalClient, evalKeys, GATE_DATASET, parseDatasetRows } from './eval-env';
 
 const DATASET_FILE = join(__dirname, '../evals/gate.dataset.jsonl');
 
-function readRows(): Row[] {
-  return readFileSync(DATASET_FILE, 'utf8')
-    .split('\n')
-    .filter((l) => l.trim() !== '')
-    .map((l) => JSON.parse(l) as Row);
-}
-
 /** Stable, project-unique id for upsert — Langfuse upserts dataset items on this id. */
-const itemId = (r: Row): string => `${r.metadata.source}:${r.metadata.id}`;
+const itemId = (r: DatasetRow): string => `${r.metadata.source}:${r.metadata.id}`;
 
 async function main(): Promise<void> {
   evalKeys(); // fail loud early if eval config is missing
   const client = evalClient();
-  const rows = readRows();
+  const rows = parseDatasetRows(readFileSync(DATASET_FILE, 'utf8')); // validates; throws on bad rows
 
   // The flat client.createDataset/createDatasetItem helpers are deprecated AND unbound (calling them
   // loses `this`); go through the bound api.* managers. datasets.create upserts on name, datasetItems

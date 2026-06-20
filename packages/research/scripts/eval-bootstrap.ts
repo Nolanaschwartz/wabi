@@ -24,9 +24,10 @@ import { topicToConcepts } from '../src/sources/query/concepts';
 import { queryForKind } from '../src/sources/query/for-kind';
 import { relevanceGate } from '../src/agent/relevance-gate';
 import { Source } from '../src/sources/source';
-import { Paper, SourceKind } from '../src/types';
+import { Paper } from '../src/types';
 import { defaultLogger } from '../src/util/logger';
 import { loadDotenv } from '../src/util/load-env';
+import { Bucket, DatasetRow } from './eval-env';
 
 const OUT = join(__dirname, '../evals/gate.dataset.jsonl');
 
@@ -45,13 +46,11 @@ const NEGATIVE_PROBES: { category: string; query: string }[] = [
 const POS_PER_SOURCE = 4; // per topic per source
 const NEG_PER_PROBE = 7; // per probe (PubMed only)
 
-interface Row {
-  input: { abstract: string };
-  expectedOutput: 'keep' | 'reject';
-  metadata: { source: SourceKind; id: string; topic: string; bucket: 'positive' | 'negative'; modelLabel: 'keep' | 'reject'; reviewed: false };
-}
-
 const log = defaultLogger();
+
+// ponytail: search/hydrate/gate run strictly serially. Deliberate — each source self-rate-limits
+// (RateLimiter), so parallelism would just queue behind the same limiter, and the gate hits a single
+// local endpoint. This is a one-shot dev harvest, not a hot path; serial keeps it simple and polite.
 
 /** Search → hydrate, dropping anything without an abstract. One source failure never kills the run. */
 async function harvest(src: Source, query: string, limit: number): Promise<Paper[]> {
@@ -75,7 +74,7 @@ async function harvest(src: Source, query: string, limit: number): Promise<Paper
 }
 
 /** Gate the abstract and build a row. expectedOutput starts as the model's verdict (uncorrected). */
-async function toRow(p: Paper, topic: string, bucket: 'positive' | 'negative'): Promise<Row> {
+async function toRow(p: Paper, topic: string, bucket: Bucket): Promise<DatasetRow> {
   const r = await relevanceGate(p.abstract);
   const modelLabel = r.keep ? 'keep' : 'reject';
   return {
@@ -96,10 +95,10 @@ async function main(): Promise<void> {
   ];
   const pubmed = sources[0];
 
-  const rows: Row[] = [];
+  const rows: DatasetRow[] = [];
   const seen = new Set<string>(); // dedup by sourceId across topics/sources
 
-  const add = async (papers: Paper[], topic: string, bucket: 'positive' | 'negative'): Promise<void> => {
+  const add = async (papers: Paper[], topic: string, bucket: Bucket): Promise<void> => {
     for (const p of papers) {
       if (seen.has(p.sourceId)) continue;
       seen.add(p.sourceId);
@@ -123,6 +122,20 @@ async function main(): Promise<void> {
     const papers = await harvest(pubmed, probe.query, NEG_PER_PROBE);
     await add(papers, probe.category, 'negative');
     log.info(`[bootstrap] negative "${probe.category}": +${papers.length}`);
+  }
+
+  // Refuse to clobber the checked-in dataset with a failed harvest. Every source failure is swallowed
+  // to []; if the network/keys are down, `rows` is empty and writing would silently destroy the
+  // curated (possibly human-reviewed) seed. A too-small harvest is almost certainly a partial outage,
+  // not a real dataset — bail and leave the existing file untouched.
+  const MIN_ROWS = 10;
+  if (rows.length < MIN_ROWS) {
+    console.error(
+      `\nharvest produced only ${rows.length} row(s) (< ${MIN_ROWS}) — likely a source/provider outage. ` +
+        `Refusing to overwrite ${OUT}. Fix connectivity/keys and re-run.`,
+    );
+    process.exitCode = 1;
+    return;
   }
 
   writeFileSync(OUT, rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8');

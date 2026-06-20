@@ -8,9 +8,48 @@
  */
 import { LangfuseClient } from '@langfuse/client';
 import { loadDotenv } from '../src/util/load-env';
+import { Label } from '../src/evals/gate-metrics';
 
 /** The eval dataset name in the eval project. */
 export const GATE_DATASET = 'research-gate';
+
+export type Bucket = 'positive' | 'negative';
+
+/** One row of the gate eval dataset (the JSONL on disk and what gets upserted to Langfuse). Shared by
+ * the bootstrap (writer) and seed (reader) so the schema can't drift between them. */
+export interface DatasetRow {
+  input: { abstract: string };
+  expectedOutput: Label;
+  metadata: { source: string; id: string; topic: string; bucket: Bucket; modelLabel: Label; reviewed: boolean };
+}
+
+const isLabel = (x: unknown): x is Label => x === 'keep' || x === 'reject';
+
+/** Parse + validate the dataset JSONL. Throws with the 1-based line number on the first bad row so a
+ * typo or schema drift fails loudly here, never as a silent permanent mismatch in the eval. */
+export function parseDatasetRows(text: string): DatasetRow[] {
+  const rows: DatasetRow[] = [];
+  text.split('\n').forEach((line, i) => {
+    const t = line.trim();
+    if (t === '') return;
+    const where = `dataset row ${i + 1}`;
+    let o: { input?: { abstract?: unknown }; expectedOutput?: unknown; metadata?: Record<string, unknown> };
+    try {
+      o = JSON.parse(t);
+    } catch {
+      throw new Error(`${where}: invalid JSON`);
+    }
+    const abstract = o.input?.abstract;
+    if (typeof abstract !== 'string' || abstract.trim() === '') throw new Error(`${where}: input.abstract must be a non-empty string`);
+    if (!isLabel(o.expectedOutput)) throw new Error(`${where}: expectedOutput must be 'keep' or 'reject'`);
+    const m = o.metadata ?? {};
+    if (m.bucket !== 'positive' && m.bucket !== 'negative') throw new Error(`${where}: metadata.bucket must be 'positive' or 'negative'`);
+    if (typeof m.id !== 'string' || m.id === '') throw new Error(`${where}: metadata.id is required`);
+    if (!isLabel(m.modelLabel)) throw new Error(`${where}: metadata.modelLabel must be 'keep' or 'reject'`);
+    rows.push(o as DatasetRow);
+  });
+  return rows;
+}
 
 export interface EvalKeys {
   publicKey: string;
