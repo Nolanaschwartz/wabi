@@ -4,8 +4,8 @@ import { runResearch as defaultRunResearch, RunDeps, RunResult } from '../run';
 import { BotClient, SubmitOutcome } from '../bot-client';
 import { Source } from '../sources/source';
 import { PubMedTool } from '../sources/pubmed';
-import { createMedrxivSource } from '../sources/medrxiv';
 import { createPsyArxivSource } from '../sources/psyarxiv';
+import { EuropePmcSource } from '../sources/europepmc';
 import { relevanceGate } from '../agent/relevance-gate';
 import { topicToConcepts } from '../sources/query/concepts';
 import { extractWithLenses } from '../agent/extract-with-lenses';
@@ -132,7 +132,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   // here (per-run, after ConfigModule loads), never frozen at import.
   const sources = new Map<SourceKind, Source>([
     ['pubmed', new PubMedTool({ apiKey: process.env.NCBI_API_KEY })],
-    ['medrxiv', createMedrxivSource({ log })],
+    ['europepmc', new EuropePmcSource({ log })], // medRxiv/bioRxiv preprints via topical SRC:PPR search (ADR-0039)
     ['psyarxiv', createPsyArxivSource({ token: process.env.OSF_TOKEN, log })],
   ]);
 

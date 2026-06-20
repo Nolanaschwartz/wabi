@@ -1,4 +1,4 @@
-export type SourceKind = 'pubmed' | 'medrxiv' | 'psyarxiv';
+export type SourceKind = 'pubmed' | 'medrxiv' | 'psyarxiv' | 'europepmc';
 
 /** Structured evidence tier, set from the source's nature (never the model's claim). Ordered best to
  * weakest; drives the per-tier judge floor + cap (slice 05) and future retrieval re-ranking. */

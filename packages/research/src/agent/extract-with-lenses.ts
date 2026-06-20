@@ -1,8 +1,16 @@
 import { generate } from '@wabi/shared/generate';
 import { extractMaxTokens } from '../config';
-import { Paper, Candidate, Lens } from '../types';
+import { Paper, Candidate, Lens, SourceKind } from '../types';
 import { StepTrace } from './relevance-gate';
 import { evidenceTag, evidenceTier, stripFences } from './extract';
+
+/** Human-readable source label carried on each Candidate (display + provenance), set from the source. */
+const SOURCE_LABEL: Record<SourceKind, string> = {
+  pubmed: 'PubMed',
+  medrxiv: 'medRxiv (preprint)',
+  psyarxiv: 'PsyArXiv (preprint)',
+  europepmc: 'Europe PMC (preprint)',
+};
 
 export interface LensExtractResult {
   candidates: Candidate[];
@@ -75,7 +83,7 @@ async function extractOneLens(
       evidence: evidenceTag(paper),
       evidenceTier: evidenceTier(paper),
       sourceUrl: paper.url,
-      source: paper.sourceKind === 'medrxiv' ? 'medRxiv (preprint)' : 'PubMed',
+      source: SOURCE_LABEL[paper.sourceKind],
       sourceId: paper.sourceId,
       sourceKind: paper.sourceKind,
       trustLevel: 'research-agent',

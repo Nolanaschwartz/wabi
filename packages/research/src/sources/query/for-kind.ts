@@ -1,6 +1,7 @@
 import { SourceKind } from '../../types';
 import { Concepts } from './concepts';
 import { pubmedQuery } from './pubmed-adapter';
+import { epmcQuery } from './epmc-adapter';
 
 /**
  * Render the per-topic {@link Concepts} into the query string a given source's `search` expects. PubMed
@@ -12,6 +13,8 @@ export function queryForKind(kind: SourceKind, topic: string, concepts: Concepts
   switch (kind) {
     case 'pubmed':
       return pubmedQuery(concepts) || topic;
+    case 'europepmc':
+      return epmcQuery(concepts) || topic;
     default:
       return topic;
   }
