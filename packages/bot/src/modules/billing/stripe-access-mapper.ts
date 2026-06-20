@@ -12,7 +12,10 @@ export interface StripeWebhookEvent {
     | 'customer.subscription.deleted'
     | string;
   data: {
-    customerId: string;
+    // Null when a subscription event arrives without a customer (defensive: Stripe always sends one,
+    // but `typeof null === 'object'` would otherwise throw in the controller). A null id simply
+    // matches no user downstream. mapStripeEvent never reads this field.
+    customerId: string | null;
     status: 'active' | 'trialing' | 'past_due' | 'canceled';
   };
 }

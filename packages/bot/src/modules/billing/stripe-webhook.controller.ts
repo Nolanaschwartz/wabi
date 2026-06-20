@@ -127,14 +127,21 @@ export class StripeWebhookController {
   // `status` is asserted into the four values we map (mapStripeEvent folds the rest into trialing).
   private toWebhookEvent(event: StripeEvent): StripeWebhookEvent {
     const sub = event.data.object as {
-      customer: string | { id: string };
+      customer: string | { id: string } | null;
       status: StripeWebhookEvent['data']['status'];
     };
+    // `typeof null === 'object'`, so a null/absent customer must be handled before the `.id` branch
+    // or it throws a TypeError → the handler 500s and Stripe retries forever. Resolve a missing
+    // customer to null (the prior `as string` passed it through harmlessly); the downstream
+    // findFirst then simply finds no user. String and expanded `{ id }` customers still resolve.
+    const customer = sub.customer;
+    const customerId =
+      typeof customer === 'string' ? customer : customer?.id ?? null;
     return {
       id: event.id,
       type: event.type,
       data: {
-        customerId: typeof sub.customer === 'string' ? sub.customer : sub.customer.id,
+        customerId,
         status: sub.status,
       },
     };
