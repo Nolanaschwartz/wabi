@@ -1,12 +1,12 @@
-import { prisma } from '@wabi/shared';
 import { requireAuthenticated } from '@/lib/auth-guard';
+import { getDbUser } from '@/lib/db-user';
 import { getStripeClient } from '@/lib/stripe';
 
 export async function POST(): Promise<Response> {
   const user = await requireAuthenticated();
   if (user instanceof Response) return user;
 
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+  const dbUser = await getDbUser(user.id);
   if (!dbUser?.stripeCustomerId) {
     return new Response('No subscription on file', { status: 400 });
   }

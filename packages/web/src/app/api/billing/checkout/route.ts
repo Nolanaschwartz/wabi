@@ -1,13 +1,14 @@
 import { NextRequest } from 'next/server';
 import { prisma } from '@wabi/shared';
 import { requireAuthenticated } from '@/lib/auth-guard';
+import { getDbUser } from '@/lib/db-user';
 import { getStripeClient } from '@/lib/stripe';
 
 export async function POST(req: NextRequest): Promise<Response> {
   const user = await requireAuthenticated();
   if (user instanceof Response) return user;
 
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+  const dbUser = await getDbUser(user.id);
   if (!dbUser) {
     return new Response('User not found', { status: 404 });
   }
