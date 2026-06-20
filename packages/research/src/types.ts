@@ -39,6 +39,9 @@ export interface Candidate {
 export interface Bounds {
   maxTopicsPerRun: number;
   maxPapersPerTopic: number;
+  /** How many candidates to FETCH per source per topic (search breadth), decoupled from how many to
+   * PROCESS (`maxPapersPerTopic`). Server-ranked by relevance; the gate + processing cap pick from them. */
+  searchLimit: number;
   maxDiscoverySteps: number;
   maxDraftsPerTopic: number;
   maxDraftsPerRun: number;

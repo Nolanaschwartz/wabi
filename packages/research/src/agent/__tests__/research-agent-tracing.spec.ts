@@ -9,7 +9,7 @@ import { Source } from '../../sources/source';
 import { Bounds, Candidate, Paper, SourceKind } from '../../types';
 
 const bounds: Bounds = {
-  maxTopicsPerRun: 5, maxPapersPerTopic: 3, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
+  maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
   maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
 };
 
@@ -47,6 +47,7 @@ function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
   ]);
   return {
     sources,
+    buildConcepts: jest.fn().mockResolvedValue({ core: ['emotion regulation'], context: [] }),
     seen: jest.fn().mockResolvedValue(false),
     markGated: jest.fn().mockResolvedValue(undefined),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1, trace: { input: 'A1', output: 'yes', model: 'm', latencyMs: 2 } }),

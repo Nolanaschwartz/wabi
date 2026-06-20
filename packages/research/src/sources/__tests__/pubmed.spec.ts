@@ -24,6 +24,7 @@ describe('PubMedTool', () => {
       url: 'https://pubmed.ncbi.nlm.nih.gov/111' });
     expect(fetchFn.mock.calls[0][0]).toContain('esearch.fcgi');
     expect(fetchFn.mock.calls[0][0]).toContain('retmax=8');
+    expect(fetchFn.mock.calls[0][0]).toContain('sort=relevance'); // best matches across history, not most-recent
   });
 
   it('hydrate fills title/pubTypes/abstract from esummary + efetch, keeping the sourceId', async () => {

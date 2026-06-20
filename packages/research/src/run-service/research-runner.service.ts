@@ -7,6 +7,7 @@ import { PubMedTool } from '../sources/pubmed';
 import { createMedrxivSource } from '../sources/medrxiv';
 import { createPsyArxivSource } from '../sources/psyarxiv';
 import { relevanceGate } from '../agent/relevance-gate';
+import { topicToConcepts } from '../sources/query/concepts';
 import { extractWithLenses } from '../agent/extract-with-lenses';
 import { mergeWithinPaper } from '../agent/merge-within-paper';
 import { judgeCandidates } from '../agent/judge';
@@ -151,7 +152,7 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { sources, seen: (id) => client.seen(id), markGated: (id, source) => client.markGated(id, source), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
+        { sources, buildConcepts: topicToConcepts, seen: (id) => client.seen(id), markGated: (id, source) => client.markGated(id, source), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
         bounds,
         log,
         { tracer, runId },

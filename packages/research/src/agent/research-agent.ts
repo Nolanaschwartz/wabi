@@ -5,6 +5,8 @@ import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-t
 import { StepTrace } from './relevance-gate';
 import { evidenceTier } from './extract';
 import { lensesForTier } from './lenses';
+import { Concepts } from '../sources/query/concepts';
+import { queryForKind } from '../sources/query/for-kind';
 
 // Below this fraction of the token budget remaining, fan a paper out across a SINGLE lens instead of
 // the full set — lenses fall before papers, so a near-exhausted run still mines something per paper.
@@ -14,6 +16,9 @@ export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
    * The agent dispatches hydrate/fullText/expand to `sources.get(paper.sourceKind)` (ADR-0036). */
   sources: Map<SourceKind, Source>;
+  /** Translate the topic into the literature's vocabulary ONCE per topic (one LLM call); each source
+   * renders the result into its own query syntax via {@link queryForKind}. Fail-open inside the builder. */
+  buildConcepts: (topic: string) => Promise<Concepts>;
   seen: (sourceId: string) => Promise<boolean>;
   /** Negative-cache a gate rejection so seen() skips this paper next run (never re-gated). */
   markGated: (sourceId: string, source: string) => Promise<void>;
@@ -96,10 +101,15 @@ export class ResearchAgent {
     // Fan search out across every source (parallel within a source's own rate limiter). Fail-soft: a
     // source that throws logs `<kind> search failed` and contributes nothing — the run never aborts on
     // one bad source. Each source yields whole Papers (thin for pubmed; the agent hydrates later).
+    // Translate the topic to the literature's vocabulary once (one LLM call, fail-open), then let each
+    // source render it into its own query syntax. Search breadth (searchLimit) is decoupled from the
+    // processing cap (maxPapersPerTopic) — fetch a wide, server-ranked pool; the gate + cap pick from it.
+    const concepts = await this.deps.buildConcepts(topic);
     const queue: Paper[] = [];
     const perKind: Partial<Record<SourceKind, number>> = {};
     for (const src of this.deps.sources.values()) {
-      const papers = await src.search(topic, this.bounds.maxPapersPerTopic)
+      const query = queryForKind(src.kind, topic, concepts);
+      const papers = await src.search(query, this.bounds.searchLimit)
         .catch((e) => { this.log.info(`${src.kind} search failed`, { topic, err: (e as Error)?.message ?? String(e) }); return [] as Paper[]; });
       perKind[src.kind] = papers.length;
       queue.push(...papers);

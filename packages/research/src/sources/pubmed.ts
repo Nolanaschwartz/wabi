@@ -70,7 +70,7 @@ export class PubMedTool implements Source {
   }
 
   async search(query: string, limit: number): Promise<Paper[]> {
-    const url = `${EUTILS}/esearch.fcgi?db=pubmed&retmode=json&retmax=${limit}&term=${encodeURIComponent(query)}${this.key()}`;
+    const url = `${EUTILS}/esearch.fcgi?db=pubmed&retmode=json&sort=relevance&retmax=${limit}&term=${encodeURIComponent(query)}${this.key()}`;
     const data = await this.getJson<{ esearchresult?: { idlist?: string[] } }>(url);
     return (data.esearchresult?.idlist ?? []).map((id) => this.thin(id));
   }

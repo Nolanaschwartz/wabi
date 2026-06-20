@@ -55,7 +55,7 @@ function makeRunner(result: RunnerResult = ZERO_RESULT): jest.Mocked<Pick<Resear
 
 /** Default bounds the config singleton would yield (schema defaults). */
 const DEFAULT_BOUNDS = {
-  maxTopicsPerRun: 5, maxPapersPerTopic: 8, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
+  maxTopicsPerRun: 5, maxPapersPerTopic: 8, searchLimit: 40, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10, agentTimeoutMs: 90_000, runTimeoutMs: 600_000, tokenBudget: 200_000,
 };
 
@@ -150,7 +150,7 @@ describe('ResearchRunService', () => {
       const arg = runner.execute.mock.calls[0][0];
       expect(arg.topics).toEqual(['stress', 'sleep']);
       expect(arg.bounds).toEqual({
-        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
+        maxTopicsPerRun: 7, maxPapersPerTopic: 9, searchLimit: 40, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
         maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
       });
     });

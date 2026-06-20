@@ -40,6 +40,7 @@ const DEFAULT_RUN_TIMEOUT_MS = 600_000;
 const DEFAULT_BOUNDS: Bounds = {
   maxTopicsPerRun: 5,
   maxPapersPerTopic: 8,
+  searchLimit: 40,
   maxDiscoverySteps: 2,
   maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10,
@@ -192,9 +193,13 @@ export class ResearchRunService implements OnModuleInit {
         ? value
         : DEFAULT_BOUNDS[key];
     };
+    // searchLimit is a search-breadth constant, not a DB-governed run bound (ADR-0034 governs the eight
+    // columns) — source it from env, falling back to the default.
+    const envSearchLimit = Number(process.env.RESEARCH_SEARCH_LIMIT);
     return {
       maxTopicsPerRun: pick('maxTopicsPerRun'),
       maxPapersPerTopic: pick('maxPapersPerTopic'),
+      searchLimit: Number.isFinite(envSearchLimit) && envSearchLimit > 0 ? envSearchLimit : DEFAULT_BOUNDS.searchLimit,
       maxDiscoverySteps: pick('maxDiscoverySteps'),
       maxDraftsPerTopic: pick('maxDraftsPerTopic'),
       maxDraftsPerRun: pick('maxDraftsPerRun'),

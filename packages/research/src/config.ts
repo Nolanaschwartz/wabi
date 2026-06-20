@@ -47,6 +47,7 @@ export function loadBounds(): Bounds {
   return {
     maxTopicsPerRun: num('RESEARCH_MAX_TOPICS_PER_RUN', 5),
     maxPapersPerTopic: num('RESEARCH_MAX_PAPERS_PER_TOPIC', 8),
+    searchLimit: num('RESEARCH_SEARCH_LIMIT', 40),
     maxDiscoverySteps: num('RESEARCH_MAX_DISCOVERY_STEPS', 2),
     maxDraftsPerTopic: num('RESEARCH_MAX_DRAFTS_PER_TOPIC', 3),
     maxDraftsPerRun: num('RESEARCH_MAX_DRAFTS_PER_RUN', 10),
