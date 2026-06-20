@@ -13,6 +13,10 @@ import { relevanceGate } from '../src/agent/relevance-gate';
 import { gateMetrics, GateItemResult, Label } from '../src/evals/gate-metrics';
 import { evalClient, evalKeys, GATE_DATASET } from './eval-env';
 
+// Repeats per item — the one trust knob. The gate calls a reasoning model whose determinism is
+// unproven, so we run each abstract N times to measure flip-rate. Drop to 1 once flip-rate proves ~0.
+const N_REPEATS = 3;
+
 function gitSha(): string {
   try {
     return execSync('git rev-parse --short HEAD').toString().trim();
@@ -46,20 +50,25 @@ async function main(): Promise<void> {
     maxConcurrency: 4,
     task: async (item) => {
       const abstract = (item.input as { abstract: string }).abstract;
-      const r = await relevanceGate(abstract);
-      // emptyReply: the gate produced no usable text (starved reasoning model or transport error) and
-      // fell open to keep. Surfaced so the metrics score it faithfully as a keep.
-      const emptyReply = !r.trace || (r.trace.output ?? '').trim() === '';
-      return { keep: r.keep, emptyReply };
+      const predictions: Label[] = [];
+      const emptyReplies: boolean[] = [];
+      for (let i = 0; i < N_REPEATS; i++) {
+        const r = await relevanceGate(abstract);
+        // empty: the gate produced no usable text (starved reasoning model or transport error) and
+        // fell open to keep. Surfaced per call so the metrics score it faithfully and measure its rate.
+        emptyReplies.push(!r.trace || (r.trace.output ?? '').trim() === '');
+        predictions.push(r.keep ? 'keep' : 'reject');
+      }
+      return { predictions, emptyReplies };
     },
   });
 
   const items: GateItemResult[] = result.itemResults.map((it) => {
-    const out = (it.output ?? {}) as { keep?: boolean; emptyReply?: boolean };
+    const out = (it.output ?? {}) as { predictions?: Label[]; emptyReplies?: boolean[] };
     return {
       expected: it.expectedOutput as Label,
-      predictions: [out.keep === false ? 'reject' : 'keep'],
-      emptyReply: out.emptyReply === true,
+      predictions: out.predictions ?? [],
+      emptyReplies: out.emptyReplies ?? [],
     };
   });
   const metrics = gateMetrics(items);
@@ -68,10 +77,12 @@ async function main(): Promise<void> {
   await tracing.shutdown();
   await client.flush();
 
-  console.log(`\n=== gate eval @ ${sha} (${items.length} items) ===`);
-  console.log(`accuracy:        ${metrics.accuracy.toFixed(3)}`);
+  console.log(`\n=== gate eval @ ${sha} (${items.length} items × ${N_REPEATS} repeats) ===`);
+  console.log(`accuracy:         ${metrics.accuracy.toFixed(3)}`);
   console.log(`reject precision: ${metrics.rejectPrecision.toFixed(3)}`);
   console.log(`reject recall:    ${metrics.rejectRecall.toFixed(3)}`);
+  console.log(`flip rate:        ${metrics.flipRate.toFixed(3)}  (0 ⇒ single-run numbers are trustworthy)`);
+  console.log(`empty-reply rate: ${metrics.emptyReplyRate.toFixed(3)}  (fail-open keeps masking accuracy)`);
   if (result.datasetRunUrl) console.log(`\nLangfuse run: ${result.datasetRunUrl}`);
 }
 
