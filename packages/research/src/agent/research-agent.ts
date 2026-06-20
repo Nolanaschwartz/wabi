@@ -105,14 +105,22 @@ export class ResearchAgent {
     // source render it into its own query syntax. Search breadth (searchLimit) is decoupled from the
     // processing cap (maxPapersPerTopic) — fetch a wide, server-ranked pool; the gate + cap pick from it.
     const concepts = await this.deps.buildConcepts(topic);
-    const queue: Paper[] = [];
     const perKind: Partial<Record<SourceKind, number>> = {};
+    const bySrc: Paper[][] = [];
     for (const src of this.deps.sources.values()) {
       const query = queryForKind(src.kind, topic, concepts);
       const papers = await src.search(query, this.bounds.searchLimit)
         .catch((e) => { this.log.info(`${src.kind} search failed`, { topic, err: (e as Error)?.message ?? String(e) }); return [] as Paper[]; });
       perKind[src.kind] = papers.length;
-      queue.push(...papers);
+      bySrc.push(papers);
+    }
+    // Interleave round-robin so the per-topic cap (maxPapersPerTopic) is SHARED across sources rather
+    // than consumed by the first (PubMed) block — otherwise EPMC/OSF preprints never reach the gate,
+    // which is the whole point of the topical-search migration (ADR-0039). Each source keeps its own
+    // server-relevance order; we just take one from each in turn.
+    const queue: Paper[] = [];
+    for (let i = 0; bySrc.some((p) => i < p.length); i++) {
+      for (const p of bySrc) if (i < p.length) queue.push(p[i]);
     }
     summary.searched = queue.length;
     this.log.info('search done', { topic, ...perKind, queued: queue.length });

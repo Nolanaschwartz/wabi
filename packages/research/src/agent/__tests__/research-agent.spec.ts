@@ -290,6 +290,19 @@ describe('ResearchAgent', () => {
     expect(judge).toHaveBeenCalledWith(expect.anything(), 'preprint'); // isPreprint → evidenceTier 'preprint'
   });
 
+  it('interleaves sources round-robin so the per-topic cap is shared, not consumed by PubMed first', async () => {
+    // pubmed → [1,2,3], psyarxiv → [a,b]. Round-robin queue = PMID:1, osf:a, PMID:2, osf:b, PMID:3.
+    // With maxPapersPerTopic=3 the cap stops after 3 — and crucially one of them is a preprint, which
+    // the old concat order (all 3 pubmed first) could never reach.
+    const deps = baseDeps({}, {
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('a'), psyPaper('b')]) }),
+    });
+    const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 3, maxDraftsPerTopic: 10 });
+    await agent.run('topic');
+    const order = (deps.seen as jest.Mock).mock.calls.map((c) => c[0]);
+    expect(order).toEqual(['PMID:1', 'osf:a', 'PMID:2']);
+  });
+
   it('continues when one paper errors (fail-open-empty)', async () => {
     const deps = baseDeps({
       extract: jest.fn()
