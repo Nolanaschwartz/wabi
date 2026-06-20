@@ -9,3 +9,17 @@ export {
   decideAccess,
   trialGrant,
 } from './access';
+export {
+  mem0Key,
+  recall,
+  search,
+  deriveAndStore,
+  getAllForUser,
+  deleteAllForUser,
+  RECALL_LIMIT,
+  SEARCH_CANDIDATE_LIMIT,
+  type MemoryEntry,
+  type MemorySearchHit,
+  type DeriveResult,
+  type ErrorHandler,
+} from './mem0';
