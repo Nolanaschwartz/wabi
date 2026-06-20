@@ -102,4 +102,23 @@ describe('VoiceAgentService.respond — prefetch never leaks', () => {
     expect(sink.write).toHaveBeenCalledTimes(3);
     expect(rejections).toEqual([]);
   });
+
+  it('still plays the reply when a barge set cancel DURING generation (not playback)', async () => {
+    // The detector is suppressed the moment a turn is dispatched, but the assistant isn't actually
+    // playing until LLM+TTS finish. A user/noise barge in that window sets session.cancel; without
+    // a reset right before playback it stuck true and the whole reply was dropped (never played).
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const session = sessionWith(sink);
+    const pipeline = pipelineFor('One. Two. Three.');
+    (pipeline.responder.respond as jest.Mock).mockImplementation(async () => {
+      session.cancel = true; // a barge fires while we're still generating
+      return 'One. Two. Three.';
+    });
+    const svc = make(pipeline);
+
+    await (svc as any).respond(session, utt());
+    await drain();
+
+    expect(sink.write).toHaveBeenCalledTimes(3); // reply plays despite the during-generation barge
+  });
 });

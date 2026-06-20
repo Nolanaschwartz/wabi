@@ -130,7 +130,6 @@ export class VoiceAgentService {
         continue;
       }
 
-      session.cancel = false;
       session.detector.setSuppressed(true);
       this.respond(session, event.utterance).finally(() => {
         session.detector.setSuppressed(false);
@@ -152,6 +151,12 @@ export class VoiceAgentService {
         session.messages.splice(1, session.messages.length - 11); // keep system + last 10
       }
       this.log.log(`reply: ${reply}`);
+
+      // Clear any barge that fired while we were still generating: the detector is suppressed from the
+      // moment a turn is dispatched, but the assistant isn't audible until now, so those barges had
+      // nothing to interrupt. Reset here so only a barge DURING the playback below stops this reply —
+      // resetting at dispatch let a during-generation barge stick and drop the whole reply.
+      session.cancel = false;
 
       // Stream the reply sentence-by-sentence: play each chunk while the NEXT one is already being
       // synthesized (playback paces ~realtime, so the synth overlaps for free). First audio now lands
