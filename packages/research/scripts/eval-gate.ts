@@ -4,12 +4,23 @@
  *
  *   pnpm -F @wabi/research eval:gate   (run eval:seed first)
  *
- * The task calls `relevanceGate(abstract)` directly — no agent, runner, or pipeline. Traces, the
- * dataset run, and the aggregate scores all land in the EVAL Langfuse project (separate keys), never
- * production. The run is named with the current git SHA (plus a timestamp, and a -dirty marker when
- * the working tree has uncommitted changes) so runs are uniquely comparable across prompt revisions.
+ * The task calls `relevanceGate(abstract)` directly — no agent, runner, or pipeline. The dataset run
+ * lands in the EVAL Langfuse project (separate keys), never production. The run is named with the
+ * current git SHA (plus a timestamp, and a -dirty marker when the working tree has uncommitted
+ * changes). Each run's metrics are appended to `evals/results.jsonl` — the DURABLE, greppable record
+ * for comparing the gate across prompt revisions.
+ *
+ * KNOWN LIMITATION: per-item execution traces are NOT exported, and run-level evaluator scores do not
+ * surface on the self-hosted dataset run. The shared `createLangfuseTracing` builds an ISOLATED OTEL
+ * provider (so it never clobbers Sentry's global one in the bot), but the experiment runner emits
+ * spans through the GLOBAL OTEL API — hence the SDK's "OpenTelemetry has not been set up" warning, and
+ * with no exported trace the run has nothing for scores to attach to. The dataset run + items still
+ * land, and results.jsonl is the source of truth for the numbers. Upgrade path: register the OTEL
+ * provider globally in this script to get both per-item traces and persisted run scores.
  */
 import { execSync } from 'child_process';
+import { appendFileSync } from 'fs';
+import { join } from 'path';
 import { relevanceGate } from '../src/agent/relevance-gate';
 import { gateMetrics, GateItemResult, GateMetrics, Label } from '../src/evals/gate-metrics';
 import { evalClient, evalKeys, GATE_DATASET } from './eval-env';
@@ -38,15 +49,28 @@ function gitInfo(): { sha: string; dirty: boolean } {
   }
 }
 
-const toItem = (it: { output?: unknown; expectedOutput?: unknown }): GateItemResult => {
+// NOTE: for a Langfuse DATASET run the ground truth is on `it.item.expectedOutput`, NOT the top-level
+// `it.expectedOutput` (which is undefined for dataset items). Reading the wrong one silently scores
+// every comparison as a miss → accuracy 0; assertExpected() below turns any such drift into a loud
+// failure instead of a plausible-looking zero.
+type ResultItem = { output?: unknown; item?: { expectedOutput?: unknown } };
+
+const toItem = (it: ResultItem): GateItemResult => {
   const out = (it.output ?? {}) as Partial<ItemOutput>;
   return {
-    expected: it.expectedOutput as Label,
+    expected: it.item?.expectedOutput as Label,
     predictions: out.predictions ?? [],
     emptyReplies: out.emptyReplies ?? [],
     failures: out.failures ?? [],
   };
 };
+
+/** Fail loud if any item's ground truth isn't a valid label — guards against a silent all-zero score
+ * if the SDK result shape ever changes again. */
+function assertExpected(items: GateItemResult[]): void {
+  const bad = items.filter((i) => i.expected !== 'keep' && i.expected !== 'reject').length;
+  if (bad > 0) throw new Error(`${bad}/${items.length} items have no keep/reject expectedOutput — dataset or SDK result shape is wrong`);
+}
 
 async function main(): Promise<void> {
   const keys = evalKeys(); // fail loud if eval config is missing
@@ -78,15 +102,16 @@ async function main(): Promise<void> {
   // Run-level evaluator: recompute the aggregate metrics over all item results and return them as
   // scores so they PERSIST on the Langfuse dataset run (the whole point of naming runs by SHA — they
   // become comparable across prompt revisions in the UI, not just ephemeral console output).
-  const runEvaluator = async ({ itemResults }: { itemResults: { output?: unknown; expectedOutput?: unknown }[] }) => {
+  const runEvaluator = async ({ itemResults }: { itemResults: ResultItem[] }) => {
     const m = gateMetrics(itemResults.map(toItem));
     return (Object.keys(m) as (keyof GateMetrics)[]).map((name) => ({ name, value: m[name] }));
   };
 
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const ranAt = new Date().toISOString();
+  const runName = `gate@${sha}${dirty ? '-dirty' : ''}-${ranAt.replace(/[:.]/g, '-')}`;
   const result = await dataset.runExperiment({
     name: 'gate',
-    runName: `gate@${sha}${dirty ? '-dirty' : ''}-${stamp}`,
+    runName,
     description: 'Relevance-gate offline eval (ADR-0040, Phase 1).',
     metadata: { gitSha: sha, dirty },
     maxConcurrency: 4,
@@ -114,6 +139,7 @@ async function main(): Promise<void> {
   });
 
   const items = result.itemResults.map(toItem);
+  assertExpected(items);
   const metrics = gateMetrics(items); // failureRate now lives in the metric (and is persisted as a score)
 
   // Whether the dataset has been human-corrected (slice 4) — read straight off the item metadata.
@@ -135,6 +161,13 @@ async function main(): Promise<void> {
   console.log(`empty-reply rate: ${metrics.emptyReplyRate.toFixed(3)}  (RAN but starved; fail-open keeps)`);
   console.log(`failure rate:     ${metrics.failureRate.toFixed(3)}  (calls that never ran — provider/transport)`);
   if (result.datasetRunUrl) console.log(`\nLangfuse run: ${result.datasetRunUrl}`);
+
+  // Durable, greppable record of every run — the source of truth for cross-revision comparison, since
+  // run-level scores don't surface on the self-hosted dataset run (see KNOWN LIMITATION above).
+  const resultsFile = join(__dirname, '../evals/results.jsonl');
+  const record = { ranAt, runName, sha, dirty, items: items.length, reviewed, repeats: N_REPEATS, ...metrics, datasetRunUrl: result.datasetRunUrl ?? null };
+  appendFileSync(resultsFile, JSON.stringify(record) + '\n', 'utf8');
+  console.log(`recorded to ${resultsFile}`);
 
   // Loud guards so a masked run is never mistaken for a real baseline.
   if (metrics.failureRate >= 0.5) {
