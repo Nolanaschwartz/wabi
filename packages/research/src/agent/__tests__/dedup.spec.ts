@@ -43,6 +43,13 @@ describe('isDuplicateInRun', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  it('does NOT escalate a one-shared-word pair to the LLM (raised floor vs the old 0.05)', async () => {
+    const kept = [mk('Box breathing', 'inhale slowly')];
+    const r = await isDuplicateInRun(mk('Walking outdoors', 'walk outdoors and inhale fresh air'), kept);
+    expect(r.duplicate).toBe(false);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('uses the LLM to confirm an ambiguous middle case', async () => {
     generate.mockResolvedValue(reply('same', 6));
     const kept = [mk('Box Breathing', 'inhale 4 hold 4 exhale 4 to calm down')];
