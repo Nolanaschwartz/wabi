@@ -5,7 +5,7 @@ function num(name: string, fallback: number): number {
   return v === undefined ? fallback : Number(v);
 }
 
-export type SourceKindName = 'pubmed' | 'medrxiv' | 'psyarxiv';
+export type SourceKindName = 'pubmed' | 'psyarxiv' | 'europepmc';
 
 /** One source knob with a 3-tier fallback: per-source `RESEARCH_<KIND>_<KEY>` overrides shared
  * `RESEARCH_<KEY>` overrides the built-in default. Empty/invalid values fall through to the next
