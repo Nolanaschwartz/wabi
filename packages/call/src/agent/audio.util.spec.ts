@@ -15,6 +15,14 @@ describe('audio.util', () => {
     expect(Array.from(data)).toEqual(Array.from(pcm));
   });
 
+  it('returns empty data for an empty/short buffer instead of throwing', () => {
+    // A non-speakable TTS chunk (e.g. a lone emoji) yields a 0-byte WAV. parseWav must
+    // not compute a negative Int16Array length ("Invalid typed array length: -22").
+    expect(() => parseWav(Buffer.alloc(0))).not.toThrow();
+    expect(parseWav(Buffer.alloc(0)).data.length).toBe(0);
+    expect(parseWav(Buffer.alloc(10)).data.length).toBe(0); // shorter than a 44-byte header
+  });
+
   it('resamples to the target rate and downmixes to mono', () => {
     // 4 stereo frames @ 48k -> mono @ 24k should halve the sample count.
     const stereo = Int16Array.from([10, 10, 20, 20, 30, 30, 40, 40]);

@@ -52,7 +52,11 @@ export function parseWav(buf: Buffer): {
   }
   if (bits !== 16)
     throw new Error(`TTS returned ${bits}-bit WAV; expected 16-bit PCM`);
-  const count = Math.floor(dataLen / 2);
+  // A non-speakable chunk (lone emoji/punctuation) makes the TTS return a 0-byte WAV, so dataLen goes
+  // negative. Bail out with empty audio before the copy below — an unclamped count threw "Invalid typed
+  // array length", and a count of 0 with dataOff past the end would throw in buf.copy.
+  const count = Math.max(0, Math.floor(dataLen / 2));
+  if (count === 0) return { data: new Int16Array(0), rate, channels };
   const data = new Int16Array(count);
   // ponytail: copy the data bytes straight into the fresh (aligned) Int16Array backing store;
   // host is little-endian, so the int16 interpretation matches the WAV bytes 1:1. Copying into
