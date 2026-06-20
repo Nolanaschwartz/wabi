@@ -130,6 +130,19 @@ export class ResearchAgent {
     // exhaust agentTimeoutMs → `agentTimeout tokens=0` before any LLM call. See .scratch/research-search-recall/00.)
     const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
+    // Batch the seen-ledger check for the whole search queue in ONE concurrent fan-out instead of a
+    // serial HTTP round-trip per paper inside the loop. In steady state most hits are already seen from
+    // prior runs (a seen-skip does no LLM work and never advances papersRead, so the caps don't fire) —
+    // that path was up to `searchLimit` sequential round-trips of pure latency. Discovery-expanded papers
+    // (pushed mid-loop) aren't here, so the loop keeps a lazy single check for them; a prefetch error
+    // leaves the id unresolved → the loop falls back to the original per-paper check (same error path).
+    const seenResolved = new Map<string, boolean>();
+    await Promise.all(
+      queue.map((p) =>
+        this.deps.seen(p.sourceId).then((v) => seenResolved.set(p.sourceId, v)).catch(() => {}),
+      ),
+    );
+
     while (queue.length > 0) {
       if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
       if (papersRead >= this.bounds.maxPapersPerTopic) { summary.stopReason = 'maxPapersPerTopic'; break; }
@@ -141,7 +154,11 @@ export class ResearchAgent {
       visited.add(item.sourceId);
 
       try {
-        if (await this.deps.seen(item.sourceId)) {
+        // Prefetched above for the initial queue; a discovery-expanded id misses the map → lazy check.
+        const already = seenResolved.has(item.sourceId)
+          ? seenResolved.get(item.sourceId)!
+          : await this.deps.seen(item.sourceId);
+        if (already) {
           summary.seenSkipped++;
           this.log.debug('skip: already seen', { id: item.sourceId });
           continue;
