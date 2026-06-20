@@ -1,5 +1,5 @@
 import { Controller, Post, Req, Res, RawBodyRequest } from '@nestjs/common';
-import { StripeAccessMapper, type StripeWebhookEvent } from './stripe-access-mapper';
+import { mapStripeEvent, type StripeWebhookEvent } from './stripe-access-mapper';
 import { AccessResolver } from './access-resolver';
 import { StripeService } from './stripe.service';
 import { prisma } from '@wabi/shared';
@@ -53,7 +53,7 @@ export class StripeWebhookController {
       }
 
       const stripeEvent = this.toWebhookEvent(event);
-      const state = StripeAccessMapper.map(stripeEvent);
+      const state = mapStripeEvent(stripeEvent);
 
       if (!state) {
         res.status(200).send('Ignored');

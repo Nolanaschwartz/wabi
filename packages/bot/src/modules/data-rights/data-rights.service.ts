@@ -167,12 +167,26 @@ export class DataRightsService {
   }
 
   async delete(discordId: string): Promise<void> {
-    // The in-tx deletes are atomic: a failure rolls back and PROPAGATES. Data Rights are
-    // unconditional (ADR-0011), so a silently-swallowed partial delete is the wrong failure mode —
-    // the caller must learn it didn't fully complete.
+    await this.eraseAllData(discordId, false);
+  }
+
+  /**
+   * The shared erase: an atomic Postgres tx deleting every child-data source (optionally the User
+   * identity row too), then a best-effort external-store purge.
+   *
+   * The in-tx deletes are atomic: a failure rolls back and PROPAGATES. Data Rights are
+   * unconditional (ADR-0011), so a silently-swallowed partial delete is the wrong failure mode —
+   * the caller must learn it didn't fully complete. Removing the User row (when `alsoDeleteUser`)
+   * cascades to the lucia Session rows (Session.userId -> User.id, onDelete: Cascade), invalidating
+   * the web session server-side.
+   */
+  private async eraseAllData(discordId: string, alsoDeleteUser: boolean): Promise<void> {
     await prisma.$transaction(async (tx) => {
       for (const s of this.sources) {
         if (s.delTx) await s.delTx(tx, discordId);
+      }
+      if (alsoDeleteUser) {
+        await tx.user.deleteMany({ where: { discordId } });
       }
     });
 
@@ -200,14 +214,7 @@ export class DataRightsService {
     });
     await this.stripe.deleteCustomer(user?.stripeCustomerId);
 
-    await prisma.$transaction(async (tx) => {
-      for (const s of this.sources) {
-        if (s.delTx) await s.delTx(tx, discordId);
-      }
-      await tx.user.deleteMany({ where: { discordId } });
-    });
-
-    await this.purgeExternalStores(discordId);
+    await this.eraseAllData(discordId, true);
   }
 
   /**

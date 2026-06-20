@@ -35,7 +35,7 @@ function pubmedSource(over: Partial<Source> = {}): Source {
     ...over,
   } as Source;
 }
-/** Fake preprint Source (medRxiv/PsyArXiv): search returns complete papers, hydrate is identity, NO expand. */
+/** Fake preprint Source (Europe PMC/PsyArXiv): search returns complete papers, hydrate is identity, NO expand. */
 function preprintSource(kind: SourceKind, over: Partial<Source> = {}): Source {
   return {
     kind,
@@ -70,7 +70,7 @@ function baseDeps(
 ): AgentDeps {
   const sources = new Map<SourceKind, Source>([
     ['pubmed', srcs.pubmed ?? pubmedSource()],
-    ['medrxiv', srcs.medrxiv ?? preprintSource('medrxiv')],
+    ['europepmc', srcs.europepmc ?? preprintSource('europepmc')],
     ['psyarxiv', srcs.psyarxiv ?? preprintSource('psyarxiv')],
   ]);
   return {
@@ -196,19 +196,19 @@ describe('ResearchAgent', () => {
     expect(summary.inRunDeduped).toBe(1);
   });
 
-  it('queues and processes PsyArXiv papers, calling psyarxiv.fullText (never medrxiv.fullText) for them', async () => {
+  it('queues and processes PsyArXiv papers, calling psyarxiv.fullText (never europepmc.fullText) for them', async () => {
     const psyFullText = jest.fn().mockResolvedValue(null);
-    const medFullText = jest.fn().mockResolvedValue(null);
+    const epmcFullText = jest.fn().mockResolvedValue(null);
     const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
       psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: psyFullText }),
-      medrxiv: preprintSource('medrxiv', { fullText: medFullText }),
+      europepmc: preprintSource('europepmc', { fullText: epmcFullText }),
     });
     const agent = new ResearchAgent(deps, bounds);
     const { candidates } = await agent.run('topic');
     expect(candidates).toHaveLength(1); // the single PsyArXiv paper flowed through to a candidate
     expect(psyFullText).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' })); // routed by kind...
-    expect(medFullText).not.toHaveBeenCalled();                                                  // ...never to medrxiv
+    expect(epmcFullText).not.toHaveBeenCalled();                                                // ...never to europepmc
   });
 
   it('falls back to the abstract when psyarxiv.fullText returns null', async () => {
@@ -306,7 +306,7 @@ describe('ResearchAgent', () => {
     const extract = jest.fn().mockImplementation((_gen, p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 }));
     const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([shared]) }),
-      medrxiv: preprintSource('medrxiv', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
+      europepmc: preprintSource('europepmc', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
     }, { extract });
     const { summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
     expect(extract).toHaveBeenCalledTimes(1);

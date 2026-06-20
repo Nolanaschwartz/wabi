@@ -32,7 +32,6 @@ describe('SpeakerMixer', () => {
     const m = new SpeakerMixer(2);
     m.feed('a', Int16Array.from([5, 5]));
     m.drop('a');
-    expect(m.has('a')).toBe(false);
-    expect(m.tick()).toBeNull();
+    expect(m.tick()).toBeNull(); // dropped speaker contributes no audio
   });
 });

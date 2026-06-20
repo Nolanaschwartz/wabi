@@ -12,6 +12,12 @@ export interface Concepts {
 
 const STOP = new Set(['and', 'for', 'the', 'with', 'from', 'after', 'during', 'into', 'that', 'this']);
 
+/** Quote multi-word phrases so they search as a unit; leave single words bare. Shared by the
+ * PubMed and Europe PMC query adapters so their phrase-quoting can't drift. */
+export function quote(s: string): string {
+  return /\s/.test(s) ? `"${s}"` : s;
+}
+
 /** Distinct lowercase content words of a topic (≥3 chars, minus a few grammar words). The deterministic
  * fallback when the LLM rewrite is unavailable — a search still runs, just without synonym expansion. */
 export function topicTerms(topic: string): string[] {

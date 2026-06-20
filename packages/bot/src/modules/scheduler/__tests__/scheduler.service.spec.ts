@@ -35,45 +35,16 @@ describe('SchedulerService', () => {
     delete process.env.DATABASE_URL;
     await scheduler.start();
     expect(scheduler.available).toBe(false);
-    // Registrations are silent no-ops in degraded mode.
-    await scheduler.work('q', jest.fn());
-    await scheduler.cron('q', '* * * * *', jest.fn());
+    // Enqueue is a silent no-op in degraded mode.
     await scheduler.send('q', {});
     expect(mockBoss.createQueue).not.toHaveBeenCalled();
     expect(mockBoss.send).not.toHaveBeenCalled();
-  });
-
-  it('work() creates the queue and binds the handler', async () => {
-    await scheduler.start();
-    const handler = jest.fn();
-    await scheduler.work('crisis-follow-up', handler);
-    expect(mockBoss.createQueue).toHaveBeenCalledWith('crisis-follow-up');
-    expect(mockBoss.work).toHaveBeenCalledWith('crisis-follow-up', handler);
-    expect(mockBoss.schedule).not.toHaveBeenCalled();
-  });
-
-  it('cron() creates the queue, schedules the cron, and binds the handler', async () => {
-    await scheduler.start();
-    const handler = jest.fn();
-    await scheduler.cron('session-sweeper', '*/5 * * * *', handler);
-    expect(mockBoss.createQueue).toHaveBeenCalledWith('session-sweeper');
-    expect(mockBoss.schedule).toHaveBeenCalledWith('session-sweeper', '*/5 * * * *');
-    expect(mockBoss.work).toHaveBeenCalledWith('session-sweeper', handler);
   });
 
   it('send() enqueues a one-off job', async () => {
     await scheduler.start();
     await scheduler.send('strategy-demote', { draftId: 'd1' });
     expect(mockBoss.send).toHaveBeenCalledWith('strategy-demote', { draftId: 'd1' });
-  });
-
-  it('schedule() forwards pg-boss schedule semantics with payload (crisis follow-up)', async () => {
-    await scheduler.start();
-    await scheduler.schedule('crisis-follow-up', '30 minutes', { userId: '123', message: 'hi' });
-    expect(mockBoss.schedule).toHaveBeenCalledWith('crisis-follow-up', '30 minutes', {
-      userId: '123',
-      message: 'hi',
-    });
   });
 
   it('stop() shuts the client down and returns to degraded', async () => {

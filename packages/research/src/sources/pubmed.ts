@@ -2,6 +2,7 @@ import { RateLimiter } from '../util/rate-limiter';
 import { Paper, SourceKind } from '../types';
 import { Source } from './source';
 import { sourceMaxTextChars } from '../config';
+import { fetchWithRetry } from './fetch-retry';
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils';
 const BIOC = 'https://www.ncbi.nlm.nih.gov/research/bionlp/RESTful/pmcoa.cgi/BioC_json';
@@ -48,17 +49,7 @@ export class PubMedTool implements Source {
   /** One rate-limited GET that retries transient 5xx (NCBI E-utilities 500s intermittently) before
    * giving up — one blip otherwise zeroes a whole topic's PubMed. 4xx fail fast. */
   private async fetchOk(url: string): Promise<Response> {
-    return this.limiter.schedule(async () => {
-      for (let attempt = 0; ; attempt++) {
-        const res = await this.fetchFn(url);
-        if (res.ok) return res;
-        if (res.status >= 500 && attempt < 2) {
-          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-          continue;
-        }
-        throw new Error(`PubMed HTTP ${res.status}`);
-      }
-    });
+    return this.limiter.schedule(() => fetchWithRetry(this.fetchFn, url, 'PubMed'));
   }
 
   private async getJson<T>(url: string): Promise<T> {

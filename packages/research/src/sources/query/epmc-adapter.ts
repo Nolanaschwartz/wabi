@@ -1,9 +1,4 @@
-import { Concepts } from './concepts';
-
-/** Quote multi-word phrases; leave single words bare. */
-function quote(s: string): string {
-  return /\s/.test(s) ? `"${s}"` : s;
-}
+import { Concepts, quote } from './concepts';
 
 /**
  * Render concepts into a Europe PMC query body — core phrases OR-ed over title+abstract, with the

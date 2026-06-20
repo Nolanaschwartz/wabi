@@ -35,7 +35,6 @@ interface Session {
   sink: AudioSink;
   detector: TurnDetector;
   messages: ChatMessage[];
-  busy: boolean;
   cancel: boolean; // set on barge-in; AudioSink.write stops on it
   closed: boolean;
 }
@@ -79,7 +78,6 @@ export class VoiceAgentService {
       messages: [
         { role: 'system', content: composeSystemPrompt(cfg.systemPrompt, memoryBlock) },
       ],
-      busy: false,
       cancel: false,
       closed: false,
     };
@@ -124,10 +122,8 @@ export class VoiceAgentService {
       }
 
       session.cancel = false;
-      session.busy = true;
       session.detector.setSuppressed(true);
       this.respond(session, event.utterance).finally(() => {
-        session.busy = false;
         session.detector.setSuppressed(false);
       });
     }

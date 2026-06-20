@@ -1,9 +1,4 @@
-import { Concepts } from './concepts';
-
-/** Quote multi-word phrases so they search as a unit; leave single words bare. */
-function quote(s: string): string {
-  return /\s/.test(s) ? `"${s}"` : s;
-}
+import { Concepts, quote } from './concepts';
 
 /**
  * Render concepts into an E-utilities `term`. Only the `core` mechanism phrases constrain the search

@@ -88,29 +88,6 @@ export class SchedulerService {
     }
   }
 
-  /** Bind a worker to a queue (creating it). No-op when degraded. */
-  async work(queue: string, handler: JobHandler): Promise<void> {
-    if (!this.boss) return;
-    try {
-      await this.boss.createQueue(queue);
-      await this.boss.work(queue, handler);
-    } catch {
-      // best-effort registration
-    }
-  }
-
-  /** Bind a recurring cron worker to a queue (creating it). No-op when degraded. */
-  async cron(queue: string, cronExpr: string, handler: JobHandler): Promise<void> {
-    if (!this.boss) return;
-    try {
-      await this.boss.createQueue(queue);
-      await this.boss.schedule(queue, cronExpr);
-      await this.boss.work(queue, handler);
-    } catch {
-      // best-effort registration
-    }
-  }
-
   /**
    * Enqueue a one-off job on a queue. No-op when degraded (check `available` first if you need to
    * know). Unlike the registration helpers, a real enqueue failure PROPAGATES — callers that want a
@@ -119,16 +96,6 @@ export class SchedulerService {
   async send(queue: string, data: object): Promise<void> {
     if (!this.boss) return;
     await this.boss.send(queue, data);
-  }
-
-  /** Schedule a recurring job with a pg-boss cron expression + payload. No-op when degraded. */
-  async schedule(queue: string, cronOrInterval: string, data: object): Promise<void> {
-    if (!this.boss) return;
-    try {
-      await this.boss.schedule(queue, cronOrInterval, data);
-    } catch {
-      // best-effort schedule
-    }
   }
 
   /**
