@@ -23,6 +23,7 @@ describe('TiltDmHandler', () => {
     message: { content: 'cannot catch a break', reply: jest.fn().mockResolvedValue({}) } as any,
     userId: '123',
     batch: 'cannot catch a break',
+    screenedBatch: { text: 'cannot catch a break' } as any,
     session: null,
     strategies: [],
     inAftermath: false,

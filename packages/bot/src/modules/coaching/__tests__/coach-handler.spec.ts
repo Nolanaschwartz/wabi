@@ -26,6 +26,7 @@ describe('CoachHandler', () => {
     message: { content: 'i keep tilting in ranked', reply: jest.fn().mockResolvedValue({}) } as any,
     userId: '123',
     batch: 'i keep tilting in ranked',
+    screenedBatch: { text: 'i keep tilting in ranked' } as any,
     session: null,
     strategies: [],
     inAftermath: false,

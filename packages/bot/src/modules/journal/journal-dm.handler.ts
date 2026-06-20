@@ -89,8 +89,18 @@ export class JournalDmHandler implements Spoke {
 
     // The entry is the coalesced batch, already screened safe upstream this turn — mint the proof from
     // that verdict (no re-screen) and run the shared tail: persist + consent-gated derive + the
-    // at-most-once consent prompt. `content` is persisted byte-identical to what was screened.
-    const screened = this.screening.screenedFromUpstream(content, 'Journal');
+    // at-most-once consent prompt. `fromBatch` vouches only when `content` is byte-identical to the
+    // screened batch; if it ever isn't (a transforming caller), it returns null and we fail SAFE by
+    // re-screening via screenForRecord rather than vouching for unscreened text (ADR-0031).
+    let screened = this.screening.fromBatch(ctx.screenedBatch, content, 'Journal');
+    if (!screened) {
+      const rescreen = await this.screening.screenForRecord(ctx.userId, { value: content, derivePrefix: 'Journal' });
+      if (rescreen.crisis) {
+        await ctx.message.reply(rescreen.response);
+        return;
+      }
+      screened = rescreen.screened;
+    }
     const outcome = await this.recorder.record(ctx.userId, screened, {
       persist: () => this.journal.write(ctx.userId, content),
       // Identical confirmation copy to JournalController.write, so both surfaces read the same.

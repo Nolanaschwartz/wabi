@@ -34,6 +34,10 @@ _Avoid_: note, diary post
 The single path every person-initiated free-text **Inner-state record** (a Mood note, a Tilt trigger, a Journal Entry) crosses on its way to storage — ephemeral reply, **Crisis Screening**, persist, consent-gated **Memory** derivation, then the first-use consent prompt — so the privacy choreography is identical regardless of which command surfaced the words (ADR-0028/0029). The "did this write carry minable free text" condition is decided **once** and gates both derivation and the consent prompt together. A structured-only log (a rating-only Mood) crosses it but derives no Memory; **Playtime** never enters it (no free-text field). Owned by one deep module, `InnerStateLogger`. The write is **transport-agnostic** (ADR-0031): the module owns the persist → derive → consent tail and returns a renderable outcome, while **Crisis Screening** is carried in as a proof token (not re-run) — so the DM surface reuses the **Crisis Classifier** verdict that already screened the turn, and the slash surface screens inline. The "a write cannot skip screening" guarantee is upheld by the type (the tail is uncallable without the proof).
 _Avoid_: log helper, write wrapper, screened path (when precision matters)
 
+**DM-screened batch**:
+The branded proof that this DM turn's coalesced batch was screened crisis-safe by the upstream **Crisis Classifier**, carrying the exact screened text. It is the token a DM spoke uses to mint a **Screened-record write** proof without a second classifier call (ADR-0030/0031): the mint vouches only when the text about to be persisted is byte-identical to the batch, so a `Screened` proof can never stand for text that was not screened, and the token itself is obtainable only past the per-turn safe verdict. A handler that would persist a *transform* of the batch gets no proof and must re-screen.
+_Avoid_: screened string, upstream verdict (when precision matters — it is a typed token, not a raw string)
+
 ### Coaching
 
 **AI Coach** (the act: **Coaching**):

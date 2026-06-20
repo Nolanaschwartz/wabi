@@ -17,7 +17,7 @@ const CONSENT_PROMPT = { content: 'CONSENT_PROMPT', components: ['row'] };
 describe('JournalDmHandler', () => {
   let handler: JournalDmHandler;
   let journalService: { write: jest.Mock; prompt: jest.Mock; latestEntry: jest.Mock };
-  let screening: { screenedFromUpstream: jest.Mock };
+  let screening: { fromBatch: jest.Mock; screenForRecord: jest.Mock };
   let recorder: { record: jest.Mock };
   let spokeSession: { setActive: jest.Mock; consume: jest.Mock };
 
@@ -25,6 +25,7 @@ describe('JournalDmHandler', () => {
     message: { content: 'journal: had a rough night', reply: jest.fn().mockResolvedValue({}) } as any,
     userId: '123',
     batch: 'journal: had a rough night',
+    screenedBatch: { text: 'journal: had a rough night' } as any,
     session: null,
     strategies: [],
     inAftermath: false,
@@ -43,7 +44,9 @@ describe('JournalDmHandler', () => {
     // then runs the SAME transport-free tail as the slash path. We forge the proof + outcome here; the
     // mint and the persist→derive→consent tail are covered in crisis-screening.spec / recorder.spec.
     screening = {
-      screenedFromUpstream: jest.fn((content: string, prefix: string) => ({ freeText: content, derivePrefix: prefix })),
+      // Default: the persisted text IS the screened batch, so fromBatch vouches without re-screening.
+      fromBatch: jest.fn((_batch: unknown, content: string, prefix: string) => ({ freeText: content, derivePrefix: prefix })),
+      screenForRecord: jest.fn(),
     };
     recorder = {
       record: jest.fn(async (_id, _screened, write: any) => ({
@@ -74,18 +77,42 @@ describe('JournalDmHandler', () => {
     );
   });
 
-  it('mints the proof from the upstream verdict (no re-screen) and records through the shared tail', async () => {
+  it('mints the proof from the batch verdict (no re-screen) and records through the shared tail', async () => {
     await handler.handle(ctx(), 'had a rough ranked night, feel worthless at the game');
 
-    expect(screening.screenedFromUpstream).toHaveBeenCalledWith(
+    expect(screening.fromBatch).toHaveBeenCalledWith(
+      expect.anything(),
       'had a rough ranked night, feel worthless at the game',
       'Journal',
     );
+    expect(screening.screenForRecord).not.toHaveBeenCalled(); // no re-screen on the verbatim path
     expect(recorder.record).toHaveBeenCalledWith(
       '123',
       { freeText: 'had a rough ranked night, feel worthless at the game', derivePrefix: 'Journal' },
       expect.objectContaining({ persist: expect.any(Function), confirm: expect.any(Function) }),
     );
+  });
+
+  it('fails SAFE when the batch proof refuses (text ≠ batch): re-screens via screenForRecord, then records on safe', async () => {
+    screening.fromBatch.mockReturnValueOnce(null); // persisted text is not the screened batch
+    screening.screenForRecord.mockResolvedValueOnce({ crisis: false, screened: { freeText: 'transformed entry', derivePrefix: 'Journal' } });
+
+    await handler.handle(ctx(), 'transformed entry');
+
+    expect(screening.screenForRecord).toHaveBeenCalledWith('123', { value: 'transformed entry', derivePrefix: 'Journal' });
+    expect(recorder.record).toHaveBeenCalled();
+  });
+
+  it('fails SAFE when the batch proof refuses AND the re-screen catches a crisis: renders the response, never records', async () => {
+    screening.fromBatch.mockReturnValueOnce(null);
+    screening.screenForRecord.mockResolvedValueOnce({ crisis: true, response: 'CRISIS_RESOURCES' });
+    const c = ctx();
+
+    await handler.handle(c, 'transformed entry that screens as crisis');
+
+    expect(c.message.reply).toHaveBeenCalledWith('CRISIS_RESOURCES');
+    expect(recorder.record).not.toHaveBeenCalled();
+    expect(journalService.write).not.toHaveBeenCalled();
   });
 
   it('sends the same "Entry saved" confirmation copy as the slash path, with the awarded XP', async () => {
@@ -122,7 +149,7 @@ describe('JournalDmHandler', () => {
 
     // No empty entry written, no proof minted, no spurious derive/consent over a non-entry.
     expect(journalService.write).not.toHaveBeenCalled();
-    expect(screening.screenedFromUpstream).not.toHaveBeenCalled();
+    expect(screening.fromBatch).not.toHaveBeenCalled();
     expect(recorder.record).not.toHaveBeenCalled();
     expect(c.message.reply).toHaveBeenCalledTimes(1);
     expect(c.message.reply).toHaveBeenCalledWith(expect.stringMatching(/nothing to save/i));

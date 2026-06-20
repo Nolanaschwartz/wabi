@@ -12,6 +12,7 @@ describe('MoodDmHandler', () => {
     message: { content: 'i want to log my mood', reply: jest.fn().mockResolvedValue({}) } as any,
     userId: '123',
     batch: 'i want to log my mood',
+    screenedBatch: { text: 'i want to log my mood' } as any,
     session: null,
     strategies: [],
     inAftermath: false,

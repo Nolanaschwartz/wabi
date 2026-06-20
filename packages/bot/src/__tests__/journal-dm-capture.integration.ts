@@ -52,6 +52,7 @@ describe('Journal DM two-turn capture integration', () => {
     const { SessionBufferService } = await import('../modules/session-buffer/session-buffer.service');
     const { BurstCoalescer } = await import('../modules/burst-coalescer/burst-coalescer.service');
     const { CoachingService } = await import('../modules/coaching/coaching.service');
+    const { ClassifierContextAssembler } = await import('../modules/coaching/classifier-context-assembler');
     const { CoachHandler } = await import('../modules/coaching/coach-handler');
     const { DmRouterService } = await import('../modules/coaching/dm-router.service');
     const { JournalService } = await import('../modules/journal/journal.service');
@@ -84,7 +85,10 @@ describe('Journal DM two-turn capture integration', () => {
     const consent = { prepareFirstUsePrompt: jest.fn().mockResolvedValue(null) } as any;
     const recorder = new InnerStateRecorderService(innerStateMemory, consent);
     const screening = {
-      screenedFromUpstream: (content: string, derivePrefix: string) => ({ freeText: content, derivePrefix }),
+      screenedBatch: (text: string) => ({ text }),
+      fromBatch: (batch: { text: string }, persistedText: string, derivePrefix: string) =>
+        persistedText === batch.text ? { freeText: persistedText, derivePrefix } : null,
+      screenForRecord: jest.fn(),
     } as any;
     const journalHandler = new JournalDmHandler(journalService, screening, recorder, spokeSession);
 
@@ -149,6 +153,8 @@ describe('Journal DM two-turn capture integration', () => {
       tilt,
       userService,
       dmRouter,
+      new ClassifierContextAssembler(tilt),
+      screening,
     );
   }, 60000);
 

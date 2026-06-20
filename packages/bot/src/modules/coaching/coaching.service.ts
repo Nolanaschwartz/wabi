@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { ClassifierService, type ClassifierContext } from '../crisis/classifier.service';
+import { ClassifierService } from '../crisis/classifier.service';
+import { CrisisScreeningService } from '../crisis/crisis-screening.service';
 import { Message, DMChannel } from 'discord.js';
-import { SessionBufferService, type SessionContext } from '../session-buffer/session-buffer.service';
+import { SessionBufferService } from '../session-buffer/session-buffer.service';
+import { ClassifierContextAssembler } from './classifier-context-assembler';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
@@ -42,6 +44,8 @@ export class CoachingService {
     private readonly tilt: TiltService,
     private readonly userService: UserService,
     private readonly dmRouter: DmRouterService,
+    private readonly classifierContextAssembler: ClassifierContextAssembler,
+    private readonly screening: CrisisScreeningService,
   ) {}
 
   async handle(message: Message): Promise<void> {
@@ -116,7 +120,7 @@ export class CoachingService {
       // prompt below. Gathering context must NEVER block classification: any failure degrades to a
       // context-free classify (the prior behaviour), with the tripwire floor still upstream. (ADR-0021.)
       const session = await this.sessionBuffer.getContext(userId).catch(() => null);
-      const classifierContext = await this.buildClassifierContext(userId, session);
+      const classifierContext = await this.classifierContextAssembler.assemble(userId, session);
 
       // The router's routing decision runs IN this block — parallel with the crisis classifier and
       // strategy search, so it costs no added serial latency. prepare() is side-effect-free and the
@@ -265,6 +269,9 @@ export class CoachingService {
           message,
           userId,
           batch,
+          // Bind the proof to the exact text just classified safe, so a spoke can mint a Screened
+          // record proof without a second classifier call (ADR-0030/0031).
+          screenedBatch: this.screening.screenedBatch(batch),
           session,
           strategies,
           inAftermath,
@@ -278,28 +285,6 @@ export class CoachingService {
     } finally {
       if (typingInterval) clearInterval(typingInterval);
     }
-  }
-
-  /**
-   * Assemble disambiguation context for the crisis classifier. Always returns an object so EVERY
-   * screening call carries context (empty when the message is cold) — the classifier wraps it in a
-   * uniform envelope either way. Every source is best-effort: a failed tilt lookup must not stop the
-   * classifier running, so it degrades to `inTiltSession: false` rather than throwing. (ADR-0021.)
-   */
-  private async buildClassifierContext(
-    userId: string,
-    session: SessionContext | null,
-  ): Promise<ClassifierContext> {
-    let inTiltSession = false;
-    try {
-      inTiltSession = await this.tilt.hasActiveSession(userId);
-    } catch {
-      inTiltSession = false;
-    }
-
-    const recentTurns = session?.turns?.length ? session.turns : undefined;
-
-    return { inTiltSession, recentTurns };
   }
 
   cancelPending(userId: string): void {

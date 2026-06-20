@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ClassifierService } from './classifier.service';
 import { EscalationService, CrisisResponse } from './escalation.service';
-import { Screened } from './screened';
+import { Screened, DmScreenedBatch } from './screened';
 
 /** The optional free-text field a screened-record write may carry, with its Memory derive prefix. */
 export interface FreeTextField {
@@ -145,15 +145,25 @@ export class CrisisScreeningService {
   }
 
   /**
-   * The DM mint site (ADR-0031). On the DM coaching path the turn's free text was ALREADY screened by
-   * the upstream Crisis Classifier this turn — a spoke handler only runs on a turn that cleared it
-   * (ADR-0021/0030). This converts that standing verdict into a `Screened` proof WITHOUT a second,
-   * serial classifier call (the latency ADR-0030 protects). The caller MUST pass the exact text that
-   * was screened — the coalesced batch, persisted byte-identical — so the proof's integrity holds; a
-   * surface that transforms the text before persisting must re-screen via {@link screenForRecord}.
+   * Mint the per-turn batch proof (ADR-0031). Called by the DM coaching path the instant the upstream
+   * Crisis Classifier returns a non-crisis verdict on the coalesced batch, binding the proof to the
+   * EXACT text that was screened. Possession of a {@link DmScreenedBatch} therefore means "this text was
+   * classified safe this turn" — the only way to obtain one is to be past the per-turn classify.
    */
-  screenedFromUpstream(content: string, derivePrefix: string): Screened {
-    return mintScreened(content, derivePrefix);
+  screenedBatch(batch: string): DmScreenedBatch {
+    return { text: batch } as unknown as DmScreenedBatch;
+  }
+
+  /**
+   * The DM mint site (ADR-0031), replacing the old bare-string `screenedFromUpstream`. Mints a
+   * `Screened` proof from the turn's batch proof WITHOUT a second classifier call (the latency ADR-0030
+   * protects) — but ONLY when `persistedText` is byte-identical to the screened batch, so the proof can
+   * never vouch for text that was not the screened text. A handler that persists a transform of the
+   * batch gets `null` and MUST fall back to {@link screenForRecord} (re-screen) rather than vouching.
+   */
+  fromBatch(batch: DmScreenedBatch, persistedText: string, derivePrefix: string): Screened | null {
+    if (persistedText !== batch.text) return null;
+    return mintScreened(persistedText, derivePrefix);
   }
 }
 

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CoachingService } from './coaching.service';
 import { CoachHandler } from './coach-handler';
 import { DmRouterService } from './dm-router.service';
+import { ClassifierContextAssembler } from './classifier-context-assembler';
 import { CoachModelModule } from './coach-model.module';
 import { JournalModule } from '../journal/journal.module';
 import { SessionBufferModule } from '../session-buffer/session-buffer.module';
@@ -41,7 +42,7 @@ import { SpokeSessionModule } from '../spoke-session/spoke-session.module';
     // The hub router reads/consumes the spoke floor for two-turn continuity.
     SpokeSessionModule,
   ],
-  providers: [CoachingService, CoachHandler, DmRouterService],
+  providers: [CoachingService, CoachHandler, DmRouterService, ClassifierContextAssembler],
   // Re-export CoachModelModule so existing consumers that resolve CoachService through CoachingModule
   // keep working after the model adapter moved into its own module.
   exports: [CoachingService, CoachModelModule],

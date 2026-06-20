@@ -54,6 +54,7 @@ describe('DM dispatch integration', () => {
     const { CoachingService } = await import('../modules/coaching/coaching.service');
     const { CoachHandler } = await import('../modules/coaching/coach-handler');
     const { DmRouterService } = await import('../modules/coaching/dm-router.service');
+    const { ClassifierContextAssembler } = await import('../modules/coaching/classifier-context-assembler');
     const { EchoController } = await import('../modules/echo/echo.controller');
     const { UserService } = await import('../modules/user/user.service');
     const shared = await import('@wabi/shared');
@@ -161,6 +162,8 @@ describe('DM dispatch integration', () => {
       tilt,
       new UserService(),
       dmRouter,
+      new ClassifierContextAssembler(tilt),
+      { screenedBatch: (t: string) => ({ text: t }) } as any,
     );
 
     const crisisScreening = { tripwire: jest.fn().mockReturnValue(false) } as any;

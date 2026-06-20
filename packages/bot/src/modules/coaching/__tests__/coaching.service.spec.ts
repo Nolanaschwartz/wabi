@@ -1,6 +1,7 @@
 import { CoachingService } from '../coaching.service';
 import { CoachHandler } from '../coach-handler';
 import { DmRouterService } from '../dm-router.service';
+import { ClassifierContextAssembler } from '../classifier-context-assembler';
 import { ClassifierService } from '../../crisis/classifier.service';
 import type { GenerationCallTelemetry } from '@wabi/shared/generate';
 import { CoachService } from '../coach.service';
@@ -250,6 +251,12 @@ describe('CoachingService', () => {
       tiltDmHandler as any,
       moodDmHandler as any,
     );
+    // Wire the REAL assembler around the same `tilt` mock so the classifier-context assertions below
+    // (inTiltSession true/false, fail-soft on a throwing tilt fetch) still exercise the real gathering
+    // path end-to-end through handle(), behaviour-identical to the old inline helper.
+    const classifierContextAssembler = new ClassifierContextAssembler(tilt);
+    // CoachingService mints the per-turn batch proof on the safe path; the mint is a pure cast.
+    const screening = { screenedBatch: (text: string) => ({ text }) };
     service = new CoachingService(
       classifier,
       sessionBuffer,
@@ -263,6 +270,8 @@ describe('CoachingService', () => {
       tilt,
       userService,
       dmRouter,
+      classifierContextAssembler,
+      screening as any,
     );
   });
 

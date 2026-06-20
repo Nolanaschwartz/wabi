@@ -226,19 +226,30 @@ describe('CrisisScreeningService.screenedFromUpstream — the DM mint site (ADR-
     service = new CrisisScreeningService(classifier as any, escalation as any);
   });
 
-  it('converts the upstream verdict into a proof carrying the exact text and prefix (no re-screen)', () => {
-    expect(service.screenedFromUpstream('had a rough night', 'Journal')).toEqual({
+  it('mints a batch proof carrying the exact screened text', () => {
+    expect(service.screenedBatch('had a rough night')).toEqual({ text: 'had a rough night' });
+  });
+
+  it('fromBatch vouches with a proof carrying the exact text + prefix when persisted text IS the batch (no re-screen)', () => {
+    const batch = service.screenedBatch('had a rough night');
+    expect(service.fromBatch(batch, 'had a rough night', 'Journal')).toEqual({
       freeText: 'had a rough night',
       derivePrefix: 'Journal',
     });
   });
 
+  it('fromBatch refuses (null) when the persisted text is NOT the screened batch — caller must re-screen', () => {
+    const batch = service.screenedBatch('had a rough night');
+    expect(service.fromBatch(batch, 'a transformed, different entry', 'Journal')).toBeNull();
+  });
+
   it.each([
     ['empty string', ''],
     ['whitespace only', '   \n\t '],
-  ])('normalises blank content (%s) to the structured-only shape — never freeText with a dangling prefix', (_label, blank) => {
-    // The single mint forge collapses blank text to { null, null }, so neither mint site can produce
-    // the unrepresentable "prefix without minable text" state, regardless of caller.
-    expect(service.screenedFromUpstream(blank, 'Journal')).toEqual({ freeText: null, derivePrefix: null });
+  ])('fromBatch normalises blank batch text (%s) to the structured-only shape — never freeText with a dangling prefix', (_label, blank) => {
+    // The single mint forge collapses blank text to { null, null }, so the mint can never produce
+    // the unrepresentable "prefix without minable text" state, even from a blank batch.
+    const batch = service.screenedBatch(blank);
+    expect(service.fromBatch(batch, blank, 'Journal')).toEqual({ freeText: null, derivePrefix: null });
   });
 });

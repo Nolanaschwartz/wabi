@@ -28,3 +28,18 @@ interface ScreenedBrand {
 export type Screened =
   | (ScreenedBrand & { readonly freeText: string; readonly derivePrefix: string })
   | (ScreenedBrand & { readonly freeText: null; readonly derivePrefix: null });
+
+/**
+ * A branded proof that this turn's coalesced batch was screened crisis-safe by the upstream DM
+ * classifier (ADR-0031). It carries the EXACT screened text so a downstream record write can be bound
+ * to it: `CrisisScreeningService.fromBatch` mints a `Screened` only when the text a handler is about to
+ * persist is byte-identical to `text`. Minted only past the per-turn safe verdict, at the single
+ * auditable forge in `CrisisScreeningService` — so a `Screened` derived from it cannot vouch for text
+ * that was never screened, and no second classifier call is needed on the DM record path (ADR-0030).
+ */
+declare const dmScreenedBatchBrand: unique symbol;
+export interface DmScreenedBatch {
+  readonly [dmScreenedBatchBrand]: true;
+  /** The exact coalesced batch the classifier screened safe this turn. */
+  readonly text: string;
+}

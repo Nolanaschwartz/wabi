@@ -52,6 +52,7 @@ describe('DmRouterService', () => {
     message: { content: 'hey', reply: jest.fn() } as any,
     userId: '123',
     batch: 'hey',
+    screenedBatch: { text: 'hey' } as any,
     session: null,
     strategies: [],
     inAftermath: false,

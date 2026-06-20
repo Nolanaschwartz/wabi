@@ -12,6 +12,7 @@ import { rankByRecency } from '../memory/memory-ranker';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import type { StrategyPoint } from '../strategy-retrieval/strategy-retrieval.service';
 import type { Spoke, SpokeResult, ToolSpec } from './spoke';
+import type { DmScreenedBatch } from '../crisis/screened';
 import { JsonLogger } from '../../lib/json-logger';
 
 /**
@@ -24,6 +25,9 @@ export interface DmTurnContext {
   userId: string;
   /** Coalesced message text — what the classifier and retrieval saw. */
   batch: string;
+  /** Proof that `batch` was screened crisis-safe this turn — the only way a spoke can mint a `Screened`
+   * record proof without a second classifier call (ADR-0030/0031). */
+  screenedBatch: DmScreenedBatch;
   /** Live session context fetched once upstream for the classifier, reused here for the prompt. */
   session: SessionContext | null;
   strategies: StrategyPoint[];
