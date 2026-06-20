@@ -3,7 +3,7 @@ import { pubmedQuery } from '../query/pubmed-adapter';
 describe('pubmedQuery', () => {
   it('OR-s quoted core phrases and never bare-AND-s the topic words', () => {
     const q = pubmedQuery({ core: ['emotion regulation', 'reappraisal'], context: [] });
-    expect(q).toBe('("emotion regulation" OR reappraisal) AND (humans[MeSH Terms] OR english[Language])');
+    expect(q).toBe('("emotion regulation" OR reappraisal) AND humans[MeSH Terms]');
     // the AND-collapse bug would have produced `emotion AND regulation AND reappraisal`
     expect(q).not.toMatch(/emotion AND regulation/);
   });
@@ -14,15 +14,16 @@ describe('pubmedQuery', () => {
     expect(q).toContain('rumination OR');
   });
 
-  it('adds context as a NON-constraining OR clause (never AND), so the domain word cannot exclude', () => {
+  it('drops context entirely — only core mechanism phrases constrain (context was noise-injecting)', () => {
     const q = pubmedQuery({ core: ['emotion regulation'], context: ['video gaming'] });
-    expect(q).toBe('(("emotion regulation") OR ("video gaming")) AND (humans[MeSH Terms] OR english[Language])');
-    expect(q).not.toMatch(/AND \("video gaming"\)/); // context is OR-ed, not required
+    expect(q).toBe('("emotion regulation") AND humans[MeSH Terms]');
+    expect(q).not.toMatch(/video gaming/); // context never reaches the PubMed term
   });
 
-  it('omits the context clause entirely when context is empty', () => {
+  it('constrains to human studies via humans[MeSH Terms], not the always-true english[Language]', () => {
     const q = pubmedQuery({ core: ['sleep hygiene'], context: [] });
-    expect(q).toBe('("sleep hygiene") AND (humans[MeSH Terms] OR english[Language])');
+    expect(q).toBe('("sleep hygiene") AND humans[MeSH Terms]');
+    expect(q).not.toMatch(/english\[Language\]/);
   });
 
   it('returns empty for empty concepts so the caller can fall back to the topic', () => {

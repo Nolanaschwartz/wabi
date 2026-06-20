@@ -6,16 +6,17 @@ function quote(s: string): string {
 }
 
 /**
- * Render concepts into an E-utilities `term`. Core phrases are quoted and OR-ed; the domain `context`
- * (when present) is OR-ed in as a NON-constraining clause — never AND-ed, because requiring the domain
- * word ("gaming") is exactly the implicit-AND collapse that hid the mechanism literature. Restricted
- * to human + English. Returns '' for empty concepts so the caller can fall back to the raw topic.
+ * Render concepts into an E-utilities `term`. Only the `core` mechanism phrases constrain the search
+ * (quoted, OR-ed); the domain `context` is DROPPED here. Two reasons: OR-ing context at the same level
+ * as core made any context-only word ("stress", "break", "activation") a match — dragging in unrelated
+ * biomedical papers (dog enteropathy, ARDS) that the gate then had to reject; and AND-ing it would be
+ * the implicit-AND collapse that hid the mechanism literature. Relevance sort handles the soft boost.
+ * Constrained to human studies via `humans[MeSH Terms]` (drops animal work; the old `OR english[Language]`
+ * was always-true and so constrained nothing). Returns '' for empty concepts → caller falls back to the
+ * raw topic. (`context` still drives the EPMC/OSF adapters, where it's scoped to title/abstract.)
  */
 export function pubmedQuery(c: Concepts): string {
   if (c.core.length === 0) return '';
-  const groups = [c.core, ...(c.context.length ? [c.context] : [])].map(
-    (g) => `(${g.map(quote).join(' OR ')})`,
-  );
-  const terms = groups.length > 1 ? `(${groups.join(' OR ')})` : groups[0];
-  return `${terms} AND (humans[MeSH Terms] OR english[Language])`;
+  const core = `(${c.core.map(quote).join(' OR ')})`;
+  return `${core} AND humans[MeSH Terms]`;
 }
