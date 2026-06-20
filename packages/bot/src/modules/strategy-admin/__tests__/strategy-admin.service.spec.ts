@@ -305,6 +305,34 @@ describe('StrategyAdminService', () => {
     expect(result).toEqual({ reindexed: 1, removed: 1 });
   });
 
+  it('reconcile bounds in-flight Qdrant upserts (<= 8) while indexing the full set', async () => {
+    const published = Array.from({ length: 20 }, (_, i) => ({
+      id: `p${i}`,
+      title: 'A',
+      technique: 'a',
+      evidence: 'e',
+    }));
+    (prisma.strategyDraft.findMany as jest.Mock)
+      .mockResolvedValueOnce(published) // published
+      .mockResolvedValueOnce([]); // quarantined
+
+    let inFlight = 0;
+    let peak = 0;
+    (retrieval.upsert as jest.Mock).mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setImmediate(r));
+      inFlight--;
+      return true;
+    });
+
+    const result = await service.reconcile();
+
+    expect(retrieval.upsert).toHaveBeenCalledTimes(20);
+    expect(result.reindexed).toBe(20);
+    expect(peak).toBeLessThanOrEqual(8);
+  });
+
   it('rejects a pending-review draft', async () => {
     (prisma.strategyDraft.findUnique as jest.Mock).mockResolvedValue({
       id: '1',

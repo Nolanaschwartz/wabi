@@ -5,9 +5,15 @@ import { CheckInScheduler } from './checkin-timing';
 import { CoachingService } from '../coaching/coaching.service';
 import { JobRegistry } from '../scheduler/job-registry';
 import { Job } from '../scheduler/jobs';
+import { mapWithConcurrency } from '../../lib/concurrency';
 
 const CHECK_IN_CRON = '0 */4 * * *';
 const VALID_TIMEZONES = Intl.supportedValuesOf('timeZone');
+
+// Cap on simultaneous DM sends per cron tick. discord.js serializes the actual HTTP under its
+// per-route limiter, so a higher number buys little wall-clock past the limiter window while pinning
+// one promise + closure per user in heap. ponytail: bump if a large due cohort ever needs faster drain.
+const CHECK_IN_CONCURRENCY = 5;
 
 @Injectable()
 export class CheckInService {
@@ -34,21 +40,19 @@ export class CheckInService {
 
     // Fan the DMs out concurrently — each user is independent, so the cron no longer waits for one
     // user's send+record before starting the next. discord.js serializes under its own per-route rate
-    // limiter, and the per-user try/catch keeps one blocked-DM failure from sinking the batch.
-    // ponytail: unbounded fan-out is fine at current scale; add a concurrency cap if dueUsers gets large.
-    await Promise.all(
-      dueUsers.map(async (user) => {
-        try {
-          await this.client.users.send(user.discordId, {
-            content: 'Hey there! How are you doing today?',
-          });
+    // limiter, and the per-user try/catch keeps one blocked-DM failure from sinking the batch. The
+    // fan-out is capped at CHECK_IN_CONCURRENCY so a large due cohort can't balloon heap mid-tick.
+    await mapWithConcurrency(dueUsers, CHECK_IN_CONCURRENCY, async (user) => {
+      try {
+        await this.client.users.send(user.discordId, {
+          content: 'Hey there! How are you doing today?',
+        });
 
-          await this.scheduler.recordCheckIn(user.discordId);
-        } catch {
-          // User may have blocked DMs
-        }
-      }),
-    );
+        await this.scheduler.recordCheckIn(user.discordId);
+      } catch {
+        // User may have blocked DMs
+      }
+    });
   }
 
   async toggleCheckIn(discordId: string, enabled: boolean): Promise<void> {
