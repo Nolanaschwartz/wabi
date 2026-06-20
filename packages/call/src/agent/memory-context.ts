@@ -9,9 +9,13 @@ export interface CallMember {
 
 export interface BuildMemoryContextDeps {
   members: CallMember[];
-  /** Discord id -> wabi User.id, or null if there is no User record. */
+  /**
+   * Discord id -> the mem0 recall key for a known user, or null if there is no User record. The key is
+   * the DISCORD id itself (the partition the coaching bot writes under), NOT the wabi User.id — this
+   * function only gates known-ness, it does not translate the id. See VoiceMemoryService.
+   */
   resolveUserId: (discordId: string) => Promise<string | null>;
-  /** wabi User.id -> derived-memory facts. */
+  /** mem0 recall key (the Discord id) -> derived-memory facts. */
   recall: (userId: string) => Promise<string[]>;
 }
 

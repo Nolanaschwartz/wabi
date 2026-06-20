@@ -1,11 +1,10 @@
 // Mock the I/O the service composes; the privacy gate itself is covered by memory-context.spec.ts.
 jest.mock('@wabi/shared', () => ({
   prisma: { user: { findUnique: jest.fn() } },
+  recall: jest.fn(),
 }));
-jest.mock('./mem0', () => ({ recall: jest.fn() }));
 
-import { prisma } from '@wabi/shared';
-import { recall } from './mem0';
+import { prisma, recall } from '@wabi/shared';
 import { VoiceMemoryService } from './voice-memory.service';
 
 const findUnique = prisma.user.findUnique as jest.Mock;
@@ -34,6 +33,16 @@ describe('VoiceMemoryService.contextFor', () => {
     );
     expect(findUnique).toHaveBeenCalledWith({ where: { discordId: 'd1' } });
     expect(block).toContain('plays Apex');
+  });
+
+  // Regression: the coaching bot keys mem0 by DISCORD id (session-sweeper writes mem0_<discordId>), so
+  // voice must recall by the Discord id too — NOT the wabi User.id. Keying by User.id reads an empty
+  // partition and the assistant forgets everything the coach learned.
+  it('recalls by the Discord id (the bot’s mem0 partition), not the wabi User.id', async () => {
+    findUnique.mockResolvedValue({ id: 'u1' }); // a User exists, but its uuid must NOT be the recall key
+    recallMock.mockResolvedValue([]);
+    await new VoiceMemoryService().contextFor(channelOf([{ id: 'd1', bot: false }]));
+    expect(recallMock).toHaveBeenCalledWith('d1');
   });
 
   it('fails open to an empty block when identity lookup throws', async () => {
