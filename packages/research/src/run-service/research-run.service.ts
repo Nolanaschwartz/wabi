@@ -39,7 +39,7 @@ const DEFAULT_RUN_TIMEOUT_MS = 600_000;
  */
 const DEFAULT_BOUNDS: Bounds = {
   maxTopicsPerRun: 5,
-  maxPapersPerTopic: 8,
+  maxPapersPerTopic: 24,
   searchLimit: 40,
   maxDiscoverySteps: 2,
   maxDraftsPerTopic: 3,
