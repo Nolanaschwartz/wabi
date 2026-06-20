@@ -30,7 +30,7 @@ const CONFIG_SINGLETON_ID = 'singleton';
  * Fallback staleness threshold (the schema default for `ResearchConfig.runTimeoutMs`). Used when the
  * config row can't be read — the guard must never throw, so it degrades to this sane default.
  */
-const DEFAULT_RUN_TIMEOUT_MS = 600_000;
+const DEFAULT_RUN_TIMEOUT_MS = 1_200_000;
 
 /**
  * Schema-default bounds (mirrors `ResearchConfig`'s `@default`s). Used when the config singleton
@@ -44,8 +44,8 @@ const DEFAULT_BOUNDS: Bounds = {
   maxDiscoverySteps: 2,
   maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10,
-  agentTimeoutMs: 90_000,
-  runTimeoutMs: 600_000,
+  agentTimeoutMs: 240_000,
+  runTimeoutMs: 1_200_000,
   tokenBudget: 200_000,
 };
 

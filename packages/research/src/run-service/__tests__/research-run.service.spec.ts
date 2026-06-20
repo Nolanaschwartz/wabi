@@ -56,7 +56,7 @@ function makeRunner(result: RunnerResult = ZERO_RESULT): jest.Mocked<Pick<Resear
 /** Default bounds the config singleton would yield (schema defaults). */
 const DEFAULT_BOUNDS = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 24, searchLimit: 40, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
-  maxDraftsPerRun: 10, agentTimeoutMs: 90_000, runTimeoutMs: 600_000, tokenBudget: 200_000,
+  maxDraftsPerRun: 10, agentTimeoutMs: 240_000, runTimeoutMs: 1_200_000, tokenBudget: 200_000,
 };
 
 /** Build the 3-arg service the new slice expects (scheduler, config, runner). */
@@ -404,11 +404,11 @@ describe('ResearchRunService', () => {
       const scheduler = makeScheduler();
       const svc = makeService(scheduler);
       prismaMock.researchConfig.findUnique.mockRejectedValue(new Error('config read failed'));
-      // A row old enough to be stale under the default 600000ms fallback.
+      // A row old enough to be stale under the default 1200000ms fallback.
       prismaMock.researchRun.findFirst.mockResolvedValue({
         id: 'run-stale',
         status: 'running',
-        startedAt: new Date(Date.now() - 600000 - 60000),
+        startedAt: new Date(Date.now() - 1200000 - 60000),
       });
       prismaMock.researchRun.create.mockResolvedValue({
         id: 'run-fresh',
