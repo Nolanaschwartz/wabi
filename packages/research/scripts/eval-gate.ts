@@ -11,6 +11,8 @@
  */
 import { execSync } from 'child_process';
 import { relevanceGate } from '../src/agent/relevance-gate';
+import { makeResearchGenerate } from '../src/agent/research-generate';
+import type { ResearchSpanInput } from '../src/agent/research-tracer';
 import { gateMetrics, GateItemResult, GateMetrics, Label } from '../src/evals/gate-metrics';
 import { evalClient, evalKeys, GATE_DATASET } from './eval-env';
 
@@ -90,22 +92,33 @@ async function main(): Promise<void> {
     description: 'Relevance-gate offline eval (ADR-0040, Phase 1).',
     metadata: { gitSha: sha, dirty },
     maxConcurrency: 4,
-    task: async (item): Promise<ItemOutput> => {
+    task: async (item: { input?: unknown; metadata?: unknown }): Promise<ItemOutput> => {
       const abstract = (item.input as { abstract?: unknown } | undefined)?.abstract;
+      // The gate is topic-aware (it judges relevance to the run topic), so feed it the topic each
+      // abstract was collected under — stored in the row's metadata by the bootstrap.
+      const topic = (item.metadata as { topic?: unknown } | undefined)?.topic;
+      const topicStr = typeof topic === 'string' ? topic : '';
       // A malformed item (no abstract) is N FAILED calls, not a fake keep — never gate on "undefined".
       // N all-failed → the item is unscored (gateMetrics drops it), uniform with a provider outage.
       if (typeof abstract !== 'string' || abstract.trim() === '') {
         const n = Array.from({ length: N_REPEATS });
         return { predictions: n.map(() => 'keep' as Label), emptyReplies: n.map(() => false), failures: n.map(() => true) };
       }
+      // The gate no longer returns a trace; tracing moved behind the `gen` seam. Tap it here with a
+      // capturing emitter: `gen` emits a span ONLY on a successful model call (carrying its output), so
+      // a captured span ⇒ the call ran (and its output tells empty-vs-not), and no span ⇒ the call threw
+      // and fell open (a failure). This recovers the exact ran/empty/failure signal the eval needs.
+      const captured: ResearchSpanInput[] = [];
+      const gen = makeResearchGenerate({ span: (s) => captured.push(s) }, 'eval');
       const predictions: Label[] = [];
       const emptyReplies: boolean[] = [];
       const failures: boolean[] = [];
       for (let i = 0; i < N_REPEATS; i++) {
-        const r = await relevanceGate(abstract);
-        const ran = !!r.trace; // the gate produced a trace ⇒ the model call actually executed
-        failures.push(!ran); // no trace ⇒ caught error (provider down / 401), fell open to keep
-        emptyReplies.push(ran && (r.trace?.output ?? '').trim() === ''); // RAN but starved/empty text
+        captured.length = 0;
+        const r = await relevanceGate(gen, abstract, topicStr);
+        const span = captured[0]; // present ⇒ the model call actually executed
+        failures.push(!span); // no span ⇒ caught error (provider down / 401), fell open to keep
+        emptyReplies.push(!!span && (span.output ?? '').trim() === ''); // RAN but starved/empty text
         predictions.push(r.keep ? 'keep' : 'reject');
       }
       return { predictions, emptyReplies, failures };

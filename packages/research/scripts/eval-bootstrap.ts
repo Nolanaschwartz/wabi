@@ -23,6 +23,7 @@ import { createPsyArxivSource } from '../src/sources/psyarxiv';
 import { topicToConcepts } from '../src/sources/query/concepts';
 import { queryForKind } from '../src/sources/query/for-kind';
 import { relevanceGate } from '../src/agent/relevance-gate';
+import { makeResearchGenerate } from '../src/agent/research-generate';
 import { Source } from '../src/sources/source';
 import { Paper } from '../src/types';
 import { defaultLogger } from '../src/util/logger';
@@ -75,7 +76,9 @@ async function harvest(src: Source, query: string, limit: number): Promise<Paper
 
 /** Gate the abstract and build a row. expectedOutput starts as the model's verdict (uncorrected). */
 async function toRow(p: Paper, topic: string, bucket: Bucket): Promise<DatasetRow> {
-  const r = await relevanceGate(p.abstract);
+  // Topic-aware gate; bootstrap only needs the keep/reject verdict, so a no-tracer `gen` (runs the
+  // model, emits no span) is enough.
+  const r = await relevanceGate(makeResearchGenerate(), p.abstract, topic);
   const modelLabel = r.keep ? 'keep' : 'reject';
   return {
     input: { abstract: p.abstract },
