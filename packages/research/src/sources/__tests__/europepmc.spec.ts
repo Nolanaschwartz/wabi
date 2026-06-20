@@ -68,7 +68,17 @@ describe('EuropePmcSource', () => {
     expect(await src.fullText(paper)).toBeNull();
   });
 
-  it('fails soft to the results gathered so far on an HTTP error', async () => {
+  it('retries a transient 5xx and recovers rather than zeroing the source', async () => {
+    const fetchFn = jest.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) } as unknown as Response)
+      .mockResolvedValueOnce(page([rec({ doi: '10.1/ok' })], '*')); // terminal cursor → stop
+    const src = new EuropePmcSource({ fetchFn, minIntervalMs: 0 });
+    const papers = await src.search('q', 5);
+    expect(papers.map((p) => p.sourceId)).toEqual(['doi:10.1/ok']);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails soft to the results gathered so far when 5xx persists past the retries', async () => {
     const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) } as unknown as Response);
     const src = new EuropePmcSource({ fetchFn, minIntervalMs: 0 });
     await expect(src.search('q', 5)).resolves.toEqual([]);

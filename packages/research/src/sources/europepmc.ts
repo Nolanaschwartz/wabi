@@ -90,9 +90,17 @@ export class EuropePmcSource implements Source {
       let data: EpmcResponse;
       try {
         data = await this.limiter.schedule(async () => {
-          const res = await this.fetchFn(url);
-          if (!res.ok) throw new Error(`Europe PMC HTTP ${res.status}`);
-          return (await res.json()) as EpmcResponse;
+          // Retry transient 5xx (EPMC 503s intermittently) before giving up — one blip otherwise
+          // zeroes the source for the whole topic. 4xx and parse errors are not retried.
+          for (let attempt = 0; ; attempt++) {
+            const res = await this.fetchFn(url);
+            if (res.ok) return (await res.json()) as EpmcResponse;
+            if (res.status >= 500 && attempt < 2) {
+              await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+              continue;
+            }
+            throw new Error(`Europe PMC HTTP ${res.status}`);
+          }
         });
       } catch (e) {
         this.log.info('europepmc search page failed', { err: (e as Error)?.message ?? String(e) });
