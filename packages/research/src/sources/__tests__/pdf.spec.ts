@@ -1,6 +1,13 @@
+import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fetchAndParsePdf, FetchPdfOpts } from '../pdf';
 
 const passthroughSchedule = <T>(fn: () => Promise<T>) => fn();
+
+/** %PDF magic + the given trailing bytes — the guard now requires real PDF bytes before parsing. */
+const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46];
+const pdfBytes = (...rest: number[]) => new Uint8Array([...PDF_MAGIC, ...rest]);
 
 function pdfResponse(bytes: Uint8Array, contentLength?: string) {
   return {
@@ -13,7 +20,7 @@ function pdfResponse(bytes: Uint8Array, contentLength?: string) {
 
 function baseOpts(over: Partial<FetchPdfOpts> = {}): FetchPdfOpts {
   return {
-    fetchFn: jest.fn().mockResolvedValue(pdfResponse(new Uint8Array([1, 2, 3]))) as any,
+    fetchFn: jest.fn().mockResolvedValue(pdfResponse(pdfBytes(1, 2, 3))) as any,
     schedule: passthroughSchedule,
     maxPdfBytes: 1000,
     maxTextChars: 1000,
@@ -57,6 +64,14 @@ describe('fetchAndParsePdf', () => {
     expect(text).toHaveLength(100);
   });
 
+  it('returns null without parsing when the response is not a PDF (e.g. OSF HTML interstitial)', async () => {
+    const parsePdf = jest.fn();
+    const fetchFn = jest.fn().mockResolvedValue(pdfResponse(new Uint8Array([0x3c, 0x21, 0x64, 0x6f]))); // "<!do"
+    const text = await fetchAndParsePdf('https://osf.io/download/x/', baseOpts({ fetchFn: fetchFn as any, parsePdf }));
+    expect(text).toBeNull();
+    expect(parsePdf).not.toHaveBeenCalled();
+  });
+
   it('fails safe to null on an HTTP error', async () => {
     const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 404, headers: { get: () => null } });
     const text = await fetchAndParsePdf('https://x/missing.pdf', baseOpts({ fetchFn: fetchFn as any }));
@@ -73,5 +88,27 @@ describe('fetchAndParsePdf', () => {
     const parsePdf = jest.fn().mockResolvedValue('   \n  ');
     const text = await fetchAndParsePdf('https://x/paper.pdf', baseOpts({ parsePdf }));
     expect(text).toBeNull();
+  });
+
+  describe('RESEARCH_PDF_DIR archive (temporary)', () => {
+    let dir: string;
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'wabi-pdf-')); process.env.RESEARCH_PDF_DIR = dir; });
+    afterEach(() => { delete process.env.RESEARCH_PDF_DIR; rmSync(dir, { recursive: true, force: true }); });
+
+    it('tees the fetched bytes to RESEARCH_PDF_DIR before parsing', async () => {
+      const fetchFn = jest.fn().mockResolvedValue(pdfResponse(pdfBytes(1, 2, 3)));
+      const text = await fetchAndParsePdf('https://medrxiv.org/10.1101/a.b.c.full.pdf', baseOpts({ fetchFn: fetchFn as any }));
+      expect(text).toBe('extracted body text'); // parse still happens
+      const written = join(dir, 'medrxiv.org_10.1101_a.b.c.full.pdf');
+      expect(existsSync(written)).toBe(true);
+      expect([...readFileSync(written)]).toEqual([...PDF_MAGIC, 1, 2, 3]);
+    });
+
+    it('does not write (and still returns text) when the var is unset', async () => {
+      delete process.env.RESEARCH_PDF_DIR;
+      const text = await fetchAndParsePdf('https://x/paper.pdf', baseOpts());
+      expect(text).toBe('extracted body text');
+      expect(existsSync(join(dir, 'x_paper.pdf'))).toBe(false);
+    });
   });
 });

@@ -53,7 +53,7 @@ describe('EuropePmcSource', () => {
     const withPdf = rec({ doi: '10.1/pdf', fullTextUrlList: { fullTextUrl: [{ documentStyle: 'pdf', url: 'https://pdf.test/a.pdf' }] } });
     const fetchFn = jest.fn()
       .mockResolvedValueOnce(page([withPdf], '*')) // terminal cursor → search stops after one page
-      .mockResolvedValueOnce({ ok: true, status: 200, headers: { get: () => '9' }, arrayBuffer: async () => new Uint8Array([1, 2]).buffer } as unknown as Response);
+      .mockResolvedValueOnce({ ok: true, status: 200, headers: { get: () => '9' }, arrayBuffer: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2]).buffer } as unknown as Response);
     const src = new EuropePmcSource({ fetchFn, minIntervalMs: 0, parsePdf: async () => 'BODY TEXT' });
 
     const [paper] = await src.search('q', 5);

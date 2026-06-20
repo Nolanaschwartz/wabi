@@ -65,7 +65,7 @@ describe('PsyArxivSource (topical)', () => {
     const fetchFn = jest.fn()
       .mockReturnValueOnce(jsonResponse({ data: { relationships: { primary_file: { links: { related: { href: 'https://api.osf.io/v2/files/f1/' } } } } } }))
       .mockReturnValueOnce(jsonResponse({ data: { links: { download: 'https://osf.io/download/f1' } } }))
-      .mockReturnValueOnce(Promise.resolve({ ok: true, status: 200, headers: { get: () => '9' }, arrayBuffer: async () => new Uint8Array([1, 2]).buffer } as unknown as Response));
+      .mockReturnValueOnce(Promise.resolve({ ok: true, status: 200, headers: { get: () => '9' }, arrayBuffer: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46, 1, 2]).buffer } as unknown as Response));
     const src = createPsyArxivSource({ fetchFn, minIntervalMs: 0, parsePdf: async () => 'PSY BODY' });
 
     expect(await src.fullText(psy('osf:guid1'))).toBe('PSY BODY');
