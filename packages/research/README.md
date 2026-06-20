@@ -11,13 +11,17 @@ strategy quality gate (ADR-0012) and the `/admin/strategies` human-review surfac
 over HTTP (`BotClient`). The worker's DB access is scoped to its own research tables — it never
 touches user data or writes `StrategyDraft` directly (ADR-0033 amended / ADR-0034).
 
+## Architecture
+
+![@wabi/research agent architecture](../../docs/assets/research-agent-architecture.png)
+
 ## What it does
 
 ```
 schedule (pg-boss cron) OR "Run now" ─→ research-run job
   load enabled topics + run bounds from the DB (ResearchConfig / ResearchTopic)
   for each topic, under a run budget:
-    search PubMed + medRxiv ─→ skip already-seen sources (BotClient.seen)
+    search PubMed + Europe PMC + PsyArXiv ─→ skip already-seen sources (BotClient.seen)
       ─→ relevance gate (LLM) ─→ extract technique + evidence (LLM) ─→ in-run dedup
       ─→ BotClient.submit(candidate)  ── POST to the bot's strategy-admin ingest (trust gate)
   finalize the ResearchRun row: submitted | deduped | rejected | errors | collected | tokens | topics
@@ -50,12 +54,20 @@ implementations and is invoked by the `research-run` consumer.
 - `seed-topics.ts` — the initial topic list seeded into `ResearchTopic` on first boot.
 - `bot-client.ts` — HTTP client to the bot: `seen(id)` and `submit(candidate)` (maps HTTP
   status → `submitted | deduped | rejected | error`).
-- `sources/` — `pubmed.ts` (NCBI E-utilities, id-based), and the windowed preprint sources
-  `medrxiv.ts` / `psyarxiv.ts`, which are thin `PreprintSpec`s over the shared
-  `windowed-preprint-source.ts` core (window cache, term-match search, identity hydrate, PDF
-  download/parse). Each spec supplies only its pagination, record→Paper mapping, and PDF-URL
-  resolution. Fixture-backed tests.
-- `agent/` — `relevance-gate.ts`, `extract.ts`, `dedup.ts`, `research-agent.ts`.
+- `sources/` — each adapter implements the uniform `Source` interface (`source.ts`, ADR-0036)
+  and owns its own id keyspace (`PMID:` / `doi:` / `osf:`): `pubmed.ts` (NCBI E-utilities +
+  BioC/Europe PMC full text, id-based thin papers — hydrate before the gate), `europepmc.ts`
+  (Europe PMC search, complete papers), `psyarxiv.ts` (OSF API v2 preprints). `pdf.ts` is the
+  shared fetch+parse (with an optional local archive). `query/` turns a topic into search
+  concepts via the gate model and renders them into each source's query syntax — server-side
+  topical search (ADR-0039). Fixture-backed tests.
+- `agent/` — the LLM pipeline: `relevance-gate.ts`, `extract.ts` / `extract-with-lenses.ts`
+  (+ `lenses.ts`), `merge-within-paper.ts`, `judge.ts`, `dedup.ts`, `scope-policy.ts`
+  (ADR-0041), `research-generate.ts`, and `research-tracer.ts`, orchestrated by
+  `research-agent.ts`.
+- `evals/` — offline per-step prompt experiments (`gate-metrics.ts`); prompts are evaluated by
+  per-step offline experiments rather than only end-to-end (ADR-0040).
+- `types.ts` — shared `Paper` / `SourceKind` / `EvidenceTier` / candidate types.
 - `util/` — `load-env.ts`, `logger.ts`, `rate-limiter.ts`.
 
 ## Admin HTTP surface (behind `AdminGuard`, reached via the web `/api/admin/research` proxy)
