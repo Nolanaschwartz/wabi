@@ -32,10 +32,10 @@ App Router under `src/app/`:
   - `api/consent/accept/`, `api/consent/decline/` — consent persistence
   - `api/admin/strategies/[...path]/` — authenticated proxy to the bot's strategy-admin API
   - `api/admin/research/[...path]/` — authenticated proxy to the research worker's admin API
-- `middleware.ts` — edge middleware
 
-`src/lib/` holds the cross-cutting helpers: `auth.ts` / `session.ts` (lucia),
-`auth-guard.ts`, `admin.ts`, `db-user.ts`, `pending-consent.ts`, `stripe.ts`.
+`src/middleware.ts` is the edge middleware. `src/lib/` holds the cross-cutting helpers:
+`auth.ts` / `session.ts` (lucia), `auth-guard.ts`, `admin.ts`, `db-user.ts`,
+`pending-consent.ts`, `stripe.ts`, `data-rights-api.ts`, `mood-series.ts`.
 
 ## Commands
 

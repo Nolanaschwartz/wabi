@@ -24,7 +24,7 @@ map.
 
 ![Wabi system architecture](docs/assets/wabi-architecture.png)
 
-External services and actors (top) talk to the four `packages/*` (middle), which sit on a
+External services and actors (top) talk to the `packages/*` (middle), which sit on a
 self-hosted, swappable data and observability tier (bottom). The bot expands to show the
 crisis → coaching hot path and its module groups.
 
@@ -38,7 +38,8 @@ own README.
 | [`@wabi/bot`](packages/bot) | NestJS + necord over discord.js. The heart: Discord gateway, crisis→coaching pipeline, Stripe webhook, pg-boss worker/scheduler. Always-on. |
 | [`@wabi/web`](packages/web) | Next.js 15 App Router. Landing, Discord OAuth + consent + trial + `User` creation, Stripe checkout, dashboard, `/admin/strategies` review. |
 | [`@wabi/shared`](packages/shared) | Plain TypeScript: Prisma client + generated types, constants, swappable-provider + access resolvers. Imported by the others. |
-| [`@wabi/research`](packages/research) | Always-on NestJS service (:3002, ADR-0034). Mines PubMed/medRxiv for evidence-based techniques and submits `StrategyDraft`s to the bot for human review. |
+| [`@wabi/research`](packages/research) | Always-on NestJS service (:3002, ADR-0034). Mines PubMed/Europe PMC/PsyArXiv for evidence-based techniques and submits `StrategyDraft`s to the bot for human review. |
+| [`@wabi/call`](packages/call) | NestJS voice-call agent (:3003). Bridges a Discord voice channel to a LiveKit room and runs a turn-detection → STT → LLM → TTS loop with Mem0 recall. |
 
 ## Quick start
 
@@ -49,7 +50,7 @@ pnpm install                                   # install workspace deps
 docker compose up -d postgres redis qdrant mem0   # local infra (also: neo4j, glitchtip)
 cp .env.example .env                           # then fill in secrets — see .env.example
 pnpm db:push                                   # push the Prisma schema
-pnpm dev                                       # all packages in parallel (web :3000, bot :3001)
+pnpm dev                                       # all packages in parallel (web :3000, bot :3001, research :3002, call :3003)
 ```
 
 The bot comes online even if infra is down (degraded) so the Discord gateway never blocks.
@@ -95,7 +96,7 @@ Qdrant+neo4j) · neo4j (per-user graph) · local bge embeddings · Langfuse (tra
 These are the source of truth. **ADRs win where docs disagree.**
 
 - `docs/ARCHITECTURE.md` — consolidated system design, key flows, personal-data map.
-- `docs/adr/` — the *why* behind every structural decision (0001–0035).
+- `docs/adr/` — the *why* behind every structural decision (0001–0041).
 - `CONTEXT-MAP.md` → `docs/contexts/<context>/CONTEXT.md` — domain vocabulary. Contexts
   (Wellbeing / Accounts & Billing / Community) are **language boundaries, not packages**.
 - `CLAUDE.md` — working conventions and the patterns that bite.

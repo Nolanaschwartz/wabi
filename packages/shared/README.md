@@ -15,12 +15,22 @@ Built with `tsc` to `dist/`; consumers import the compiled output.
   the bot's bootstrap is honoured. Never cache its result in a field or top-level const.
   Roles include `coach` / `classifier` / `embedding` / `router` (and the research worker's
   `research` / `research-triage`).
-- **`access.ts`** — the access resolver: `hasActiveAccess = (now < trialEndsAt) OR
-  stripeStatus ∈ {active, trialing}` (ADR-0011). The source of truth for entitlement,
-  derived on read.
-- **`sentry-scrub.ts`** — content-scrubbing for error reporting, exported as a separate entry
-  point (`@wabi/shared/sentry-scrub`).
-- **`index.ts`** — the public barrel.
+- **`access.ts`** — the access resolver: `decideAccess` / `trialGrant` — entitlement is
+  `now < trialEndsAt` OR `stripeStatus ∈ {active, trialing}` (ADR-0011). The source of truth
+  for entitlement, derived on read.
+- **`mem0.ts`** — the derived-memory client over the Mem0 REST API (ADR-0025): `recall` /
+  `search` / `deriveAndStore` / `getAllForUser` / `deleteAllForUser`, the `mem0Key` partition
+  helper, and the recall limits. Used by the bot's `memory` module and the call agent's voice
+  memory.
+- **`mood.ts`** — `MOOD_EMOJIS` and `ratingToEmoji`, shared by the bot and the web dashboard.
+- **`generate.ts`** — a minimal provider-agnostic LLM text-generation helper, exported as its
+  own entry point (`@wabi/shared/generate`); the research worker builds on it.
+- **`otel.ts`** — the OpenTelemetry tracer setup (ADR-0038), exported as its own entry point
+  (`@wabi/shared/otel`).
+- **`sentry-scrub.ts`** — content-scrubbing for error reporting, also exported as a separate
+  entry point (`@wabi/shared/sentry-scrub`).
+- **`index.ts`** — the public barrel (`.`); `generate`, `otel`, and `sentry-scrub` are
+  separate subpath entry points.
 
 ## Prisma
 

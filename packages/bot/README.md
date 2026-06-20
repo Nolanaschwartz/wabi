@@ -8,6 +8,10 @@ serverless (ADR-0019/0020).
 It binds **:3001** locally (web owns :3000) and comes online even when infra is down
 (degraded mode), so the Discord gateway never blocks on Redis.
 
+## Architecture
+
+![@wabi/bot architecture](../../docs/assets/wabi-bot-architecture.png)
+
 ## The coaching hot path
 
 ```
@@ -29,7 +33,7 @@ if the classifier can't run, coaching does not proceed.
 
 `src/modules/<feature>/` is a NestJS module per feature, each owning its `.module.ts`,
 services, and `__tests__/`. They are wired in `src/app.module.ts`. `src/lib/` holds
-cross-module helpers (sentry, setup-link, json-logger, safe-fetch, usage, timezone-util, command-contexts). `src/main.ts` is the bootstrap.
+cross-module helpers (sentry, setup-link, json-logger, safe-fetch, timezone-util, command-contexts). `src/main.ts` is the bootstrap.
 
 Modules, grouped by role:
 

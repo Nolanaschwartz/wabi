@@ -17,6 +17,7 @@ Refresh with `packages/research/scripts/capture-fixtures.sh`, then run
 | `elink-error.json` | elink.fcgi (JSON) | real **HTTP 200 + `ERROR` + empty `linksets`** transient-failure shape; `related()` must return `[]` |
 | `bioc.json` | BioC_json/PMC8314311/unicode | **top-level array** `[{documents:[{passages:[{text}]}]}]` (~126 KB) |
 | `medrxiv-details.json` | medRxiv details window (JSON) | `collection[]` of 100 records; filter keys `doi/title/abstract/date` |
+| `sample.pdf` | — | tiny valid PDF for the `pdf.ts` fetch+parse path |
 
 Coherent around one stable open-access paper: **PMID 34542434 / PMC8314311**.
 
