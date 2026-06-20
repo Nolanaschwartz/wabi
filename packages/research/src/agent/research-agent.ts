@@ -102,14 +102,15 @@ export class ResearchAgent {
     // processing cap (maxPapersPerTopic) — fetch a wide, server-ranked pool; the gate + cap pick from it.
     const concepts = await this.deps.buildConcepts(topic);
     const perKind: Partial<Record<SourceKind, number>> = {};
-    const bySrc: Paper[][] = [];
-    for (const src of this.deps.sources.values()) {
+    // Promise.all preserves array order, so bySrc keeps source order for round-robin interleave below;
+    // each source's per-rate-limiter fan-out is unchanged. Search is now max-of-source, not sum.
+    const bySrc = await Promise.all([...this.deps.sources.values()].map(async (src) => {
       const query = queryForKind(src.kind, topic, concepts);
       const papers = await src.search(query, this.bounds.searchLimit)
         .catch((e) => { this.log.info(`${src.kind} search failed`, { topic, err: (e as Error)?.message ?? String(e) }); return [] as Paper[]; });
       perKind[src.kind] = papers.length;
-      bySrc.push(papers);
-    }
+      return papers;
+    }));
     // Interleave round-robin so the per-topic cap (maxPapersPerTopic) is SHARED across sources rather
     // than consumed by the first (PubMed) block — otherwise EPMC/OSF preprints never reach the gate,
     // which is the whole point of the topical-search migration (ADR-0039). Each source keeps its own
@@ -130,6 +131,22 @@ export class ResearchAgent {
     // exhaust agentTimeoutMs → `agentTimeout tokens=0` before any LLM call. See .scratch/research-search-recall/00.)
     const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
+    // Batch the seen-ledger check in ONE concurrent fan-out instead of a serial HTTP round-trip per paper
+    // inside the loop. In steady state most hits are already seen from prior runs (a seen-skip does no LLM
+    // work and never advances papersRead, so the caps don't fire) — that path was up to maxPapersPerTopic
+    // sequential round-trips of pure latency. CAP the prefetch at maxPapersPerTopic: the loop breaks at
+    // that bound (a seen-skip is the one exception, but it doesn't consume LLM budget so the queue still
+    // drains in order), so prefetching the whole round-robin queue (~searchLimit×sources) would fire ~96
+    // wasted seen() calls on a fresh/low-overlap topic the loop never reaches. The remaining ids — the
+    // queue tail beyond the cap AND discovery-expanded papers pushed mid-loop — keep the lazy single check
+    // below; a prefetch error leaves an id unresolved → the loop falls back to the same per-paper check.
+    const seenResolved = new Map<string, boolean>();
+    await Promise.all(
+      queue.slice(0, this.bounds.maxPapersPerTopic).map((p) =>
+        this.deps.seen(p.sourceId).then((v) => seenResolved.set(p.sourceId, v)).catch(() => {}),
+      ),
+    );
+
     while (queue.length > 0) {
       if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
       if (papersRead >= this.bounds.maxPapersPerTopic) { summary.stopReason = 'maxPapersPerTopic'; break; }
@@ -141,7 +158,11 @@ export class ResearchAgent {
       visited.add(item.sourceId);
 
       try {
-        if (await this.deps.seen(item.sourceId)) {
+        // Prefetched above for the initial queue; a discovery-expanded id misses the map → lazy check.
+        const already = seenResolved.has(item.sourceId)
+          ? seenResolved.get(item.sourceId)!
+          : await this.deps.seen(item.sourceId);
+        if (already) {
           summary.seenSkipped++;
           this.log.debug('skip: already seen', { id: item.sourceId });
           continue;

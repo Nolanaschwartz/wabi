@@ -29,17 +29,29 @@ export default function ConsentPage() {
 
       <div className="mb-8 rounded-lg border border-ink-3 bg-ink-1 p-6">
         <p className="mb-4 font-mono text-[11px] uppercase tracking-[0.14em] text-warn">
-          {/* TODO(LEGAL): Replace with final consent wording */}
-          Placeholder — pending legal review.
+          {/* TODO(LEGAL): grounded draft below — accurate to current data flows (ADR-0001/0002/0013/
+              0017), but still needs legal sign-off before launch. Keep this banner until then. */}
+          Draft — pending legal review. Not final wording.
         </p>
         <p className="mb-4 leading-relaxed text-bone-1">
-          Wabi processes your messages through an AI provider to generate coaching responses.
-          Your conversations are used to personalize your experience and may be stored for
-          the duration of your account. We do not sell your data to third parties.
+          Wabi is a non-clinical wellness companion — not a medical, therapy, or crisis service. When
+          you message it in your Discord DMs, those messages are sent to an AI provider to generate its
+          coaching replies.
+        </p>
+        <p className="mb-4 leading-relaxed text-bone-1">
+          Your verbatim conversations are not stored. Messages are held only briefly to keep the
+          conversation going, then deleted; from them Wabi derives short notes about you (for example,
+          what you've shared about yourself) so it can stay useful across chats. Anything you log —
+          like mood or journal entries — stays private to you and is never shown on a social surface.
+        </p>
+        <p className="mb-4 leading-relaxed text-bone-1">
+          Your data leaves our systems only to the services that run Wabi: Discord, our AI provider,
+          and Stripe for billing. We do not sell your data to third parties. If you appear to be in
+          crisis, Wabi shows local support resources and does not continue coaching.
         </p>
         <p className="leading-relaxed text-bone-1">
-          By accepting, you consent to this processing. You can revoke consent and request
-          data deletion at any time in your account settings.
+          By accepting, you consent to this processing. You can revoke consent and request a copy or
+          deletion of your data at any time in your account settings.
         </p>
       </div>
 

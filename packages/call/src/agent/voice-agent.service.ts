@@ -21,6 +21,15 @@ import { composeSystemPrompt } from './memory-context';
 
 const OUT_RATE = 48000; // assistant publishes 48kHz mono
 
+// Split a reply into sentence-ish chunks so TTS can start playing the first sentence while the rest
+// is still being synthesized. ponytail: naive punctuation split — "3.14"/"Dr." over-split into two
+// chunks, a harmless extra TTS boundary; swap for an NLP segmenter only if that ever sounds wrong.
+export function splitForTts(text: string): string[] {
+  return (text.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) ?? [text])
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 // ponytail: energy-based turn detection — tune to your room; swap for Silero if it mis-triggers.
 const TURN_OPTS: TurnDetectorOpts = {
   vadRms: 600,
@@ -35,7 +44,6 @@ interface Session {
   sink: AudioSink;
   detector: TurnDetector;
   messages: ChatMessage[];
-  busy: boolean;
   cancel: boolean; // set on barge-in; AudioSink.write stops on it
   closed: boolean;
 }
@@ -79,7 +87,6 @@ export class VoiceAgentService {
       messages: [
         { role: 'system', content: composeSystemPrompt(cfg.systemPrompt, memoryBlock) },
       ],
-      busy: false,
       cancel: false,
       closed: false,
     };
@@ -124,10 +131,8 @@ export class VoiceAgentService {
       }
 
       session.cancel = false;
-      session.busy = true;
       session.detector.setSuppressed(true);
       this.respond(session, event.utterance).finally(() => {
-        session.busy = false;
         session.detector.setSuppressed(false);
       });
     }
@@ -148,11 +153,35 @@ export class VoiceAgentService {
       }
       this.log.log(`reply: ${reply}`);
 
-      const out = parseWav(await this.pipeline!.synthesizer.synthesize(reply));
-      const pcm = resampleToMono(out.data, out.rate, out.channels, OUT_RATE);
-      await session.sink.write(pcm, () => session.cancel || session.closed);
+      // Stream the reply sentence-by-sentence: play each chunk while the NEXT one is already being
+      // synthesized (playback paces ~realtime, so the synth overlaps for free). First audio now lands
+      // after the first sentence's TTS instead of the whole reply's.
+      // prefetch(): kick off a chunk's synth and immediately attach a no-op catch, so an
+      // in-flight-but-never-awaited prefetch can't escalate to an unhandledRejection no matter how the
+      // loop exits (clean finish, barge-in/hangup break, or a rejecting sink.write throwing us into the
+      // catch below). The explicit `await pending` still surfaces real synth errors into that catch.
+      const prefetch = (text: string): Promise<Int16Array> => {
+        const p = this.synth(text);
+        p.catch(() => {});
+        return p;
+      };
+      const chunks = splitForTts(reply);
+      let pending: Promise<Int16Array> | null =
+        chunks.length > 0 ? prefetch(chunks[0]) : null;
+      for (let i = 0; i < chunks.length; i++) {
+        const pcm = await pending!;
+        pending = i + 1 < chunks.length ? prefetch(chunks[i + 1]) : null;
+        if (session.cancel || session.closed) break;
+        await session.sink.write(pcm, () => session.cancel || session.closed);
+      }
     } catch (e) {
       this.log.error(`pipeline failed: ${(e as Error).message}`);
     }
+  }
+
+  // Synthesize one text chunk to OUT_RATE mono PCM.
+  private async synth(text: string): Promise<Int16Array> {
+    const out = parseWav(await this.pipeline!.synthesizer.synthesize(text));
+    return resampleToMono(out.data, out.rate, out.channels, OUT_RATE);
   }
 }

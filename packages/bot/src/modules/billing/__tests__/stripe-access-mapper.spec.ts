@@ -1,8 +1,8 @@
-import { StripeAccessMapper } from '../stripe-access-mapper';
+import { mapStripeEvent } from '../stripe-access-mapper';
 
-describe('StripeAccessMapper', () => {
+describe('mapStripeEvent', () => {
   it('maps subscription.created to active access', () => {
-    const result = StripeAccessMapper.map({
+    const result = mapStripeEvent({
       type: 'customer.subscription.created',
       data: { customerId: '123', status: 'active' },
     });
@@ -14,7 +14,7 @@ describe('StripeAccessMapper', () => {
   });
 
   it('maps subscription.updated with past_due', () => {
-    const result = StripeAccessMapper.map({
+    const result = mapStripeEvent({
       type: 'customer.subscription.updated',
       data: { customerId: '123', status: 'past_due' },
     });
@@ -26,7 +26,7 @@ describe('StripeAccessMapper', () => {
   });
 
   it('maps subscription.deleted to canceled', () => {
-    const result = StripeAccessMapper.map({
+    const result = mapStripeEvent({
       type: 'customer.subscription.deleted',
       data: { customerId: '123', status: 'canceled' },
     });
@@ -38,7 +38,7 @@ describe('StripeAccessMapper', () => {
   });
 
   it('ignores unknown event types', () => {
-    const result = StripeAccessMapper.map({
+    const result = mapStripeEvent({
       type: 'unknown.event',
       data: { customerId: '123', status: 'active' },
     });
@@ -52,8 +52,8 @@ describe('StripeAccessMapper', () => {
       data: { customerId: '123', status: 'active' as const },
     };
 
-    const r1 = StripeAccessMapper.map(event);
-    const r2 = StripeAccessMapper.map(event);
+    const r1 = mapStripeEvent(event);
+    const r2 = mapStripeEvent(event);
     expect(r1).toEqual(r2);
   });
 });

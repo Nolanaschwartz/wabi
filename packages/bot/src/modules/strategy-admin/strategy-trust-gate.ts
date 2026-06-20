@@ -48,21 +48,8 @@ export class StrategyTrustGate {
     // sees something that failed them, but they can only gate-to-queue — never auto-publish,
     // even from an allowlisted source. The human gate is mandatory for agent-discovered advice.
     if (draft.trustLevel === 'research-agent') {
-      const safetyCheck = await this.safetyFilter(draft);
-      if (!safetyCheck) {
-        return {
-          decision: 'reject',
-          reason: 'Failed safety filter',
-        };
-      }
-
-      const faithfulness = await this.faithfulnessCheck(draft);
-      if (!faithfulness) {
-        return {
-          decision: 'reject',
-          reason: 'Technique not faithful to cited source',
-        };
-      }
+      const rejection = await this.runSafetyAndFaithfulness(draft);
+      if (rejection) return rejection;
 
       return {
         decision: 'queue',
@@ -81,6 +68,24 @@ export class StrategyTrustGate {
     }
 
     // Allowlisted sources: run safety + faithfulness for auto-publish
+    const rejection = await this.runSafetyAndFaithfulness(draft);
+    if (rejection) return rejection;
+
+    return {
+      decision: 'publish',
+      reason: 'Allowlisted + safe + faithful — auto-published',
+    };
+  }
+
+  /**
+   * Run the safety filter then the faithfulness check, short-circuiting on the first failure.
+   * Returns the rejection verdict if either fails, or null when both pass — letting each caller
+   * supply its own terminal (publish vs queue) verdict. Order and short-circuits are identical to
+   * the two branches that previously inlined this sequence.
+   */
+  private async runSafetyAndFaithfulness(
+    draft: StrategyDraft,
+  ): Promise<{ decision: EvaluationDecision; reason: string } | null> {
     const safetyCheck = await this.safetyFilter(draft);
     if (!safetyCheck) {
       return {
@@ -97,10 +102,7 @@ export class StrategyTrustGate {
       };
     }
 
-    return {
-      decision: 'publish',
-      reason: 'Allowlisted + safe + faithful — auto-published',
-    };
+    return null;
   }
 
   private isSourceAllowlisted(sourceUrl: string): boolean {
@@ -157,12 +159,5 @@ Evidence: ${draft.evidence}${sourceTextSection}`,
 
   shouldQuarantine(negativeCount: number): boolean {
     return negativeCount >= QUARANTINE_THRESHOLD;
-  }
-
-  static quarantine(draft: StrategyDraft): StrategyDraft {
-    return {
-      ...draft,
-      status: 'quarantined',
-    };
   }
 }

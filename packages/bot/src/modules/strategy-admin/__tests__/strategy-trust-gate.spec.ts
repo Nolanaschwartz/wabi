@@ -148,22 +148,6 @@ describe('StrategyTrustGate', () => {
     expect(faithfulnessCall.prompt).toContain('CBT is effective');
   });
 
-  it('quarantines strategy', () => {
-    const draft = {
-      id: '1',
-      title: 'Test',
-      technique: 'Test technique',
-      source: 'APA',
-      evidence: 'Test evidence',
-      sourceUrl: 'https://apa.org/test',
-      trustLevel: 'allowlisted' as const,
-      status: 'published' as const,
-    };
-
-    const quarantined = StrategyTrustGate.quarantine(draft);
-    expect(quarantined.status).toBe('quarantined');
-  });
-
   it('shouldQuarantine returns true at threshold', () => {
     expect(gate.shouldQuarantine(3)).toBe(true);
     expect(gate.shouldQuarantine(2)).toBe(false);

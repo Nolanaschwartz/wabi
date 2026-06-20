@@ -6,7 +6,6 @@ import { SCOPE_FRAGMENT } from './scope-policy';
 /** Human-readable source label carried on each Candidate (display + provenance), set from the source. */
 const SOURCE_LABEL: Record<SourceKind, string> = {
   pubmed: 'PubMed',
-  medrxiv: 'medRxiv (preprint)',
   psyarxiv: 'PsyArXiv (preprint)',
   europepmc: 'Europe PMC (preprint)',
 };

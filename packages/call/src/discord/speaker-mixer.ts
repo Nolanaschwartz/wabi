@@ -26,10 +26,6 @@ export class SpeakerMixer {
     this.queues.delete(userId);
   }
 
-  has(userId: string): boolean {
-    return this.queues.has(userId);
-  }
-
   // One mixed frame; null if no speaker had audio this tick.
   tick(): Int16Array | null {
     if (this.queues.size === 0) return null;

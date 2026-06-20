@@ -62,7 +62,7 @@ function fakePipeline(over: Partial<ExtractionPipeline> = {}): ExtractionPipelin
 function baseDeps(over: Partial<Omit<AgentDeps, 'pipeline'>> = {}, pipe: Partial<ExtractionPipeline> = {}): AgentDeps {
   const sources = new Map<SourceKind, Source>([
     ['pubmed', pubmedSource()],
-    ['medrxiv', preprintSource('medrxiv')],
+    ['europepmc', preprintSource('europepmc')],
     ['psyarxiv', preprintSource('psyarxiv')],
   ]);
   return {

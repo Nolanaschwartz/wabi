@@ -35,7 +35,7 @@ function pubmedSource(over: Partial<Source> = {}): Source {
     ...over,
   } as Source;
 }
-/** Fake preprint Source (medRxiv/PsyArXiv): search returns complete papers, hydrate is identity, NO expand. */
+/** Fake preprint Source (Europe PMC/PsyArXiv): search returns complete papers, hydrate is identity, NO expand. */
 function preprintSource(kind: SourceKind, over: Partial<Source> = {}): Source {
   return {
     kind,
@@ -70,7 +70,7 @@ function baseDeps(
 ): AgentDeps {
   const sources = new Map<SourceKind, Source>([
     ['pubmed', srcs.pubmed ?? pubmedSource()],
-    ['medrxiv', srcs.medrxiv ?? preprintSource('medrxiv')],
+    ['europepmc', srcs.europepmc ?? preprintSource('europepmc')],
     ['psyarxiv', srcs.psyarxiv ?? preprintSource('psyarxiv')],
   ]);
   return {
@@ -196,19 +196,19 @@ describe('ResearchAgent', () => {
     expect(summary.inRunDeduped).toBe(1);
   });
 
-  it('queues and processes PsyArXiv papers, calling psyarxiv.fullText (never medrxiv.fullText) for them', async () => {
+  it('queues and processes PsyArXiv papers, calling psyarxiv.fullText (never europepmc.fullText) for them', async () => {
     const psyFullText = jest.fn().mockResolvedValue(null);
-    const medFullText = jest.fn().mockResolvedValue(null);
+    const epmcFullText = jest.fn().mockResolvedValue(null);
     const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
       psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: psyFullText }),
-      medrxiv: preprintSource('medrxiv', { fullText: medFullText }),
+      europepmc: preprintSource('europepmc', { fullText: epmcFullText }),
     });
     const agent = new ResearchAgent(deps, bounds);
     const { candidates } = await agent.run('topic');
     expect(candidates).toHaveLength(1); // the single PsyArXiv paper flowed through to a candidate
     expect(psyFullText).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' })); // routed by kind...
-    expect(medFullText).not.toHaveBeenCalled();                                                  // ...never to medrxiv
+    expect(epmcFullText).not.toHaveBeenCalled();                                                // ...never to europepmc
   });
 
   it('falls back to the abstract when psyarxiv.fullText returns null', async () => {
@@ -306,7 +306,7 @@ describe('ResearchAgent', () => {
     const extract = jest.fn().mockImplementation((_gen, p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 }));
     const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([shared]) }),
-      medrxiv: preprintSource('medrxiv', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
+      europepmc: preprintSource('europepmc', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
     }, { extract });
     const { summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
     expect(extract).toHaveBeenCalledTimes(1);
@@ -332,8 +332,15 @@ describe('ResearchAgent', () => {
     });
     const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 3, maxDraftsPerTopic: 10 });
     await agent.run('topic');
+    // seen() is batched up front but CAPPED at maxPapersPerTopic (3), so it fans out over only the first
+    // 3 of the round-robin queue — never the wasted tail (osf:b, PMID:3) the loop's cap stops it reaching.
+    // The interleave still proves the cap is SHARED: osf:a precedes PMID:2, so the preprint reaches the
+    // gate within the cap instead of being starved behind all of PubMed's block.
     const order = (deps.seen as jest.Mock).mock.calls.map((c) => c[0]);
     expect(order).toEqual(['PMID:1', 'osf:a', 'PMID:2']);
+    // PROCESSING is still capped at 3: only the first 3 round-robin papers reach the gate before
+    // maxPapersPerTopic stops the run — and one of them (osf:a) is the preprint the old concat order missed.
+    expect(deps.pipeline.gate).toHaveBeenCalledTimes(3);
   });
 
   it('continues when one paper errors (fail-open-empty)', async () => {

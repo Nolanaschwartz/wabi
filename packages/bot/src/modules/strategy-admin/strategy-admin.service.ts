@@ -6,6 +6,7 @@ import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retriev
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { JobRegistry } from '../scheduler/job-registry';
 import { Job } from '../scheduler/jobs';
+import { mapWithConcurrency } from '../../lib/concurrency';
 
 export interface IngestCandidate {
   id?: string;
@@ -30,6 +31,11 @@ export interface IngestResult {
 
 // Re-assert the index hourly — frequent enough to heal drift quickly, cheap for a small library.
 const RECONCILE_CRON = '0 * * * *';
+
+// Cap on simultaneous Qdrant requests during a reconcile sweep. One upsert/delete per draft, all at
+// once, can spike connections / throttle Qdrant as the library grows. ponytail: bump this, or move to
+// Qdrant's batch upsert API, if the published set ever gets large.
+const RECONCILE_CONCURRENCY = 8;
 
 // Cosine similarity at/above this counts a candidate as already-present (ADR-0012 dedup).
 // Resolved lazily per call — never cache env-derived config (CLAUDE.md).
@@ -359,15 +365,19 @@ export class StrategyAdminService {
       prisma.strategyDraft.findMany({ where: { status: 'quarantined' } }),
     ]);
 
-    let reindexed = 0;
-    for (const row of published) {
-      if (await this.publishToQdrant(this.toDraft(row))) reindexed++;
-    }
-
-    let removed = 0;
-    for (const row of quarantined) {
-      if (await this.retrieval.delete(row.id)) removed++;
-    }
+    // Each draft is independent and the index ops are idempotent, so re-index and removal both fan out
+    // concurrently instead of one Qdrant round-trip at a time. Bounded at RECONCILE_CONCURRENCY so a
+    // large library can't open one in-flight Qdrant request per draft at once.
+    const [reindexedResults, removedResults] = await Promise.all([
+      mapWithConcurrency(published, RECONCILE_CONCURRENCY, (row) =>
+        this.publishToQdrant(this.toDraft(row)),
+      ),
+      mapWithConcurrency(quarantined, RECONCILE_CONCURRENCY, (row) =>
+        this.retrieval.delete(row.id),
+      ),
+    ]);
+    const reindexed = reindexedResults.filter(Boolean).length;
+    const removed = removedResults.filter(Boolean).length;
 
     return { reindexed, removed };
   }

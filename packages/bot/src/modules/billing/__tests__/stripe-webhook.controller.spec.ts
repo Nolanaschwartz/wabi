@@ -284,6 +284,69 @@ describe('StripeWebhookController', () => {
     expect(sendMock).toHaveBeenCalledWith('OK');
   });
 
+  it('does not throw on a null customer; resolves customerId to null (no user found → 404)', async () => {
+    // `typeof null === 'object'` would send a null customer into the `.id` branch and throw a
+    // TypeError → handler 500s → Stripe retries forever. A null customer must resolve to null and
+    // simply find no user, never crash.
+    mockConstructEvent.mockReturnValue({
+      type: 'customer.subscription.created',
+      id: 'evt_null',
+      created: 100,
+      data: { object: { customer: null, status: 'active' } },
+    });
+
+    controller = new StripeWebhookController(accessResolver, new StripeService());
+    (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue(null);
+
+    const sendMock = jest.fn();
+    const res = { status: jest.fn().mockReturnValue({ send: sendMock }) };
+    const req = { headers: { 'stripe-signature': 'test' }, rawBody: Buffer.from('{}') } as any;
+
+    await controller.handle(req, res);
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { stripeCustomerId: null },
+    });
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(accessResolver.apply).not.toHaveBeenCalled();
+  });
+
+  it('resolves an expanded-object customer ({ id }) to its id', async () => {
+    mockConstructEvent.mockReturnValue({
+      type: 'customer.subscription.created',
+      id: 'evt_obj',
+      created: 100,
+      data: { object: { customer: { id: 'cus_obj' }, status: 'active' } },
+    });
+
+    controller = new StripeWebhookController(accessResolver, new StripeService());
+    (prisma.processedStripeEvent.findUnique as jest.Mock).mockResolvedValue(null);
+    (prisma.user.findFirst as jest.Mock).mockResolvedValue({
+      discordId: 'discord_obj',
+      stripeCustomerId: 'cus_obj',
+      lastStripeEventAt: null,
+    });
+    (prisma.processedStripeEvent.create as jest.Mock).mockResolvedValue({});
+    accessResolver.apply.mockResolvedValue();
+
+    const sendMock = jest.fn();
+    const res = { status: jest.fn().mockReturnValue({ send: sendMock }) };
+    const req = { headers: { 'stripe-signature': 'test' }, rawBody: Buffer.from('{}') } as any;
+
+    await controller.handle(req, res);
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: { stripeCustomerId: 'cus_obj' },
+    });
+    expect(accessResolver.apply).toHaveBeenCalledWith(
+      'discord_obj',
+      expect.any(Object),
+      expect.any(Date),
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
   it('drops a stale updated arriving after a deleted (out-of-order guard #27)', async () => {
     // A `deleted` was already applied at t=200; a stale `updated` (active) created at t=100
     // is delivered late. It must NOT resurrect access.

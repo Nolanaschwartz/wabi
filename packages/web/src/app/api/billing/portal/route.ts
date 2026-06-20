@@ -1,5 +1,5 @@
-import { getDbUser } from '@/lib/db-user';
 import { requireAuthenticated } from '@/lib/auth-guard';
+import { getDbUser } from '@/lib/db-user';
 import { getStripeClient } from '@/lib/stripe';
 
 export async function POST(): Promise<Response> {

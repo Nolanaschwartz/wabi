@@ -4,32 +4,6 @@ import type { AccessState, SubscriptionStatus } from '@wabi/shared';
 // decision). Re-exported here so existing local importers keep working.
 export type { AccessState, SubscriptionStatus };
 
-export class StripeAccessMapper {
-  static map(event: StripeWebhookEvent): AccessState | null {
-    switch (event.type) {
-      case 'customer.subscription.created':
-      case 'customer.subscription.updated':
-        return {
-          hasActiveAccess:
-            event.data.status === 'active' || event.data.status === 'trialing',
-          subscriptionStatus:
-            event.data.status === 'past_due'
-              ? 'past_due'
-              : event.data.status === 'active'
-                ? 'active'
-                : 'trialing',
-        };
-      case 'customer.subscription.deleted':
-        return {
-          hasActiveAccess: false,
-          subscriptionStatus: 'canceled',
-        };
-      default:
-        return null;
-    }
-  }
-}
-
 export interface StripeWebhookEvent {
   id?: string;
   type:
@@ -38,7 +12,34 @@ export interface StripeWebhookEvent {
     | 'customer.subscription.deleted'
     | string;
   data: {
-    customerId: string;
+    // Null when a subscription event arrives without a customer (defensive: Stripe always sends one,
+    // but `typeof null === 'object'` would otherwise throw in the controller). A null id simply
+    // matches no user downstream. mapStripeEvent never reads this field.
+    customerId: string | null;
     status: 'active' | 'trialing' | 'past_due' | 'canceled';
   };
+}
+
+export function mapStripeEvent(event: StripeWebhookEvent): AccessState | null {
+  switch (event.type) {
+    case 'customer.subscription.created':
+    case 'customer.subscription.updated':
+      return {
+        hasActiveAccess:
+          event.data.status === 'active' || event.data.status === 'trialing',
+        subscriptionStatus:
+          event.data.status === 'past_due'
+            ? 'past_due'
+            : event.data.status === 'active'
+              ? 'active'
+              : 'trialing',
+      };
+    case 'customer.subscription.deleted':
+      return {
+        hasActiveAccess: false,
+        subscriptionStatus: 'canceled',
+      };
+    default:
+      return null;
+  }
 }
