@@ -80,7 +80,6 @@ export class ResearchAgent {
     const summary = emptySummary();
     const kept: Candidate[] = [];
     const visited = new Set<string>();
-    const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
     this.log.info('topic start', { topic });
 
@@ -110,6 +109,12 @@ export class ResearchAgent {
 
     let papersRead = 0;
     let discoverySteps = 0;
+
+    // The per-topic deadline bounds LLM PROCESSING only — start it after the (bounded) search phase so a
+    // slow source fetch can't consume the budget before the first paper is gated. The run as a whole is
+    // still capped by runTimeoutMs. (Was set at run() entry, which let topic 1's preprint window fetch
+    // exhaust agentTimeoutMs → `agentTimeout tokens=0` before any LLM call. See .scratch/research-search-recall/00.)
+    const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
     while (queue.length > 0) {
       if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }

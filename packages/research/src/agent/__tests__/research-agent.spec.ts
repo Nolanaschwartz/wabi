@@ -251,6 +251,21 @@ describe('ResearchAgent', () => {
     expect(extract.mock.calls[0][2]).toHaveLength(1);
   });
 
+  it('does not count the search phase against the per-topic deadline (slow search still processes)', async () => {
+    // Regression: the deadline used to start at run() entry, so a slow source fetch (the preprint
+    // window) exhausted agentTimeoutMs before any paper was gated → `agentTimeout tokens=0` on topic 1.
+    // The deadline now starts AFTER search, so a search slower than the budget still leaves a full
+    // processing budget. Search here (~150ms) exceeds agentTimeoutMs (50ms); the paper must still collect.
+    const slowPubmed = pubmedSource({
+      search: jest.fn(async () => { await new Promise((r) => setTimeout(r, 150)); return [pubmedThin('1')]; }),
+    });
+    const deps = baseDeps({}, { pubmed: slowPubmed });
+    const agent = new ResearchAgent(deps, { ...bounds, agentTimeoutMs: 50, maxDraftsPerTopic: 10 });
+    const { summary } = await agent.run('topic');
+    expect(summary.stopReason).not.toBe('agentTimeout');
+    expect(summary.collected).toBeGreaterThan(0);
+  });
+
   it('continues when one paper errors (fail-open-empty)', async () => {
     const deps = baseDeps({
       extract: jest.fn()
