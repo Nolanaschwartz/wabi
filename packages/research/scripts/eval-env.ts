@@ -43,9 +43,16 @@ export function parseDatasetRows(text: string): DatasetRow[] {
     if (typeof abstract !== 'string' || abstract.trim() === '') throw new Error(`${where}: input.abstract must be a non-empty string`);
     if (!isLabel(o.expectedOutput)) throw new Error(`${where}: expectedOutput must be 'keep' or 'reject'`);
     const m = o.metadata ?? {};
-    if (m.bucket !== 'positive' && m.bucket !== 'negative') throw new Error(`${where}: metadata.bucket must be 'positive' or 'negative'`);
+    // metadata.source feeds the seed's `<source>:<id>` upsert key — a missing one yields 'undefined:<id>'
+    // and silent key collisions, so require it.
+    if (typeof m.source !== 'string' || m.source === '') throw new Error(`${where}: metadata.source is required`);
     if (typeof m.id !== 'string' || m.id === '') throw new Error(`${where}: metadata.id is required`);
+    if (m.bucket !== 'positive' && m.bucket !== 'negative') throw new Error(`${where}: metadata.bucket must be 'positive' or 'negative'`);
     if (!isLabel(m.modelLabel)) throw new Error(`${where}: metadata.modelLabel must be 'keep' or 'reject'`);
+    if (typeof m.topic !== 'string' || m.topic === '') throw new Error(`${where}: metadata.topic is required`);
+    // reviewed drives eval-gate's "scored against itself" guard — a non-boolean must not silently read
+    // as not-reviewed (or vice-versa).
+    if (typeof m.reviewed !== 'boolean') throw new Error(`${where}: metadata.reviewed must be a boolean`);
     rows.push(o as DatasetRow);
   });
   return rows;

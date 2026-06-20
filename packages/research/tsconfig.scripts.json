@@ -1,0 +1,7 @@
+{
+  "//": "Typecheck for the eval scripts/ (run via ts-node, outside the build's src rootDir). The build's tsconfig.json excludes scripts/, so without this they'd only be typechecked at runtime. `pnpm typecheck` covers src + scripts.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "." },
+  "include": ["src", "scripts"],
+  "exclude": ["node_modules", "dist"]
+}

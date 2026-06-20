@@ -44,6 +44,7 @@ const toItem = (it: { output?: unknown; expectedOutput?: unknown }): GateItemRes
     expected: it.expectedOutput as Label,
     predictions: out.predictions ?? [],
     emptyReplies: out.emptyReplies ?? [],
+    failures: out.failures ?? [],
   };
 };
 
@@ -91,9 +92,11 @@ async function main(): Promise<void> {
     maxConcurrency: 4,
     task: async (item): Promise<ItemOutput> => {
       const abstract = (item.input as { abstract?: unknown } | undefined)?.abstract;
-      // A malformed item (no abstract) is a FAILED call, not a fake keep — never gate on "undefined".
+      // A malformed item (no abstract) is N FAILED calls, not a fake keep — never gate on "undefined".
+      // N all-failed → the item is unscored (gateMetrics drops it), uniform with a provider outage.
       if (typeof abstract !== 'string' || abstract.trim() === '') {
-        return { predictions: [], emptyReplies: [], failures: [true] };
+        const n = Array.from({ length: N_REPEATS });
+        return { predictions: n.map(() => 'keep' as Label), emptyReplies: n.map(() => false), failures: n.map(() => true) };
       }
       const predictions: Label[] = [];
       const emptyReplies: boolean[] = [];
@@ -111,20 +114,14 @@ async function main(): Promise<void> {
   });
 
   const items = result.itemResults.map(toItem);
-  const metrics = gateMetrics(items);
+  const metrics = gateMetrics(items); // failureRate now lives in the metric (and is persisted as a score)
 
-  // Provider-outage detector, separate from empty-reply-rate: count calls that never ran.
-  let failedCalls = 0;
-  let totalCalls = 0;
+  // Whether the dataset has been human-corrected (slice 4) — read straight off the item metadata.
   let reviewed = 0;
   for (const it of result.itemResults) {
-    const out = (it.output ?? {}) as Partial<ItemOutput>;
-    failedCalls += (out.failures ?? []).filter(Boolean).length;
-    totalCalls += (out.failures ?? []).length;
     const md = (it.item as { metadata?: { reviewed?: boolean } } | undefined)?.metadata;
     if (md?.reviewed === true) reviewed++;
   }
-  const failureRate = totalCalls === 0 ? 0 : failedCalls / totalCalls;
 
   await tracing.forceFlush();
   await tracing.shutdown();
@@ -136,13 +133,13 @@ async function main(): Promise<void> {
   console.log(`reject recall:    ${metrics.rejectRecall.toFixed(3)}`);
   console.log(`flip rate:        ${metrics.flipRate.toFixed(3)}  (0 ⇒ single-run numbers are trustworthy)`);
   console.log(`empty-reply rate: ${metrics.emptyReplyRate.toFixed(3)}  (RAN but starved; fail-open keeps)`);
-  console.log(`failure rate:     ${failureRate.toFixed(3)}  (calls that never ran — provider/transport)`);
+  console.log(`failure rate:     ${metrics.failureRate.toFixed(3)}  (calls that never ran — provider/transport)`);
   if (result.datasetRunUrl) console.log(`\nLangfuse run: ${result.datasetRunUrl}`);
 
   // Loud guards so a masked run is never mistaken for a real baseline.
-  if (failureRate >= 0.5) {
+  if (metrics.failureRate >= 0.5) {
     console.error(
-      `\n⚠️  INVALID BASELINE: ${(failureRate * 100).toFixed(0)}% of gate calls never ran (provider down / ` +
+      `\n⚠️  INVALID BASELINE: ${(metrics.failureRate * 100).toFixed(0)}% of gate calls never ran (provider down / ` +
         `misconfigured). The metrics above are meaningless — fix the provider and re-run.`,
     );
     process.exitCode = 1;
@@ -155,5 +152,7 @@ async function main(): Promise<void> {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exitCode = 1;
+});

@@ -38,5 +38,7 @@ async function main(): Promise<void> {
   console.log(`\nseeded ${rows.length} item(s) into "${GATE_DATASET}"`);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exitCode = 1;
+});

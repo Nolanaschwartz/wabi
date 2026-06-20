@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit -p tsconfig.scripts.json",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "dev": "RESEARCH_PORT=3002 nest start --watch",
     "start:prod": "node dist/main.js",

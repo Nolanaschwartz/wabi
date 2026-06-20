@@ -96,15 +96,28 @@ async function main(): Promise<void> {
   const pubmed = sources[0];
 
   const rows: DatasetRow[] = [];
-  const seen = new Set<string>(); // dedup by sourceId across topics/sources
+  // Dedup on the SAME `<source>:<id>` key the seed upserts on, so the two layers agree on uniqueness
+  // (a bare sourceId could collide across sources).
+  const seen = new Set<string>();
+  const key = (p: Paper): string => `${p.sourceKind}:${p.sourceId}`;
 
   const add = async (papers: Paper[], topic: string, bucket: Bucket): Promise<void> => {
     for (const p of papers) {
-      if (seen.has(p.sourceId)) continue;
-      seen.add(p.sourceId);
+      if (seen.has(key(p))) continue;
+      seen.add(key(p));
       rows.push(await toRow(p, topic, bucket));
     }
   };
+
+  // Negatives FIRST: a reject-category paper (e.g. a pharmacotherapy trial) can surface in a positive
+  // topic search too; claiming it as a negative here keeps its bucket correct, and the positive pass
+  // then skips it. Negative probes are narrow reject-category keywords, so they won't wrongly claim a
+  // genuine self-help positive.
+  for (const probe of NEGATIVE_PROBES) {
+    const papers = await harvest(pubmed, probe.query, NEG_PER_PROBE);
+    await add(papers, probe.category, 'negative');
+    log.info(`[bootstrap] negative "${probe.category}": +${papers.length}`);
+  }
 
   // Positives — real production path: concepts → per-source query → search → hydrate.
   for (const topic of POSITIVE_TOPICS) {
@@ -115,13 +128,6 @@ async function main(): Promise<void> {
       await add(papers, topic, 'positive');
       log.info(`[bootstrap] positive "${topic}" via ${src.kind}: +${papers.length}`);
     }
-  }
-
-  // Negatives — fixed keyword probes (PubMed), reaching outside the production distribution.
-  for (const probe of NEGATIVE_PROBES) {
-    const papers = await harvest(pubmed, probe.query, NEG_PER_PROBE);
-    await add(papers, probe.category, 'negative');
-    log.info(`[bootstrap] negative "${probe.category}": +${papers.length}`);
   }
 
   // Refuse to clobber the checked-in dataset with a failed harvest. Every source failure is swallowed
@@ -146,5 +152,7 @@ async function main(): Promise<void> {
   console.log('UNCORRECTED (reviewed: false) — run the slice-4 correction pass before trusting labels.');
 }
 
-// eslint-disable-next-line @typescript-eslint/no-floating-promises
-main();
+main().catch((err) => {
+  console.error(err instanceof Error ? err.message : err);
+  process.exitCode = 1;
+});
