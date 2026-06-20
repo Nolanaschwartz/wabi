@@ -3,12 +3,14 @@ import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { GuildMember } from 'discord.js';
 import { DiscordBridge } from './bridge.service';
 import { VoiceAgentService } from '../agent/voice-agent.service';
+import { VoiceMemoryService } from '../agent/voice-memory.service';
 
 @Injectable()
 export class CallCommands {
   constructor(
     private readonly bridge: DiscordBridge,
     private readonly agent: VoiceAgentService,
+    private readonly memory: VoiceMemoryService,
   ) {}
 
   @SlashCommand({
@@ -25,8 +27,11 @@ export class CallCommands {
     }
     await interaction.deferReply({ ephemeral: true });
     try {
+      // Recall once at call start (single round trip, no per-turn latency). Empty for group calls
+      // (privacy gate), unknown users, or a degraded store — the agent then runs as a plain assistant.
+      const memoryBlock = await this.memory.contextFor(channel);
       const room = await this.bridge.start(channel);
-      await this.agent.start(room); // AI joins the same LiveKit room
+      await this.agent.start(room, memoryBlock); // AI joins the same LiveKit room
       return interaction.editReply(
         `📞 Connected — talk to the assistant in \`${channel.name}\`.`,
       );

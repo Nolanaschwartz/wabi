@@ -17,6 +17,7 @@ import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
 import { AudioSink } from './audio-sink';
 import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
+import { composeSystemPrompt } from './memory-context';
 
 const OUT_RATE = 48000; // assistant publishes 48kHz mono
 
@@ -52,7 +53,8 @@ export class VoiceAgentService {
     this.pipeline = p;
   }
 
-  async start(roomName: string): Promise<void> {
+  // memoryBlock: recalled facts to prepend to the system prompt; '' = plain assistant (see issue 03).
+  async start(roomName: string, memoryBlock = ''): Promise<void> {
     if (this.sessions.has(roomName)) return;
     const cfg = loadAgentConfig(); // lazy — only needs AI env when a call starts
     this.pipeline ??= createOpenAiPipeline(cfg);
@@ -74,7 +76,9 @@ export class VoiceAgentService {
       room,
       sink: new AudioSink(source, OUT_RATE, 1),
       detector: new TurnDetector(TURN_OPTS),
-      messages: [{ role: 'system', content: cfg.systemPrompt }],
+      messages: [
+        { role: 'system', content: composeSystemPrompt(cfg.systemPrompt, memoryBlock) },
+      ],
       busy: false,
       cancel: false,
       closed: false,
