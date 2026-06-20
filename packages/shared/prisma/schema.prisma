@@ -82,7 +82,7 @@ model Mood {
   context   String?
   createdAt DateTime @default(now())
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@index([createdAt])
 }
 
@@ -93,7 +93,7 @@ model PlaytimeLog {
   game      String?
   createdAt DateTime @default(now())
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@index([createdAt])
 }
 
@@ -104,7 +104,7 @@ model JournalEntry {
   reflection String?
   createdAt DateTime @default(now())
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@index([createdAt])
 }
 
@@ -115,7 +115,7 @@ model XpEntry {
   reason    String   // journal, mood, streak, etc.
   createdAt DateTime @default(now())
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@index([createdAt])
 }
 
