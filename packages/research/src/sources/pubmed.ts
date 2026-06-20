@@ -26,6 +26,14 @@ function stripXml(xml: string): string {
     .trim();
 }
 
+/** The PMC-prefixed id (e.g. PMC8314311) from an esummary record's articleids, or null if non-OA.
+ * Both the BioC and Europe PMC endpoints require the "PMC" prefix — stripping it errors on the live APIs. */
+function toPmcId(articleids?: { idtype: string; value: string }[]): string | null {
+  const raw = articleids?.find((a) => a.idtype === 'pmc')?.value;
+  if (!raw) return null;
+  return raw.startsWith('PMC') ? raw : `PMC${raw}`;
+}
+
 export class PubMedTool implements Source {
   readonly kind: SourceKind = 'pubmed';
   private readonly fetchFn: typeof fetch;
@@ -79,7 +87,8 @@ export class PubMedTool implements Source {
   async hydrate(paper: Paper): Promise<Paper> {
     const pmid = paper.sourceId.replace('PMID:', '');
     const [s, abstract] = await Promise.all([this.summary(pmid), this.abstract(pmid)]);
-    return { ...paper, title: s.title, abstract, pubTypes: s.pubTypes };
+    // Carry the PMCID (already in this esummary) so fullText() reuses it instead of re-fetching esummary.
+    return { ...paper, title: s.title, abstract, pubTypes: s.pubTypes, pmcId: s.pmcId };
   }
 
   /** Citation-graph neighbours as thin papers (same `PMID:` keyspace), for the agent's discovery step. */
@@ -88,11 +97,11 @@ export class PubMedTool implements Source {
     return related.map((id) => this.thin(id));
   }
 
-  private async summary(pmid: string): Promise<{ title: string; pubTypes: string[] }> {
+  private async summary(pmid: string): Promise<{ title: string; pubTypes: string[]; pmcId: string | null }> {
     const url = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${pmid}${this.key()}`;
-    const data = await this.getJson<{ result?: Record<string, { title?: string; pubtype?: string[] }> }>(url);
+    const data = await this.getJson<{ result?: Record<string, { title?: string; pubtype?: string[]; articleids?: { idtype: string; value: string }[] }> }>(url);
     const rec = data.result?.[pmid];
-    return { title: rec?.title ?? '', pubTypes: rec?.pubtype ?? [] };
+    return { title: rec?.title ?? '', pubTypes: rec?.pubtype ?? [], pmcId: toPmcId(rec?.articleids) };
   }
 
   private async abstract(pmid: string): Promise<string> {
@@ -110,21 +119,21 @@ export class PubMedTool implements Source {
    * and a PMCID is known, fall back to Europe PMC's OA full-text XML. Non-OA (no PMCID) → null. Every
    * path is fail-safe → null, so the caller reads the abstract instead. No paywalled scraping. */
   async fullText(paper: Paper): Promise<string | null> {
-    const pmcId = await this.pmcId(paper.sourceId.replace('PMID:', ''));
+    // hydrate() already resolved the PMCID from esummary (string = OA, null = confirmed non-OA); only
+    // re-fetch when the field is absent (paper reached fullText without hydrate — defensive).
+    const pmcId = paper.pmcId !== undefined ? paper.pmcId : await this.pmcId(paper.sourceId.replace('PMID:', ''));
     if (!pmcId) return null; // not open-access
     const body = (await this.biocFullText(pmcId)) ?? (await this.europePmcFullText(pmcId));
     return body ? body.slice(0, this.maxTextChars) : null;
   }
 
-  /** The PMC-prefixed id (e.g. PMC8314311) for an OA paper, or null. Both the BioC and Europe PMC
-   * endpoints require the "PMC" prefix — stripping it returns an error from the live APIs. */
+  /** The PMC-prefixed id (e.g. PMC8314311) for an OA paper, or null. Only used for a paper that
+   * reached fullText without hydrate; the normal path reads the PMCID off the hydrated paper. */
   private async pmcId(pmid: string): Promise<string | null> {
     try {
       const url = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${pmid}${this.key()}`;
       const sum = await this.getJson<{ result?: Record<string, { articleids?: { idtype: string; value: string }[] }> }>(url);
-      const raw = sum.result?.[pmid]?.articleids?.find((a) => a.idtype === 'pmc')?.value;
-      if (!raw) return null;
-      return raw.startsWith('PMC') ? raw : `PMC${raw}`;
+      return toPmcId(sum.result?.[pmid]?.articleids);
     } catch {
       return null;
     }

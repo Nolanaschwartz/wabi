@@ -16,6 +16,9 @@ export interface Paper {
   url: string;
   pubTypes: string[];   // [] for preprints (Europe PMC / PsyArXiv)
   isPreprint: boolean;
+  // PubMed only: the PMCID resolved from the same esummary hydrate already fetched, so fullText()
+  // doesn't re-fetch it. string = open-access, null = confirmed non-OA, undefined = not hydrated yet.
+  pmcId?: string | null;
 }
 
 export interface Candidate {
