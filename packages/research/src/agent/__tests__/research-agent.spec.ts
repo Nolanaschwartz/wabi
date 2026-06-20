@@ -267,6 +267,29 @@ describe('ResearchAgent', () => {
     expect(summary.collected).toBeGreaterThan(0);
   });
 
+  it('processes a paper returned by two sources only once (cross-source dedup)', async () => {
+    // Same sourceId surfaced by two sources → the in-run visited set dedups before any hydrate/extract.
+    const shared = pubmedThin('1');
+    const extract = jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] }));
+    const deps = baseDeps({ extract }, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([shared]) }),
+      medrxiv: preprintSource('medrxiv', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
+    });
+    const { summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
+    expect(extract).toHaveBeenCalledTimes(1);
+    expect(summary.collected).toBe(1);
+  });
+
+  it('judges preprint-sourced papers at the preprint tier', async () => {
+    const judge = jest.fn().mockImplementation((c: Candidate[]) => Promise.resolve({ candidates: c, tokens: 0, traces: [] }));
+    const deps = baseDeps({ judge }, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('zzz')]) }),
+    });
+    await new ResearchAgent(deps, bounds).run('topic');
+    expect(judge).toHaveBeenCalledWith(expect.anything(), 'preprint'); // isPreprint → evidenceTier 'preprint'
+  });
+
   it('continues when one paper errors (fail-open-empty)', async () => {
     const deps = baseDeps({
       extract: jest.fn()

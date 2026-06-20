@@ -12,12 +12,14 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ResearchAgent } from '../src/agent/research-agent';
 import { relevanceGate } from '../src/agent/relevance-gate';
-import { extract } from '../src/agent/extract';
+import { extractWithLenses } from '../src/agent/extract-with-lenses';
+import { mergeWithinPaper } from '../src/agent/merge-within-paper';
+import { judgeCandidates } from '../src/agent/judge';
 import { isDuplicateInRun } from '../src/agent/dedup';
+import { topicToConcepts } from '../src/sources/query/concepts';
 import { Source } from '../src/sources/source';
 import { SourceKind } from '../src/types';
 import { PubMedTool } from '../src/sources/pubmed';
-import { MedrxivTool } from '../src/sources/medrxiv';
 import { loadBounds } from '../src/config';
 import { defaultLogger } from '../src/util/logger';
 import { loadDotenv } from '../src/util/load-env';
@@ -69,17 +71,26 @@ async function main(): Promise<void> {
 
   const fetchFn = fixtureFetch();
   const pubmed = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-  const medrxiv = new MedrxivTool({ fetchFn, minIntervalMs: 0, windowDays: 30, now: () => new Date('2024-01-06'), log: defaultLogger() });
 
   console.log(`[harness] topic="${topic}"  research=${research.baseUrl} (${research.model})`);
   console.log(`[harness] triage=${triage.baseUrl} (${triage.model})`);
 
   // Show every step by default for the harness; override with RESEARCH_LOG_LEVEL.
   if (process.env.RESEARCH_LOG_LEVEL === undefined) process.env.RESEARCH_LOG_LEVEL = 'debug';
-  // pubmed + medrxiv only (same source set this harness has always exercised); ADR-0036 Source map.
-  const sources = new Map<SourceKind, Source>([['pubmed', pubmed], ['medrxiv', medrxiv]]);
+  // PubMed-only against fixtures (the preprint sources now query live EPMC/OSF, ADR-0039); ADR-0036 map.
+  const sources = new Map<SourceKind, Source>([['pubmed', pubmed]]);
   const agent = new ResearchAgent(
-    { sources, seen: async () => false, gate: relevanceGate, extract, dedup: isDuplicateInRun },
+    {
+      sources,
+      buildConcepts: topicToConcepts,
+      seen: async () => false,
+      markGated: async () => {},
+      gate: relevanceGate,
+      extract: extractWithLenses,
+      merge: mergeWithinPaper,
+      judge: judgeCandidates,
+      dedup: isDuplicateInRun,
+    },
     bounds,
     defaultLogger(),
   );
