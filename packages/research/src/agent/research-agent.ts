@@ -1,8 +1,8 @@
 import { Bounds, Candidate, EvidenceTier, Lens, Paper, RunSummary, SourceKind } from '../types';
 import { Source } from '../sources/source';
 import { Logger, noopLogger } from '../util/logger';
-import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-tracer';
-import { StepTrace } from './relevance-gate';
+import { ResearchSpanInput, RunTraceInput } from './research-tracer';
+import { makeResearchGenerate, type ResearchGenerate } from './research-generate';
 import { evidenceTier } from './extract';
 import { prescreen } from './scope-policy';
 import { lensesForTier } from './lenses';
@@ -23,14 +23,24 @@ export interface AgentDeps {
   seen: (sourceId: string) => Promise<boolean>;
   /** Negative-cache a gate rejection so seen() skips this paper next run (never re-gated). */
   markGated: (sourceId: string, source: string) => Promise<void>;
-  gate: (abstract: string, topic: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
+  /** The extraction pipeline the orchestrator collaborates with — the five LLM steps grouped behind one
+   * injected collaborator (issue 02). Each method takes the per-run `gen` seam (which binds
+   * role+cap+temperature and emits its span) and returns ONLY its domain result; the orchestrator no
+   * longer threads or re-emits a StepTrace. Stubbing this one object isolates the orchestration test from
+   * real parse logic, which each step's own unit test still exercises through a fake `gen`. */
+  pipeline: ExtractionPipeline;
+}
+
+/** The five LLM steps the orchestrator runs per paper, grouped behind one seam (issue 02). */
+export interface ExtractionPipeline {
+  gate(gen: ResearchGenerate, abstract: string, topic: string): Promise<{ keep: boolean; tokens: number }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
-  extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
+  extract(gen: ResearchGenerate, paper: Paper, body: string, lenses: Lens[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
-  merge: (candidates: Candidate[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
+  merge(gen: ResearchGenerate, candidates: Candidate[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Score, faithfulness-check, sharpen, and tier-cap a paper's candidates (slice 05). */
-  judge: (candidates: Candidate[], tier: EvidenceTier) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
-  dedup: (candidate: Candidate, kept: Candidate[]) => Promise<{ duplicate: boolean; tokens: number; trace?: StepTrace }>;
+  judge(gen: ResearchGenerate, candidates: Candidate[], tier: EvidenceTier): Promise<{ candidates: Candidate[]; tokens: number }>;
+  dedup(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<{ duplicate: boolean; tokens: number }>;
 }
 
 /** The structural slice of {@link ResearchTracer} the orchestrator uses. Kept as an interface (not the
@@ -62,30 +72,15 @@ export class ResearchAgent {
     private readonly tracing?: AgentTracing,
   ) {}
 
-  /** Emit one Langfuse span for a completed step, carrying its leaf data. Inert when no tracer is wired
-   * or the step produced no trace (a short-circuited dedup, a fail-open gate error). NEVER throws —
-   * tracing is additive and must never break a run (ADR-0021); a tracer error is swallowed + logged. */
-  private emitSpan(span: ResearchSpanName, trace: StepTrace | undefined): void {
-    if (!this.tracing || !trace) return;
-    try {
-      this.tracing.tracer.span({
-        runId: this.tracing.runId,
-        span,
-        input: trace.input,
-        output: trace.output,
-        model: trace.model,
-        latencyMs: trace.latencyMs,
-        usage: trace.usage,
-      });
-    } catch (err) {
-      this.log.debug('tracer span failed', { span, err: (err as Error)?.message ?? String(err) });
-    }
-  }
-
   async run(topic: string): Promise<{ candidates: Candidate[]; summary: RunSummary }> {
     const summary = emptySummary();
     const kept: Candidate[] = [];
     const visited = new Set<string>();
+
+    // Build the run's `gen` seam ONCE from the run's tracer + run-id (absent → no spans, generate still
+    // runs). Each step calls it instead of importing `generate`; the span for a successful call is
+    // emitted inside `gen`, so the orchestrator no longer threads or re-emits per-step traces.
+    const gen = makeResearchGenerate(this.tracing?.tracer, this.tracing?.runId);
 
     this.log.info('topic start', { topic });
 
@@ -172,9 +167,8 @@ export class ResearchAgent {
           continue;
         }
 
-        const gate = await this.deps.gate(paper.abstract, topic);
+        const gate = await this.deps.pipeline.gate(gen, paper.abstract, topic);
         this.tokens += gate.tokens;
-        this.emitSpan('gate', gate.trace);
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
         if (!gate.keep) {
           summary.gatedOut++; papersRead++;
@@ -206,19 +200,16 @@ export class ResearchAgent {
           lenses = lenses.slice(0, 1);
         }
 
-        const { candidates, tokens, traces } = await this.deps.extract(paper, body, lenses);
+        const { candidates, tokens } = await this.deps.pipeline.extract(gen, paper, body, lenses);
         this.tokens += tokens;
-        for (const t of traces) this.emitSpan('extract', t);
         if (candidates.length === 0) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
 
         // Collapse the lens candidates into the paper's distinct techniques, then score + tier-cap them.
-        const m = await this.deps.merge(candidates);
+        const m = await this.deps.pipeline.merge(gen, candidates);
         this.tokens += m.tokens;
-        for (const t of m.traces) this.emitSpan('merge', t);
 
-        const j = await this.deps.judge(m.candidates, tier);
+        const j = await this.deps.pipeline.judge(gen, m.candidates, tier);
         this.tokens += j.tokens;
-        for (const t of j.traces) this.emitSpan('judge', t);
         const distinct = j.candidates;
         summary.extracted += distinct.length;
         this.log.info('extracted', { id: paper.sourceId, candidates: distinct.length, tokens });
@@ -226,9 +217,8 @@ export class ResearchAgent {
         // Each candidate dedups against the run's kept set independently; the topic cap stops mid-paper.
         for (const candidate of distinct) {
           if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
-          const dd = await this.deps.dedup(candidate, kept);
+          const dd = await this.deps.pipeline.dedup(gen, candidate, kept);
           this.tokens += dd.tokens;
-          this.emitSpan('dedup', dd.trace);
           if (dd.duplicate) {
             summary.inRunDeduped++;
             this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });

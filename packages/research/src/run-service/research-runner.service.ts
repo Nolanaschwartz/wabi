@@ -152,7 +152,14 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
     submitBatch: (cands) => client.submitBatch(cands),
     runAgent: async (topic) => {
       const agent = new ResearchAgent(
-        { sources, buildConcepts: topicToConcepts, seen: (id) => client.seen(id), markGated: (id, source) => client.markGated(id, source), gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
+        {
+          sources,
+          buildConcepts: topicToConcepts,
+          seen: (id) => client.seen(id),
+          markGated: (id, source) => client.markGated(id, source),
+          // The default extraction pipeline: the real step functions grouped behind one collaborator (issue 02).
+          pipeline: { gate: relevanceGate, extract: extractWithLenses, merge: mergeWithinPaper, judge: judgeCandidates, dedup: isDuplicateInRun },
+        },
         bounds,
         log,
         { tracer, runId },

@@ -1,12 +1,18 @@
 /**
- * ResearchAgent ↔ ResearchTracer wiring. The orchestrator owns the span tree: per paper it emits
- * `gate`, then (if kept) `extract`, then (if a candidate) `dedup` spans, using the leaf data the
- * migrated callers now surface. Tracing is additive — a run completes identically whether the tracer
- * is absent, disabled, or THROWS (it must never break a run).
+ * ResearchAgent ↔ tracing wiring. The orchestrator builds ONE `gen` seam per run from the run's tracer
+ * + run-id and passes it into each step; the step's span is emitted INSIDE `gen` on a successful call
+ * (the orchestrator no longer re-emits a per-step trace). Tracing is additive — a run completes
+ * identically whether the tracer is absent, disabled, or THROWS (it must never break a run, ADR-0021).
+ *
+ * The steps are faked here, so to prove the wiring the fakes CALL the `gen` they were handed (with their
+ * own span name) — that is exactly what the real steps do, and it routes through to the injected tracer.
  */
-import { ResearchAgent, AgentDeps } from '../research-agent';
+import { ResearchAgent, AgentDeps, ExtractionPipeline } from '../research-agent';
 import { Source } from '../../sources/source';
 import { Bounds, Candidate, Paper, SourceKind } from '../../types';
+import type { ResearchGenerate } from '../research-generate';
+
+jest.mock('@wabi/shared/generate', () => ({ generate: jest.fn().mockResolvedValue({ text: 'ok', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, model: 'm', latencyMs: 3 }) }));
 
 const bounds: Bounds = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
@@ -39,7 +45,21 @@ function preprintSource(kind: SourceKind): Source {
     fullText: jest.fn().mockResolvedValue(null) } as Source;
 }
 
-function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
+// Pipeline-step fakes that each drive the handed `gen` with their own span name, mirroring the real steps —
+// so a span flows through to the injected tracer exactly when the orchestrator wired `gen` correctly. The
+// five are grouped behind the single `pipeline` collaborator (issue 02); a test overrides one method via `pipe`.
+function fakePipeline(over: Partial<ExtractionPipeline> = {}): ExtractionPipeline {
+  return {
+    gate: jest.fn(async (gen: ResearchGenerate, abstract: string) => { await gen('gate', 'research-triage', { prompt: abstract, temperature: 0 }); return { keep: true, tokens: 1 }; }),
+    extract: jest.fn(async (gen: ResearchGenerate, p: Paper, body: string) => { await gen('extract', 'research', { prompt: body }); return { candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 }; }),
+    merge: jest.fn(async (_gen: ResearchGenerate, cands: Candidate[]) => ({ candidates: cands, tokens: 0 })),
+    judge: jest.fn(async (_gen: ResearchGenerate, cands: Candidate[]) => ({ candidates: cands, tokens: 0 })),
+    dedup: jest.fn(async (gen: ResearchGenerate, c: Candidate) => { await gen('dedup', 'research-triage', { prompt: c.title }); return { duplicate: false, tokens: 0 }; }),
+    ...over,
+  };
+}
+
+function baseDeps(over: Partial<Omit<AgentDeps, 'pipeline'>> = {}, pipe: Partial<ExtractionPipeline> = {}): AgentDeps {
   const sources = new Map<SourceKind, Source>([
     ['pubmed', pubmedSource()],
     ['medrxiv', preprintSource('medrxiv')],
@@ -50,14 +70,7 @@ function baseDeps(over: Partial<AgentDeps> = {}): AgentDeps {
     buildConcepts: jest.fn().mockResolvedValue({ core: ['emotion regulation'], context: [] }),
     seen: jest.fn().mockResolvedValue(false),
     markGated: jest.fn().mockResolvedValue(undefined),
-    gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1, trace: { input: 'A1', output: 'yes', model: 'm', latencyMs: 2 } }),
-    extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({
-      candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10,
-      traces: [{ input: 'body', output: '{json}', model: 'm', latencyMs: 5 }],
-    })),
-    merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
-    judge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
-    dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0, trace: { input: 'A vs B', output: 'different', model: 'm', latencyMs: 1 } }),
+    pipeline: fakePipeline(pipe),
     ...over,
   };
 }
@@ -79,17 +92,19 @@ describe('ResearchAgent tracing', () => {
     expect(tracer.span.mock.calls.every((c) => c[0].runId === 'run-x')).toBe(true);
   });
 
-  it('passes the leaf data through to the gate span (input/output/model/latency)', async () => {
+  it('passes the prompt + model/usage/latency through to the gate span', async () => {
     const tracer = fakeTracer();
     const agent = new ResearchAgent(baseDeps(), bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const gateSpan = tracer.span.mock.calls.map((c) => c[0]).find((s) => s.span === 'gate');
-    expect(gateSpan).toMatchObject({ span: 'gate', input: 'A1', output: 'yes', model: 'm', latencyMs: 2 });
+    // gen prompts with the abstract (A1) and surfaces the generate result's model + usage.
+    expect(gateSpan).toMatchObject({ span: 'gate', input: 'A1', output: 'ok', model: 'm', latencyMs: 3 });
+    expect(gateSpan.usage).toMatchObject({ inputTokens: 1, outputTokens: 1 });
   });
 
   it('emits a gate span but NO extract span for a gated-out paper', async () => {
     const tracer = fakeTracer();
-    const deps = baseDeps({ gate: jest.fn().mockResolvedValue({ keep: false, tokens: 1, trace: { input: 'A1', output: 'no' } }) });
+    const deps = baseDeps({}, { gate: jest.fn(async (gen: ResearchGenerate, abstract: string) => { await gen('gate', 'research-triage', { prompt: abstract, temperature: 0 }); return { keep: false, tokens: 1 }; }) });
     const agent = new ResearchAgent(deps, bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);
@@ -99,7 +114,7 @@ describe('ResearchAgent tracing', () => {
 
   it('does not emit a dedup span when extract produced no candidate', async () => {
     const tracer = fakeTracer();
-    const deps = baseDeps({ extract: jest.fn().mockResolvedValue({ candidates: [], tokens: 3, traces: [{ input: 'body', output: 'null' }] }) });
+    const deps = baseDeps({}, { extract: jest.fn(async (gen: ResearchGenerate, _p: Paper, body: string) => { await gen('extract', 'research', { prompt: body }); return { candidates: [], tokens: 3 }; }) });
     const agent = new ResearchAgent(deps, bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);
@@ -107,15 +122,15 @@ describe('ResearchAgent tracing', () => {
     expect(names).not.toContain('dedup');
   });
 
-  it('omits a span when a step returns no trace (e.g. dedup short-circuit) — never a partial span', async () => {
+  it('emits no span for a step that short-circuits without calling gen (e.g. dedup prefilter)', async () => {
     const tracer = fakeTracer();
-    // dedup short-circuits (kept empty / prefilter) → no trace; the orchestrator must not emit a dedup span.
-    const deps = baseDeps({ dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0 }) });
+    // dedup short-circuits (kept empty / prefilter) → never calls gen → no dedup span.
+    const deps = baseDeps({}, { dedup: jest.fn(async () => ({ duplicate: false, tokens: 0 })) });
     const agent = new ResearchAgent(deps, bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);
     expect(names).not.toContain('dedup');
-    expect(names).toContain('gate'); // gate/extract still emit (they carry traces)
+    expect(names).toContain('gate'); // gate/extract still emit (they call gen)
   });
 
   it('completes the run unchanged when NO tracer is wired (tracing absent)', async () => {

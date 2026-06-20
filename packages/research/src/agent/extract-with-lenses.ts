@@ -1,7 +1,5 @@
-import { generate } from '@wabi/shared/generate';
-import { extractMaxTokens } from '../config';
 import { Paper, Candidate, Lens, SourceKind } from '../types';
-import { StepTrace } from './relevance-gate';
+import type { ResearchGenerate } from './research-generate';
 import { evidenceTag, evidenceTier, stripFences } from './extract';
 import { SCOPE_FRAGMENT } from './scope-policy';
 
@@ -16,7 +14,6 @@ const SOURCE_LABEL: Record<SourceKind, string> = {
 export interface LensExtractResult {
   candidates: Candidate[];
   tokens: number;
-  traces: StepTrace[];
 }
 
 /** Extract a source body's techniques in ONE call (slice 05). The body is sent once — not re-sent per
@@ -26,12 +23,12 @@ export interface LensExtractResult {
  * must be one we asked for, wording stays audience-neutral, the scope fragment excludes supplement/
  * clinical techniques, and the tier is set from the source, never the model. Fail-open (ADR-0021): a
  * malformed/empty reply yields no candidates and never aborts the run. */
-export async function extractWithLenses(paper: Paper, body: string, lenses: Lens[]): Promise<LensExtractResult> {
+export async function extractWithLenses(gen: ResearchGenerate, paper: Paper, body: string, lenses: Lens[]): Promise<LensExtractResult> {
   const allowed = new Set<Lens>(lenses);
 
   let out;
   try {
-    out = await generate('research', {
+    out = await gen('extract', 'research', {
       prompt:
         `Extract every transferable, actionable coping/wellbeing technique the source describes.\n` +
         `${SCOPE_FRAGMENT}\n` +
@@ -45,24 +42,22 @@ export async function extractWithLenses(paper: Paper, body: string, lenses: Lens
         `- "lens" MUST be exactly one of: ${lenses.join(', ')}.\n` +
         `Return JSON array: [{"title": string, "technique": string, "sourceText": string, "lens": string}] (or []).\n\n` +
         `Source:\n${body}`,
-      maxOutputTokens: extractMaxTokens(),
     });
   } catch {
-    return { candidates: [], tokens: 0, traces: [] };
+    return { candidates: [], tokens: 0 };
   }
 
   const tokens = out.usage?.totalTokens ?? 0;
-  const trace: StepTrace = { input: body, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage };
   const text = stripFences(out.text.trim());
-  if (text === '' || text.toLowerCase() === 'null') return { candidates: [], tokens, traces: [trace] };
+  if (text === '' || text.toLowerCase() === 'null') return { candidates: [], tokens };
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { candidates: [], tokens, traces: [trace] };
+    return { candidates: [], tokens };
   }
-  if (!Array.isArray(parsed)) return { candidates: [], tokens, traces: [trace] };
+  if (!Array.isArray(parsed)) return { candidates: [], tokens };
 
   const candidates: Candidate[] = [];
   for (const item of parsed as { title?: string; technique?: string; sourceText?: string; lens?: Lens }[]) {
@@ -85,5 +80,5 @@ export async function extractWithLenses(paper: Paper, body: string, lenses: Lens
       lens: lensNorm,
     });
   }
-  return { candidates, tokens, traces: [trace] };
+  return { candidates, tokens };
 }

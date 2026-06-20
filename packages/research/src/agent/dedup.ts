@@ -1,7 +1,5 @@
-import { generate } from '@wabi/shared/generate';
-import { triageMaxTokens } from '../config';
 import { Candidate } from '../types';
-import { StepTrace } from './relevance-gate';
+import type { ResearchGenerate } from './research-generate';
 
 const HIGH = 0.6;
 // Below LOW: auto-distinct, no LLM. Above HIGH: auto-duplicate, no LLM. The band in between goes to
@@ -52,11 +50,11 @@ export function lexSim(a: Candidate, b: Candidate): number {
   return jaccard(sig(a), sig(b));
 }
 
-export interface DedupResult { duplicate: boolean; tokens: number; trace?: StepTrace }
+export interface DedupResult { duplicate: boolean; tokens: number }
 
 /** In-run technique dedup with no embeddings (those live on the bot). Lexical prefilter decides the
  * clear cases; the triage LLM only adjudicates the ambiguous middle. */
-export async function isDuplicateInRun(candidate: Candidate, kept: Candidate[]): Promise<DedupResult> {
+export async function isDuplicateInRun(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<DedupResult> {
   if (kept.length === 0) return { duplicate: false, tokens: 0 };
 
   let best = kept[0];
@@ -70,22 +68,18 @@ export async function isDuplicateInRun(candidate: Candidate, kept: Candidate[]):
   if (bestSim <= LOW) return { duplicate: false, tokens: 0 };
 
   try {
-    // generate owns the mechanism (lazy provider resolution, the client, the call); dedup keeps its
-    // role, its cap, and its fail policy. No retry-on-empty — an empty/starved reply maps to not-a-
-    // duplicate below, same as a transport error, so a second attempt buys nothing on this path.
+    // The `gen` seam owns the mechanism (role→cap binding, lazy provider resolution, the call, span
+    // emission); dedup keeps its role and its fail policy. No retry-on-empty — an empty/starved reply
+    // maps to not-a-duplicate below, same as a transport error, so a second attempt buys nothing here.
     const prompt =
       `Are these two coaching techniques essentially the same? Answer only "same" or "different".\n` +
       `A: ${sig(candidate)}\nB: ${sig(best)}`;
-    const { text, usage, model, latencyMs } = await generate('research-triage', {
-      prompt,
-      maxOutputTokens: triageMaxTokens(),
-    });
+    const { text, usage } = await gen('dedup', 'research-triage', { prompt });
     // Empty/uncertain output (e.g. a reasoning model starved by the cap) reads as NOT duplicate,
     // the safe direction — keep the candidate rather than silently drop it on an unparseable answer.
     return {
       duplicate: text.trim().toLowerCase().startsWith('same'),
       tokens: usage?.totalTokens ?? 0,
-      trace: { input: prompt, output: text, model, latencyMs, usage },
     };
   } catch {
     return { duplicate: false, tokens: 0 };

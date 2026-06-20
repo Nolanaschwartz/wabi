@@ -1,4 +1,4 @@
-import { ResearchAgent, AgentDeps } from '../research-agent';
+import { ResearchAgent, AgentDeps, ExtractionPipeline } from '../research-agent';
 import { Source } from '../../sources/source';
 import { Bounds, Candidate, Paper, SourceKind } from '../../types';
 
@@ -46,7 +46,28 @@ function preprintSource(kind: SourceKind, over: Partial<Source> = {}): Source {
   } as Source;
 }
 
-function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind, Source>> = {}): AgentDeps {
+/** The orchestration test stubs the single `pipeline` collaborator (issue 02): one fake object whose five
+ * methods are jest.fns. Sequencing, budget stops, lens selection, and cross-paper dedup are all asserted
+ * against this one stub, never against five separate deps. Overrides per test replace just the method(s)
+ * that test drives. */
+function fakePipeline(over: Partial<ExtractionPipeline> = {}): ExtractionPipeline {
+  return {
+    gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
+    extract: jest.fn().mockImplementation((_gen, p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 })),
+    merge: jest.fn().mockImplementation((_gen, cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0 })),
+    judge: jest.fn().mockImplementation((_gen, cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0 })),
+    dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0 }),
+    ...over,
+  };
+}
+
+/** The non-pipeline seams a test can override (sources/buildConcepts/seen/markGated). The five step fns
+ * are overridden through `pipe` instead, which is grouped into the single `pipeline` collaborator. */
+function baseDeps(
+  over: Partial<Omit<AgentDeps, 'pipeline'>> = {},
+  srcs: Partial<Record<SourceKind, Source>> = {},
+  pipe: Partial<ExtractionPipeline> = {},
+): AgentDeps {
   const sources = new Map<SourceKind, Source>([
     ['pubmed', srcs.pubmed ?? pubmedSource()],
     ['medrxiv', srcs.medrxiv ?? preprintSource('medrxiv')],
@@ -57,11 +78,7 @@ function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind
     buildConcepts: jest.fn().mockResolvedValue({ core: ['emotion regulation'], context: [] }),
     seen: jest.fn().mockResolvedValue(false),
     markGated: jest.fn().mockResolvedValue(undefined),
-    gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
-    extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
-    merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
-    judge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
-    dedup: jest.fn().mockResolvedValue({ duplicate: false, tokens: 0 }),
+    pipeline: fakePipeline(pipe),
     ...over,
   };
 }
@@ -77,10 +94,10 @@ describe('ResearchAgent', () => {
 
   it('hydrates a thin pubmed paper before the gate, with the abstract the gate then sees', async () => {
     const gate = jest.fn().mockResolvedValue({ keep: true, tokens: 1 });
-    const agent = new ResearchAgent(baseDeps({ gate }), bounds);
+    const agent = new ResearchAgent(baseDeps({}, {}, { gate }), bounds);
     await agent.run('topic');
-    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with the hydrated abstract + topic.
-    expect(gate).toHaveBeenCalledWith('A1', 'topic');
+    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with gen + the hydrated abstract + topic.
+    expect(gate).toHaveBeenCalledWith(expect.any(Function), 'A1', 'topic');
   });
 
   it('emits progress through the injected logger (topic start + collected + topic done)', async () => {
@@ -112,8 +129,8 @@ describe('ResearchAgent', () => {
     expect(candidates).toHaveLength(0);
     expect(summary.seenSkipped).toBe(3);
     expect(pubmed.hydrate).not.toHaveBeenCalled();
-    expect(deps.gate).not.toHaveBeenCalled();
-    expect(deps.extract).not.toHaveBeenCalled();
+    expect(deps.pipeline.gate).not.toHaveBeenCalled();
+    expect(deps.pipeline.extract).not.toHaveBeenCalled();
   });
 
   it('pre-screens a clearly out-of-scope abstract: dropped before the gate, no gate LLM call', async () => {
@@ -124,8 +141,8 @@ describe('ResearchAgent', () => {
     const deps = baseDeps({}, { pubmed });
     const agent = new ResearchAgent(deps, bounds);
     const { summary } = await agent.run('topic');
-    expect(deps.gate).not.toHaveBeenCalled();
-    expect(deps.extract).not.toHaveBeenCalled();
+    expect(deps.pipeline.gate).not.toHaveBeenCalled();
+    expect(deps.pipeline.extract).not.toHaveBeenCalled();
     expect(summary.gatedOut).toBe(1);
     // NOT negative-cached: a blunt-keyword prescreen drop must stay reversible (fail-open mining,
     // ADR-0021) so an in-scope paper that merely mentions a supplement isn't permanently blacklisted.
@@ -134,12 +151,12 @@ describe('ResearchAgent', () => {
 
   it('negative-caches a gated-out paper (markGated with sourceId + kind) so it is not re-gated next run', async () => {
     const pubmed = pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('40299806')]) });
-    const deps = baseDeps({ gate: jest.fn().mockResolvedValue({ keep: false, tokens: 1 }) }, { pubmed });
+    const deps = baseDeps({}, { pubmed }, { gate: jest.fn().mockResolvedValue({ keep: false, tokens: 1 }) });
     const agent = new ResearchAgent(deps, bounds);
     const { summary } = await agent.run('topic');
     expect(summary.gatedOut).toBe(1);
     expect(deps.markGated).toHaveBeenCalledWith('PMID:40299806', 'pubmed');
-    expect(deps.extract).not.toHaveBeenCalled();
+    expect(deps.pipeline.extract).not.toHaveBeenCalled();
   });
 
   it('checks the seen ledger with the PMID-prefixed key for a direct search hit', async () => {
@@ -167,7 +184,7 @@ describe('ResearchAgent', () => {
   });
 
   it('drops in-run duplicates and keeps reading for a novel one', async () => {
-    const deps = baseDeps({
+    const deps = baseDeps({}, {}, {
       dedup: jest.fn()
         .mockResolvedValueOnce({ duplicate: false, tokens: 0 })
         .mockResolvedValueOnce({ duplicate: true, tokens: 0 })
@@ -195,16 +212,16 @@ describe('ResearchAgent', () => {
   });
 
   it('falls back to the abstract when psyarxiv.fullText returns null', async () => {
-    const extract = jest.fn().mockImplementation((p: Paper, body: string) =>
-      Promise.resolve({ candidates: [{ ...candidate('g1'), sourceText: body }], tokens: 1, traces: [] }));
-    const deps = baseDeps({ extract }, {
+    const extract = jest.fn().mockImplementation((_gen, _p: Paper, body: string) =>
+      Promise.resolve({ candidates: [{ ...candidate('g1'), sourceText: body }], tokens: 1 }));
+    const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
       psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('g1')]), fullText: jest.fn().mockResolvedValue(null) }),
-    });
+    }, { extract });
     const agent = new ResearchAgent(deps, bounds);
     await agent.run('topic');
     // extract received the abstract (PAg1) as the body, proving the abstract fallback path.
-    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ sourceId: 'osf:g1' }), 'PAg1', expect.any(Array));
+    expect(extract).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ sourceId: 'osf:g1' }), 'PAg1', expect.any(Array));
   });
 
   it('logs a swallowed psyarxiv search failure instead of aborting the run', async () => {
@@ -222,50 +239,50 @@ describe('ResearchAgent', () => {
   });
 
   it('collects every distinct candidate one paper yields across lenses', async () => {
-    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5, traces: [] });
-    const deps = baseDeps({ extract }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5 });
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) }, { extract });
     const { candidates, summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
     expect(candidates).toHaveLength(2);
     expect(summary.extracted).toBe(2);
   });
 
   it('runs within-paper merge on the extracted candidates before dedup, keeping only the distinct set', async () => {
-    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5, traces: [] });
+    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5 });
     // merge collapses the two lens hits into one technique.
-    const merge = jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: [cands[0]], tokens: 2, traces: [] }));
-    const deps = baseDeps({ extract, merge }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const merge = jest.fn().mockImplementation((_gen, cands: Candidate[]) => Promise.resolve({ candidates: [cands[0]], tokens: 2 }));
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) }, { extract, merge });
     const { candidates, summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
-    expect(merge).toHaveBeenCalledWith([candidate('a'), candidate('b')]);
+    expect(merge).toHaveBeenCalledWith(expect.any(Function), [candidate('a'), candidate('b')]);
     expect(candidates).toHaveLength(1);
     expect(summary.extracted).toBe(1);
   });
 
   it('judges merged candidates with the paper tier and collects only the survivors', async () => {
-    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5, traces: [] });
+    const extract = jest.fn().mockResolvedValue({ candidates: [candidate('a'), candidate('b')], tokens: 5 });
     // judge drops one and keeps the other with a confidence score.
-    const judge = jest.fn().mockImplementation((cands: Candidate[]) =>
-      Promise.resolve({ candidates: [{ ...cands[0], confidence: 0.8 }], tokens: 3, traces: [] }));
-    const deps = baseDeps({ extract, judge }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const judge = jest.fn().mockImplementation((_gen, cands: Candidate[]) =>
+      Promise.resolve({ candidates: [{ ...cands[0], confidence: 0.8 }], tokens: 3 }));
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) }, { extract, judge });
     const { candidates } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
-    expect(judge).toHaveBeenCalledWith([candidate('a'), candidate('b')], 'rct'); // tier from the hydrated RCT paper
+    expect(judge).toHaveBeenCalledWith(expect.any(Function), [candidate('a'), candidate('b')], 'rct'); // tier from the hydrated RCT paper
     expect(candidates).toHaveLength(1);
     expect(candidates[0].confidence).toBe(0.8);
   });
 
   it('fans a peer-reviewed paper across all five lenses', async () => {
-    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 1, traces: [] });
-    const deps = baseDeps({ extract }, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 1 });
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) }, { extract });
     await new ResearchAgent(deps, bounds).run('topic');
-    expect(extract.mock.calls[0][2]).toEqual(['behavioral', 'cognitive', 'social', 'environmental', 'physiological']);
+    expect(extract.mock.calls[0][3]).toEqual(['behavioral', 'cognitive', 'social', 'environmental', 'physiological']);
   });
 
   it('collapses to a single lens under token-budget pressure (lenses fall before papers)', async () => {
-    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 0, traces: [] });
+    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 0 });
     // gate pre-spends 85 of a 100 budget, so <20% remains when the paper reaches extract.
-    const deps = baseDeps({ extract, gate: jest.fn().mockResolvedValue({ keep: true, tokens: 85 }) },
-      { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) },
+      { extract, gate: jest.fn().mockResolvedValue({ keep: true, tokens: 85 }) });
     await new ResearchAgent(deps, { ...bounds, tokenBudget: 100 }).run('topic');
-    expect(extract.mock.calls[0][2]).toHaveLength(1);
+    expect(extract.mock.calls[0][3]).toHaveLength(1);
   });
 
   it('does not count the search phase against the per-topic deadline (slow search still processes)', async () => {
@@ -286,24 +303,24 @@ describe('ResearchAgent', () => {
   it('processes a paper returned by two sources only once (cross-source dedup)', async () => {
     // Same sourceId surfaced by two sources → the in-run visited set dedups before any hydrate/extract.
     const shared = pubmedThin('1');
-    const extract = jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] }));
-    const deps = baseDeps({ extract }, {
+    const extract = jest.fn().mockImplementation((_gen, p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 }));
+    const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([shared]) }),
       medrxiv: preprintSource('medrxiv', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
-    });
+    }, { extract });
     const { summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
     expect(extract).toHaveBeenCalledTimes(1);
     expect(summary.collected).toBe(1);
   });
 
   it('judges preprint-sourced papers at the preprint tier', async () => {
-    const judge = jest.fn().mockImplementation((c: Candidate[]) => Promise.resolve({ candidates: c, tokens: 0, traces: [] }));
-    const deps = baseDeps({ judge }, {
+    const judge = jest.fn().mockImplementation((_gen: unknown, c: Candidate[]) => Promise.resolve({ candidates: c, tokens: 0 }));
+    const deps = baseDeps({}, {
       pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
       psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('zzz')]) }),
-    });
+    }, { judge });
     await new ResearchAgent(deps, bounds).run('topic');
-    expect(judge).toHaveBeenCalledWith(expect.anything(), 'preprint'); // isPreprint → evidenceTier 'preprint'
+    expect(judge).toHaveBeenCalledWith(expect.any(Function), expect.anything(), 'preprint'); // isPreprint → evidenceTier 'preprint'
   });
 
   it('interleaves sources round-robin so the per-topic cap is shared, not consumed by PubMed first', async () => {
@@ -320,10 +337,10 @@ describe('ResearchAgent', () => {
   });
 
   it('continues when one paper errors (fail-open-empty)', async () => {
-    const deps = baseDeps({
+    const deps = baseDeps({}, {}, {
       extract: jest.fn()
         .mockRejectedValueOnce(new Error('boom'))
-        .mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
+        .mockImplementation((_gen, p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 })),
     });
     const agent = new ResearchAgent(deps, bounds);
     const { summary } = await agent.run('topic');

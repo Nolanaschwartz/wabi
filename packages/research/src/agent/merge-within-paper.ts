@@ -1,14 +1,11 @@
-import { generate } from '@wabi/shared/generate';
-import { triageMaxTokens } from '../config';
 import { Candidate, Lens } from '../types';
-import { StepTrace } from './relevance-gate';
+import type { ResearchGenerate } from './research-generate';
 import { SIM_FLOOR, SIM_CEIL, lexSim } from './dedup';
 import { stripFences } from './extract';
 
 export interface MergeResult {
   candidates: Candidate[];
   tokens: number;
-  traces: StepTrace[];
 }
 
 /** Collapse the lens candidates from ONE paper into its distinct techniques, replacing the old O(n²)
@@ -20,9 +17,9 @@ export interface MergeResult {
  * verbatim sourceText, with the contributing lenses unioned and a distinct-lens agreement count (the
  * robustness signal the judge consumes). Fail-open (ADR-0021): a clustering error or unparseable reply
  * keeps the lexical clusters as-is and never drops a candidate. */
-export async function mergeWithinPaper(candidates: Candidate[]): Promise<MergeResult> {
+export async function mergeWithinPaper(gen: ResearchGenerate, candidates: Candidate[]): Promise<MergeResult> {
   const n = candidates.length;
-  if (n <= 1) return { candidates: candidates.map(survivor), tokens: 0, traces: [] };
+  if (n <= 1) return { candidates: candidates.map(survivor), tokens: 0 };
 
   // Union-find over the paper's candidates. Obvious duplicates (≥ ceiling) union deterministically;
   // ambiguous-band pairs only flag their endpoints for the one LLM clustering call below.
@@ -39,7 +36,6 @@ export async function mergeWithinPaper(candidates: Candidate[]): Promise<MergeRe
   }
 
   let tokens = 0;
-  let traces: StepTrace[] = [];
   const involved = candidates.map((_, i) => i).filter((i) => ambiguous[i]);
   if (involved.length > 1) {
     const prompt =
@@ -48,9 +44,8 @@ export async function mergeWithinPaper(candidates: Candidate[]): Promise<MergeRe
       `that belong together (every index appears in exactly one group).\n` +
       involved.map((g, local) => `${local}: ${candidates[g].title} — ${candidates[g].technique}`).join('\n');
     try {
-      const out = await generate('research-triage', { prompt, maxOutputTokens: triageMaxTokens() });
+      const out = await gen('merge', 'research-triage', { prompt });
       tokens = out.usage?.totalTokens ?? 0;
-      traces = [{ input: prompt, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage }];
       for (const group of parseGroups(out.text, involved.length)) {
         for (const local of group) if (local !== group[0]) union(involved[group[0]], involved[local]);
       }
@@ -66,7 +61,7 @@ export async function mergeWithinPaper(candidates: Candidate[]): Promise<MergeRe
     const r = find(i);
     (byRoot.get(r) ?? byRoot.set(r, []).get(r)!).push(candidates[i]);
   }
-  return { candidates: [...byRoot.values()].map(mergeCluster), tokens, traces };
+  return { candidates: [...byRoot.values()].map(mergeCluster), tokens };
 }
 
 /** A lone candidate as a survivor: its own lens, agreement 1. */
