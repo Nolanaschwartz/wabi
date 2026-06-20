@@ -102,14 +102,15 @@ export class ResearchAgent {
     // processing cap (maxPapersPerTopic) — fetch a wide, server-ranked pool; the gate + cap pick from it.
     const concepts = await this.deps.buildConcepts(topic);
     const perKind: Partial<Record<SourceKind, number>> = {};
-    const bySrc: Paper[][] = [];
-    for (const src of this.deps.sources.values()) {
+    // Promise.all preserves array order, so bySrc keeps source order for round-robin interleave below;
+    // each source's per-rate-limiter fan-out is unchanged. Search is now max-of-source, not sum.
+    const bySrc = await Promise.all([...this.deps.sources.values()].map(async (src) => {
       const query = queryForKind(src.kind, topic, concepts);
       const papers = await src.search(query, this.bounds.searchLimit)
         .catch((e) => { this.log.info(`${src.kind} search failed`, { topic, err: (e as Error)?.message ?? String(e) }); return [] as Paper[]; });
       perKind[src.kind] = papers.length;
-      bySrc.push(papers);
-    }
+      return papers;
+    }));
     // Interleave round-robin so the per-topic cap (maxPapersPerTopic) is SHARED across sources rather
     // than consumed by the first (PubMed) block — otherwise EPMC/OSF preprints never reach the gate,
     // which is the whole point of the topical-search migration (ADR-0039). Each source keeps its own
