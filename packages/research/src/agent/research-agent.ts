@@ -131,15 +131,18 @@ export class ResearchAgent {
     // exhaust agentTimeoutMs → `agentTimeout tokens=0` before any LLM call. See .scratch/research-search-recall/00.)
     const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
-    // Batch the seen-ledger check for the whole search queue in ONE concurrent fan-out instead of a
-    // serial HTTP round-trip per paper inside the loop. In steady state most hits are already seen from
-    // prior runs (a seen-skip does no LLM work and never advances papersRead, so the caps don't fire) —
-    // that path was up to `searchLimit` sequential round-trips of pure latency. Discovery-expanded papers
-    // (pushed mid-loop) aren't here, so the loop keeps a lazy single check for them; a prefetch error
-    // leaves the id unresolved → the loop falls back to the original per-paper check (same error path).
+    // Batch the seen-ledger check in ONE concurrent fan-out instead of a serial HTTP round-trip per paper
+    // inside the loop. In steady state most hits are already seen from prior runs (a seen-skip does no LLM
+    // work and never advances papersRead, so the caps don't fire) — that path was up to maxPapersPerTopic
+    // sequential round-trips of pure latency. CAP the prefetch at maxPapersPerTopic: the loop breaks at
+    // that bound (a seen-skip is the one exception, but it doesn't consume LLM budget so the queue still
+    // drains in order), so prefetching the whole round-robin queue (~searchLimit×sources) would fire ~96
+    // wasted seen() calls on a fresh/low-overlap topic the loop never reaches. The remaining ids — the
+    // queue tail beyond the cap AND discovery-expanded papers pushed mid-loop — keep the lazy single check
+    // below; a prefetch error leaves an id unresolved → the loop falls back to the same per-paper check.
     const seenResolved = new Map<string, boolean>();
     await Promise.all(
-      queue.map((p) =>
+      queue.slice(0, this.bounds.maxPapersPerTopic).map((p) =>
         this.deps.seen(p.sourceId).then((v) => seenResolved.set(p.sourceId, v)).catch(() => {}),
       ),
     );

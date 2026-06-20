@@ -332,11 +332,12 @@ describe('ResearchAgent', () => {
     });
     const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 3, maxDraftsPerTopic: 10 });
     await agent.run('topic');
-    // seen() is now batched across the whole queue up front (one concurrent fan-out), so its call order
-    // is the full round-robin queue — still proving the cap is SHARED (osf:a precedes PMID:2/3), not
-    // consumed by PubMed first.
+    // seen() is batched up front but CAPPED at maxPapersPerTopic (3), so it fans out over only the first
+    // 3 of the round-robin queue — never the wasted tail (osf:b, PMID:3) the loop's cap stops it reaching.
+    // The interleave still proves the cap is SHARED: osf:a precedes PMID:2, so the preprint reaches the
+    // gate within the cap instead of being starved behind all of PubMed's block.
     const order = (deps.seen as jest.Mock).mock.calls.map((c) => c[0]);
-    expect(order).toEqual(['PMID:1', 'osf:a', 'PMID:2', 'osf:b', 'PMID:3']);
+    expect(order).toEqual(['PMID:1', 'osf:a', 'PMID:2']);
     // PROCESSING is still capped at 3: only the first 3 round-robin papers reach the gate before
     // maxPapersPerTopic stops the run — and one of them (osf:a) is the preprint the old concat order missed.
     expect(deps.pipeline.gate).toHaveBeenCalledTimes(3);
