@@ -1,4 +1,4 @@
-export type SourceKind = 'pubmed' | 'medrxiv' | 'psyarxiv';
+export type SourceKind = 'pubmed' | 'medrxiv' | 'psyarxiv' | 'europepmc';
 
 /** Structured evidence tier, set from the source's nature (never the model's claim). Ordered best to
  * weakest; drives the per-tier judge floor + cap (slice 05) and future retrieval re-ranking. */
@@ -39,6 +39,9 @@ export interface Candidate {
 export interface Bounds {
   maxTopicsPerRun: number;
   maxPapersPerTopic: number;
+  /** How many candidates to FETCH per source per topic (search breadth), decoupled from how many to
+   * PROCESS (`maxPapersPerTopic`). Server-ranked by relevance; the gate + processing cap pick from them. */
+  searchLimit: number;
   maxDiscoverySteps: number;
   maxDraftsPerTopic: number;
   maxDraftsPerRun: number;

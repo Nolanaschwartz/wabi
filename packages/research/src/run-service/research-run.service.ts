@@ -30,7 +30,7 @@ const CONFIG_SINGLETON_ID = 'singleton';
  * Fallback staleness threshold (the schema default for `ResearchConfig.runTimeoutMs`). Used when the
  * config row can't be read — the guard must never throw, so it degrades to this sane default.
  */
-const DEFAULT_RUN_TIMEOUT_MS = 600_000;
+const DEFAULT_RUN_TIMEOUT_MS = 1_200_000;
 
 /**
  * Schema-default bounds (mirrors `ResearchConfig`'s `@default`s). Used when the config singleton
@@ -39,12 +39,13 @@ const DEFAULT_RUN_TIMEOUT_MS = 600_000;
  */
 const DEFAULT_BOUNDS: Bounds = {
   maxTopicsPerRun: 5,
-  maxPapersPerTopic: 8,
+  maxPapersPerTopic: 24,
+  searchLimit: 40,
   maxDiscoverySteps: 2,
   maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10,
-  agentTimeoutMs: 90_000,
-  runTimeoutMs: 600_000,
+  agentTimeoutMs: 240_000,
+  runTimeoutMs: 1_200_000,
   tokenBudget: 200_000,
 };
 
@@ -192,9 +193,13 @@ export class ResearchRunService implements OnModuleInit {
         ? value
         : DEFAULT_BOUNDS[key];
     };
+    // searchLimit is a search-breadth constant, not a DB-governed run bound (ADR-0034 governs the eight
+    // columns) — source it from env, falling back to the default.
+    const envSearchLimit = Number(process.env.RESEARCH_SEARCH_LIMIT);
     return {
       maxTopicsPerRun: pick('maxTopicsPerRun'),
       maxPapersPerTopic: pick('maxPapersPerTopic'),
+      searchLimit: Number.isFinite(envSearchLimit) && envSearchLimit > 0 ? envSearchLimit : DEFAULT_BOUNDS.searchLimit,
       maxDiscoverySteps: pick('maxDiscoverySteps'),
       maxDraftsPerTopic: pick('maxDraftsPerTopic'),
       maxDraftsPerRun: pick('maxDraftsPerRun'),

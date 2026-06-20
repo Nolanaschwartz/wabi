@@ -116,11 +116,13 @@ export class StrategyAdminService {
     return row !== null;
   }
 
-  /** Record a terminal ingest outcome for a source. Upsert keeps firstSeenAt, refreshes lastStatus. */
+  /** Record a terminal ingest outcome for a source. Upsert keeps firstSeenAt, refreshes lastStatus.
+   * 'gated' is the negative-cache mark: a paper the research relevance-gate rejected, recorded so the
+   * worker's seen-check skips it next run instead of re-gating the same off-topic paper every cycle. */
   async markProcessed(
     sourceId: string,
     source: string,
-    status: 'submitted' | 'deduped' | 'rejected',
+    status: 'submitted' | 'deduped' | 'rejected' | 'gated',
   ): Promise<void> {
     await prisma.processedSource.upsert({
       where: { sourceId },

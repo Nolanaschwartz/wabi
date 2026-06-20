@@ -3,6 +3,7 @@ import { extractMaxTokens } from '../config';
 import { Candidate, EvidenceTier } from '../types';
 import { StepTrace } from './relevance-gate';
 import { stripFences } from './extract';
+import { SCOPE_FRAGMENT } from './scope-policy';
 
 export interface JudgeResult {
   candidates: Candidate[];
@@ -46,10 +47,14 @@ async function judgeOne(
 ): Promise<{ candidate: Candidate | null; tokens: number; trace?: StepTrace }> {
   const prompt =
     `Judge this coping/wellbeing technique extracted from a research source.\n` +
-    `Score "faithful" (does the verbatim sourceText actually support the technique?) and "score" ` +
+    `${SCOPE_FRAGMENT}\n` +
+    `Score "faithful" (does the verbatim sourceText actually support the technique?), "scopeOk" ` +
+    `(true ONLY if a person could do this unaided — false if it requires a supplement, drug, dosed ` +
+    `nutrient, a specific food/diet, a clinician, or a device/procedure), and "score" ` +
     `(0..1 overall quality: grounded, actionable, audience-neutral, non-trivial).\n` +
     `You MAY sharpen the title/technique wording, but do NOT invent claims and do NOT change meaning.\n` +
-    `Return JSON: {"faithful": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n\n` +
+    `If you rewrite the title, keep it short, plain, and action-oriented (what the person does) — not an academic label.\n` +
+    `Return JSON: {"faithful": boolean, "scopeOk": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n\n` +
     `Title: ${c.title}\nTechnique: ${c.technique}\nSourceText: ${c.sourceText}`;
 
   let out;
@@ -65,7 +70,7 @@ async function judgeOne(
   const tokens = out.usage?.totalTokens ?? 0;
   const trace: StepTrace = { input: prompt, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage };
 
-  let v: { faithful?: boolean; score?: number; title?: string; technique?: string; rationale?: string };
+  let v: { faithful?: boolean; scopeOk?: boolean; score?: number; title?: string; technique?: string; rationale?: string };
   try {
     v = JSON.parse(stripFences(out.text.trim()));
   } catch {
@@ -73,7 +78,9 @@ async function judgeOne(
     return { candidate: { ...c, confidence: 0.5, rationale: 'judge unavailable' }, tokens, trace };
   }
 
-  if (!v.faithful || typeof v.score !== 'number' || v.score < floorForTier(tier)) {
+  // scopeOk is a separate verdict, not folded into the quality score, so the trace records WHY a
+  // faithful-but-out-of-scope candidate (e.g. a supplement) was dropped (slice 03).
+  if (!v.faithful || v.scopeOk === false || typeof v.score !== 'number' || v.score < floorForTier(tier)) {
     return { candidate: null, tokens, trace };
   }
   return {

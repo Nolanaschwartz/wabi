@@ -4,7 +4,10 @@ import { Logger, noopLogger } from '../util/logger';
 import { ResearchSpanName, ResearchSpanInput, RunTraceInput } from './research-tracer';
 import { StepTrace } from './relevance-gate';
 import { evidenceTier } from './extract';
+import { prescreen } from './scope-policy';
 import { lensesForTier } from './lenses';
+import { Concepts } from '../sources/query/concepts';
+import { queryForKind } from '../sources/query/for-kind';
 
 // Below this fraction of the token budget remaining, fan a paper out across a SINGLE lens instead of
 // the full set — lenses fall before papers, so a near-exhausted run still mines something per paper.
@@ -14,8 +17,13 @@ export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
    * The agent dispatches hydrate/fullText/expand to `sources.get(paper.sourceKind)` (ADR-0036). */
   sources: Map<SourceKind, Source>;
+  /** Translate the topic into the literature's vocabulary ONCE per topic (one LLM call); each source
+   * renders the result into its own query syntax via {@link queryForKind}. Fail-open inside the builder. */
+  buildConcepts: (topic: string) => Promise<Concepts>;
   seen: (sourceId: string) => Promise<boolean>;
-  gate: (abstract: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
+  /** Negative-cache a gate rejection so seen() skips this paper next run (never re-gated). */
+  markGated: (sourceId: string, source: string) => Promise<void>;
+  gate: (abstract: string, topic: string) => Promise<{ keep: boolean; tokens: number; trace?: StepTrace }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
   extract: (paper: Paper, body: string, lenses: Lens[]) => Promise<{ candidates: Candidate[]; tokens: number; traces: StepTrace[] }>;
   /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
@@ -78,7 +86,6 @@ export class ResearchAgent {
     const summary = emptySummary();
     const kept: Candidate[] = [];
     const visited = new Set<string>();
-    const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
     this.log.info('topic start', { topic });
 
@@ -95,19 +102,38 @@ export class ResearchAgent {
     // Fan search out across every source (parallel within a source's own rate limiter). Fail-soft: a
     // source that throws logs `<kind> search failed` and contributes nothing — the run never aborts on
     // one bad source. Each source yields whole Papers (thin for pubmed; the agent hydrates later).
-    const queue: Paper[] = [];
+    // Translate the topic to the literature's vocabulary once (one LLM call, fail-open), then let each
+    // source render it into its own query syntax. Search breadth (searchLimit) is decoupled from the
+    // processing cap (maxPapersPerTopic) — fetch a wide, server-ranked pool; the gate + cap pick from it.
+    const concepts = await this.deps.buildConcepts(topic);
     const perKind: Partial<Record<SourceKind, number>> = {};
+    const bySrc: Paper[][] = [];
     for (const src of this.deps.sources.values()) {
-      const papers = await src.search(topic, this.bounds.maxPapersPerTopic)
+      const query = queryForKind(src.kind, topic, concepts);
+      const papers = await src.search(query, this.bounds.searchLimit)
         .catch((e) => { this.log.info(`${src.kind} search failed`, { topic, err: (e as Error)?.message ?? String(e) }); return [] as Paper[]; });
       perKind[src.kind] = papers.length;
-      queue.push(...papers);
+      bySrc.push(papers);
+    }
+    // Interleave round-robin so the per-topic cap (maxPapersPerTopic) is SHARED across sources rather
+    // than consumed by the first (PubMed) block — otherwise EPMC/OSF preprints never reach the gate,
+    // which is the whole point of the topical-search migration (ADR-0039). Each source keeps its own
+    // server-relevance order; we just take one from each in turn.
+    const queue: Paper[] = [];
+    for (let i = 0; bySrc.some((p) => i < p.length); i++) {
+      for (const p of bySrc) if (i < p.length) queue.push(p[i]);
     }
     summary.searched = queue.length;
     this.log.info('search done', { topic, ...perKind, queued: queue.length });
 
     let papersRead = 0;
     let discoverySteps = 0;
+
+    // The per-topic deadline bounds LLM PROCESSING only — start it after the (bounded) search phase so a
+    // slow source fetch can't consume the budget before the first paper is gated. The run as a whole is
+    // still capped by runTimeoutMs. (Was set at run() entry, which let topic 1's preprint window fetch
+    // exhaust agentTimeoutMs → `agentTimeout tokens=0` before any LLM call. See .scratch/research-search-recall/00.)
+    const deadline = Date.now() + this.bounds.agentTimeoutMs;
 
     while (queue.length > 0) {
       if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
@@ -134,11 +160,28 @@ export class ResearchAgent {
         const paper = await src.hydrate(item);
         this.log.info('paper', { id: paper.sourceId, kind: paper.sourceKind, title: paper.title });
 
-        const gate = await this.deps.gate(paper.abstract);
+        // Deterministic scope pre-screen before any model call: a clear supplement/drug/clinical
+        // abstract is dropped here without a gate generation (scope-policy module, ADR-0001/0003).
+        // NOT negative-cached: prescreen is a blunt keyword heuristic and fail-open mining (ADR-0021)
+        // forbids a deterministic false-positive permanently blacklisting an in-scope paper. The gate
+        // LLM is the real arbiter, so a re-fetch next run can still reach it if the policy improves.
+        // ponytail: re-screening the same paper each run is the accepted cost of keeping the drop reversible.
+        if (!prescreen(paper.abstract)) {
+          summary.gatedOut++; papersRead++;
+          this.log.info('prescreened out', { id: paper.sourceId }); // distinct from the gate-LLM 'gated out'
+          continue;
+        }
+
+        const gate = await this.deps.gate(paper.abstract, topic);
         this.tokens += gate.tokens;
         this.emitSpan('gate', gate.trace);
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
-        if (!gate.keep) { summary.gatedOut++; papersRead++; this.log.info('gated out', { id: paper.sourceId }); continue; }
+        if (!gate.keep) {
+          summary.gatedOut++; papersRead++;
+          await this.deps.markGated(paper.sourceId, paper.sourceKind); // negative-cache: don't re-gate next run
+          this.log.info('gated out', { id: paper.sourceId });
+          continue;
+        }
 
         // Citation-graph discovery, where the source offers it (pubmed). Expanded papers re-enter the
         // queue as thin hits and flow through the same hydrate path.

@@ -46,12 +46,13 @@ export function sourceMaxTextChars(kind: SourceKindName): number {
 export function loadBounds(): Bounds {
   return {
     maxTopicsPerRun: num('RESEARCH_MAX_TOPICS_PER_RUN', 5),
-    maxPapersPerTopic: num('RESEARCH_MAX_PAPERS_PER_TOPIC', 8),
+    maxPapersPerTopic: num('RESEARCH_MAX_PAPERS_PER_TOPIC', 24),
+    searchLimit: num('RESEARCH_SEARCH_LIMIT', 40),
     maxDiscoverySteps: num('RESEARCH_MAX_DISCOVERY_STEPS', 2),
     maxDraftsPerTopic: num('RESEARCH_MAX_DRAFTS_PER_TOPIC', 3),
     maxDraftsPerRun: num('RESEARCH_MAX_DRAFTS_PER_RUN', 10),
-    agentTimeoutMs: num('RESEARCH_AGENT_TIMEOUT_MS', 90_000),
-    runTimeoutMs: num('RESEARCH_RUN_TIMEOUT_MS', 600_000),
+    agentTimeoutMs: num('RESEARCH_AGENT_TIMEOUT_MS', 240_000),
+    runTimeoutMs: num('RESEARCH_RUN_TIMEOUT_MS', 1_200_000),
     tokenBudget: num('RESEARCH_TOKEN_BUDGET', 200_000),
   };
 }
@@ -66,7 +67,9 @@ export function triageMaxTokens(): number {
   return num('RESEARCH_TRIAGE_MAX_TOKENS', 2000);
 }
 
-/** Output cap for the extract call (must fit reasoning + a full JSON technique object). */
+/** Output cap for the extract call (must fit reasoning + a full JSON technique object). Sized to the
+ * per-call context window (≈131k/3 ≈ 43.6k on the local tier) minus the body, ~5% buffer — a 4k cap
+ * let the reasoning model's hidden tokens crowd out the JSON, surfacing as false "no candidate"s. */
 export function extractMaxTokens(): number {
-  return num('RESEARCH_MAX_TOKENS', 4000);
+  return num('RESEARCH_MAX_TOKENS', 28_000);
 }

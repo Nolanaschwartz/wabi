@@ -63,4 +63,12 @@ export class StrategyAdminController {
   async seen(@Query('sourceId') sourceId: string) {
     return { seen: await this.admin.hasSeen(sourceId) };
   }
+
+  @Post('gated')
+  @HttpCode(HttpStatus.OK)
+  async gated(@Body() body: { sourceId: string; source: string }) {
+    // Negative-cache a relevance-gate rejection so the worker's seen-check skips it next run.
+    await this.admin.markProcessed(body.sourceId, body.source, 'gated');
+    return { ok: true };
+  }
 }

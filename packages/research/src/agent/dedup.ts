@@ -4,13 +4,32 @@ import { Candidate } from '../types';
 import { StepTrace } from './relevance-gate';
 
 const HIGH = 0.6;
-// Anything with non-trivial lexical overlap is ambiguous and goes to the LLM; only a clean
-// near-zero overlap is auto-distinct. (A 0.2 floor wrongly auto-rejected genuine paraphrases
-// like "box breathing" vs "square breathing drill", whose Jaccard is ~0.08.)
-const LOW = 0.05;
+// Below LOW: auto-distinct, no LLM. Above HIGH: auto-duplicate, no LLM. The band in between goes to
+// the triage LLM. The floor is raised off the old 0.05 (which sent nearly every pair to the model)
+// because normalization below now lifts genuine paraphrases — "box breathing" vs "square breathing
+// drill" — out of near-zero overlap and into the band, instead of leaving them to be auto-rejected.
+const LOW = 0.18;
 
+// ponytail: curated stem/synonym/stopword folding, narrow on purpose. Real semantic dedup lives on
+// the bot's embeddings; here we only need raw paraphrases to clear the floor. Upgrade path = embeddings.
+// KNOWN TRADE: at floor 0.18, a genuine paraphrase whose normalized similarity stays below the floor
+// AND isn't folded by the synonym map (which today only knows square↔box) auto-resolves as distinct
+// with no LLM — both drafts then reach the human review queue (ADR-0012) as separate items. That is a
+// recall cost paid deliberately to cut the merge LLM-call volume; it loses no data (a human dedups),
+// and the upgrade that removes it is bot-style embeddings, not a bigger synonym list.
+const SYNONYMS: Record<string, string> = { square: 'box' };
+const STOPWORDS = new Set(['drill', 'down', 'daily', 'nightly', 'routine', 'practice', 'technique', 'exercise', 'method', 'step']);
+function stem(w: string): string {
+  return w.replace(/(ing|ed|s)$/, '');
+}
 function tokens(s: string): Set<string> {
-  return new Set(s.toLowerCase().split(/\W+/).filter((w) => w.length > 2));
+  const out = new Set<string>();
+  for (const raw of s.toLowerCase().split(/\W+/)) {
+    if (raw.length <= 2) continue;
+    const w = SYNONYMS[stem(raw)] ?? stem(raw);
+    if (w.length > 2 && !STOPWORDS.has(w)) out.add(w);
+  }
+  return out;
 }
 function jaccard(a: string, b: string): number {
   const sa = tokens(a), sb = tokens(b);
@@ -20,6 +39,18 @@ function jaccard(a: string, b: string): number {
   return inter / (sa.size + sb.size - inter);
 }
 const sig = (c: Candidate) => `${c.title} ${c.technique}`;
+
+/** Bounds of the ambiguous band, exported so the within-paper merge pre-pass (slice 06) shares the
+ * exact same lexical floor/ceiling as cross-paper dedup: below the floor is obviously distinct, at or
+ * above the ceiling is obviously the same — only the band in between needs the LLM. */
+export const SIM_FLOOR = LOW;
+export const SIM_CEIL = HIGH;
+
+/** Normalized lexical similarity of two candidates' signatures (the same metric dedup prefilters on).
+ * Below {@link SIM_FLOOR} the pair is obviously distinct and never needs an LLM. */
+export function lexSim(a: Candidate, b: Candidate): number {
+  return jaccard(sig(a), sig(b));
+}
 
 export interface DedupResult { duplicate: boolean; tokens: number; trace?: StepTrace }
 

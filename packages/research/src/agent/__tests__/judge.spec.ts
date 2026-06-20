@@ -29,6 +29,24 @@ it('drops a candidate the judge marks unfaithful', async () => {
   expect(r.candidates).toHaveLength(0);
 });
 
+it('drops a faithful-but-out-of-scope candidate even with a high quality score', async () => {
+  generate.mockResolvedValue(verdict({ faithful: true, scopeOk: false, score: 0.95, rationale: 'requires a supplement' }));
+  const r = await judgeCandidates([mk('Take Vitamin D')], 'rct');
+  expect(r.candidates).toHaveLength(0);
+});
+
+it('keeps a faithful, in-scope candidate above the floor', async () => {
+  generate.mockResolvedValue(verdict({ faithful: true, scopeOk: true, score: 0.8, rationale: 'self-administered' }));
+  const r = await judgeCandidates([mk('A')], 'rct');
+  expect(r.candidates).toHaveLength(1);
+});
+
+it('prompts with the shared scope fragment', async () => {
+  generate.mockResolvedValue(verdict({ faithful: true, scopeOk: true, score: 0.8, rationale: 'r' }));
+  await judgeCandidates([mk('A')], 'rct');
+  expect(generate.mock.calls[0][1].prompt).toContain(require('../scope-policy').SCOPE_FRAGMENT);
+});
+
 it('holds preprints to a stricter floor than peer-reviewed work', async () => {
   generate.mockResolvedValue(verdict({ faithful: true, score: 0.6, rationale: 'ok' }));
   // 0.6 clears the peer-reviewed floor but not the stricter preprint floor.

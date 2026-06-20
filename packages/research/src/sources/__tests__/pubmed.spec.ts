@@ -24,6 +24,7 @@ describe('PubMedTool', () => {
       url: 'https://pubmed.ncbi.nlm.nih.gov/111' });
     expect(fetchFn.mock.calls[0][0]).toContain('esearch.fcgi');
     expect(fetchFn.mock.calls[0][0]).toContain('retmax=8');
+    expect(fetchFn.mock.calls[0][0]).toContain('sort=relevance'); // best matches across history, not most-recent
   });
 
   it('hydrate fills title/pubTypes/abstract from esummary + efetch, keeping the sourceId', async () => {
@@ -163,9 +164,20 @@ describe('PubMedTool', () => {
     expect(await tool.fullText(pm('111'))).toBeNull();
   });
 
-  it('throws on HTTP error', async () => {
-    const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 503, text: async () => '', json: async () => ({}) });
+  it('throws on a 4xx HTTP error (not retried)', async () => {
+    const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 400, text: async () => '', json: async () => ({}) });
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
-    await expect(tool.search('x', 8)).rejects.toThrow('503');
+    await expect(tool.search('x', 8)).rejects.toThrow('400');
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transient 5xx and recovers rather than zeroing the topic', async () => {
+    const fetchFn = jest.fn()
+      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => '', json: async () => ({}) })
+      .mockReturnValueOnce(jsonResponse({ esearchresult: { idlist: ['111'] } }));
+    const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    const papers = await tool.search('x', 8);
+    expect(papers.map((p) => p.sourceId)).toEqual(['PMID:111']);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 });

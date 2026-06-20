@@ -216,8 +216,7 @@ export class MemoryStoreService {
     }
   }
 
-  // Extract created memory IDs from mem0 create response.
-  // Response shape varies: may have top-level id, events[].id, or memories[].id.
+  // mem0's create response shape varies: the id may be top-level, in events[].id, or memories[].id.
   private extractCreatedIds(json: Mem0CreateResponse): string[] {
     const ids: string[] = [];
     if (json.id) ids.push(json.id);

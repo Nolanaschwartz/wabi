@@ -3,7 +3,7 @@ import { Source } from '../../sources/source';
 import { Bounds, Candidate, Paper, SourceKind } from '../../types';
 
 const bounds: Bounds = {
-  maxTopicsPerRun: 5, maxPapersPerTopic: 3, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
+  maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
   maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
 };
 
@@ -54,7 +54,9 @@ function baseDeps(over: Partial<AgentDeps> = {}, srcs: Partial<Record<SourceKind
   ]);
   return {
     sources,
+    buildConcepts: jest.fn().mockResolvedValue({ core: ['emotion regulation'], context: [] }),
     seen: jest.fn().mockResolvedValue(false),
+    markGated: jest.fn().mockResolvedValue(undefined),
     gate: jest.fn().mockResolvedValue({ keep: true, tokens: 1 }),
     extract: jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] })),
     merge: jest.fn().mockImplementation((cands: Candidate[]) => Promise.resolve({ candidates: cands, tokens: 0, traces: [] })),
@@ -77,8 +79,8 @@ describe('ResearchAgent', () => {
     const gate = jest.fn().mockResolvedValue({ keep: true, tokens: 1 });
     const agent = new ResearchAgent(baseDeps({ gate }), bounds);
     await agent.run('topic');
-    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with the hydrated abstract.
-    expect(gate).toHaveBeenCalledWith('A1');
+    // hydrate populated A1/A2/A3 from the thin hits; the gate is called with the hydrated abstract + topic.
+    expect(gate).toHaveBeenCalledWith('A1', 'topic');
   });
 
   it('emits progress through the injected logger (topic start + collected + topic done)', async () => {
@@ -111,6 +113,32 @@ describe('ResearchAgent', () => {
     expect(summary.seenSkipped).toBe(3);
     expect(pubmed.hydrate).not.toHaveBeenCalled();
     expect(deps.gate).not.toHaveBeenCalled();
+    expect(deps.extract).not.toHaveBeenCalled();
+  });
+
+  it('pre-screens a clearly out-of-scope abstract: dropped before the gate, no gate LLM call', async () => {
+    const pubmed = pubmedSource({
+      search: jest.fn().mockResolvedValue([pubmedThin('40299806')]),
+      hydrate: jest.fn(async (p: Paper) => ({ ...p, title: 'T', abstract: 'Vitamin D supplementation improved mood.', pubTypes: ['Randomized Controlled Trial'] })),
+    });
+    const deps = baseDeps({}, { pubmed });
+    const agent = new ResearchAgent(deps, bounds);
+    const { summary } = await agent.run('topic');
+    expect(deps.gate).not.toHaveBeenCalled();
+    expect(deps.extract).not.toHaveBeenCalled();
+    expect(summary.gatedOut).toBe(1);
+    // NOT negative-cached: a blunt-keyword prescreen drop must stay reversible (fail-open mining,
+    // ADR-0021) so an in-scope paper that merely mentions a supplement isn't permanently blacklisted.
+    expect(deps.markGated).not.toHaveBeenCalled();
+  });
+
+  it('negative-caches a gated-out paper (markGated with sourceId + kind) so it is not re-gated next run', async () => {
+    const pubmed = pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('40299806')]) });
+    const deps = baseDeps({ gate: jest.fn().mockResolvedValue({ keep: false, tokens: 1 }) }, { pubmed });
+    const agent = new ResearchAgent(deps, bounds);
+    const { summary } = await agent.run('topic');
+    expect(summary.gatedOut).toBe(1);
+    expect(deps.markGated).toHaveBeenCalledWith('PMID:40299806', 'pubmed');
     expect(deps.extract).not.toHaveBeenCalled();
   });
 
@@ -238,6 +266,57 @@ describe('ResearchAgent', () => {
       { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) });
     await new ResearchAgent(deps, { ...bounds, tokenBudget: 100 }).run('topic');
     expect(extract.mock.calls[0][2]).toHaveLength(1);
+  });
+
+  it('does not count the search phase against the per-topic deadline (slow search still processes)', async () => {
+    // Regression: the deadline used to start at run() entry, so a slow source fetch (the preprint
+    // window) exhausted agentTimeoutMs before any paper was gated → `agentTimeout tokens=0` on topic 1.
+    // The deadline now starts AFTER search, so a search slower than the budget still leaves a full
+    // processing budget. Search here (~150ms) exceeds agentTimeoutMs (50ms); the paper must still collect.
+    const slowPubmed = pubmedSource({
+      search: jest.fn(async () => { await new Promise((r) => setTimeout(r, 150)); return [pubmedThin('1')]; }),
+    });
+    const deps = baseDeps({}, { pubmed: slowPubmed });
+    const agent = new ResearchAgent(deps, { ...bounds, agentTimeoutMs: 50, maxDraftsPerTopic: 10 });
+    const { summary } = await agent.run('topic');
+    expect(summary.stopReason).not.toBe('agentTimeout');
+    expect(summary.collected).toBeGreaterThan(0);
+  });
+
+  it('processes a paper returned by two sources only once (cross-source dedup)', async () => {
+    // Same sourceId surfaced by two sources → the in-run visited set dedups before any hydrate/extract.
+    const shared = pubmedThin('1');
+    const extract = jest.fn().mockImplementation((p: Paper) => Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10, traces: [] }));
+    const deps = baseDeps({ extract }, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([shared]) }),
+      medrxiv: preprintSource('medrxiv', { search: jest.fn().mockResolvedValue([{ ...shared }]) }),
+    });
+    const { summary } = await new ResearchAgent(deps, { ...bounds, maxDraftsPerTopic: 10 }).run('topic');
+    expect(extract).toHaveBeenCalledTimes(1);
+    expect(summary.collected).toBe(1);
+  });
+
+  it('judges preprint-sourced papers at the preprint tier', async () => {
+    const judge = jest.fn().mockImplementation((c: Candidate[]) => Promise.resolve({ candidates: c, tokens: 0, traces: [] }));
+    const deps = baseDeps({ judge }, {
+      pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([]) }),
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('zzz')]) }),
+    });
+    await new ResearchAgent(deps, bounds).run('topic');
+    expect(judge).toHaveBeenCalledWith(expect.anything(), 'preprint'); // isPreprint → evidenceTier 'preprint'
+  });
+
+  it('interleaves sources round-robin so the per-topic cap is shared, not consumed by PubMed first', async () => {
+    // pubmed → [1,2,3], psyarxiv → [a,b]. Round-robin queue = PMID:1, osf:a, PMID:2, osf:b, PMID:3.
+    // With maxPapersPerTopic=3 the cap stops after 3 — and crucially one of them is a preprint, which
+    // the old concat order (all 3 pubmed first) could never reach.
+    const deps = baseDeps({}, {
+      psyarxiv: preprintSource('psyarxiv', { search: jest.fn().mockResolvedValue([psyPaper('a'), psyPaper('b')]) }),
+    });
+    const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 3, maxDraftsPerTopic: 10 });
+    await agent.run('topic');
+    const order = (deps.seen as jest.Mock).mock.calls.map((c) => c[0]);
+    expect(order).toEqual(['PMID:1', 'osf:a', 'PMID:2']);
   });
 
   it('continues when one paper errors (fail-open-empty)', async () => {

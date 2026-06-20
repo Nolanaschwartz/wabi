@@ -1,4 +1,21 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Logger, noopLogger } from '../util/logger';
+
+// ponytail: temporary local PDF archive. When RESEARCH_PDF_DIR is set, tee each fetched PDF to disk
+// before parsing — best-effort, a write failure never affects parsing. Env read lazily (populated by
+// ConfigModule after import). Unset the var to turn it off; remove this when the debug need passes.
+async function archivePdf(url: string, bytes: Uint8Array, log: Logger): Promise<void> {
+  const dir = process.env.RESEARCH_PDF_DIR;
+  if (!dir) return;
+  try {
+    await mkdir(dir, { recursive: true });
+    const base = url.replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
+    await writeFile(join(dir, base.endsWith('.pdf') ? base : `${base}.pdf`), bytes);
+  } catch (e) {
+    log.info('pdf archive failed', { url, err: (e as Error)?.message ?? String(e) });
+  }
+}
 
 export interface FetchPdfOpts {
   fetchFn: typeof fetch;
@@ -45,6 +62,14 @@ export async function fetchAndParsePdf(url: string, opts: FetchPdfOpts): Promise
       return u8;
     });
 
+    await archivePdf(url, bytes, log); // tee to disk when RESEARCH_PDF_DIR is set (temporary)
+    // OSF's /download often serves an HTML interstitial/redirect rather than the file; parsing those
+    // bytes throws "Invalid PDF structure" and wastes the work. Gate on the %PDF magic so a non-PDF
+    // response falls back to the abstract cleanly (and silently) instead.
+    if (!(bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46)) {
+      log.info('pdf skipped: response is not a PDF', { url, bytes: bytes.byteLength });
+      return null;
+    }
     const text = (await parse(bytes)).trim().slice(0, opts.maxTextChars);
     return text.length > 0 ? text : null;
   } catch (e) {

@@ -45,20 +45,28 @@ export class PubMedTool implements Source {
     return this.apiKey ? `&api_key=${this.apiKey}` : '';
   }
 
-  private async getJson<T>(url: string): Promise<T> {
+  /** One rate-limited GET that retries transient 5xx (NCBI E-utilities 500s intermittently) before
+   * giving up — one blip otherwise zeroes a whole topic's PubMed. 4xx fail fast. */
+  private async fetchOk(url: string): Promise<Response> {
     return this.limiter.schedule(async () => {
-      const res = await this.fetchFn(url);
-      if (!res.ok) throw new Error(`PubMed HTTP ${res.status}`);
-      return (await res.json()) as T;
+      for (let attempt = 0; ; attempt++) {
+        const res = await this.fetchFn(url);
+        if (res.ok) return res;
+        if (res.status >= 500 && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+          continue;
+        }
+        throw new Error(`PubMed HTTP ${res.status}`);
+      }
     });
   }
 
+  private async getJson<T>(url: string): Promise<T> {
+    return (await (await this.fetchOk(url)).json()) as T;
+  }
+
   private async getText(url: string): Promise<string> {
-    return this.limiter.schedule(async () => {
-      const res = await this.fetchFn(url);
-      if (!res.ok) throw new Error(`PubMed HTTP ${res.status}`);
-      return res.text();
-    });
+    return (await this.fetchOk(url)).text();
   }
 
   /** A thin paper carrying only the id keyspace + url; title/abstract/pubTypes arrive via {@link hydrate}.
@@ -70,7 +78,7 @@ export class PubMedTool implements Source {
   }
 
   async search(query: string, limit: number): Promise<Paper[]> {
-    const url = `${EUTILS}/esearch.fcgi?db=pubmed&retmode=json&retmax=${limit}&term=${encodeURIComponent(query)}${this.key()}`;
+    const url = `${EUTILS}/esearch.fcgi?db=pubmed&retmode=json&sort=relevance&retmax=${limit}&term=${encodeURIComponent(query)}${this.key()}`;
     const data = await this.getJson<{ esearchresult?: { idlist?: string[] } }>(url);
     return (data.esearchresult?.idlist ?? []).map((id) => this.thin(id));
   }
