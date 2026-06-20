@@ -18,6 +18,11 @@ export const lucia = new Lucia(adapter, {
 		return {
 			discordId: attributes.discordId,
 			email: attributes.email,
+			// Surfaced so callers (e.g. the dashboard) read billing/timezone off the session user that
+			// validateSession already loads, instead of issuing a second findUnique for the same row.
+			timezone: attributes.timezone,
+			trialEndsAt: attributes.trialEndsAt,
+			subscriptionStatus: attributes.subscriptionStatus,
 		};
 	},
 });
@@ -36,5 +41,8 @@ declare module "lucia" {
 	interface DatabaseUserAttributes {
 		discordId: string;
 		email: string | null;
+		timezone: string;
+		trialEndsAt: Date | null;
+		subscriptionStatus: string;
 	}
 }

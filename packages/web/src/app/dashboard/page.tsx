@@ -20,7 +20,9 @@ export default async function DashboardPage() {
   const now = new Date();
   const windowStart = new Date(now.getTime() - FETCH_WINDOW_DAYS * DAY_MS);
 
-  const [moods, moodWindow, playtimes, streak, dbUser] = await Promise.all([
+  // The User row was already loaded by validateRequest() above — billing + timezone come off `user`
+  // (surfaced via lucia getUserAttributes), so this no longer re-fetches the same row.
+  const [moods, moodWindow, playtimes, streak] = await Promise.all([
     prisma.mood.findMany({
       where: { userId: user.discordId },
       orderBy: { createdAt: 'desc' },
@@ -39,10 +41,9 @@ export default async function DashboardPage() {
     prisma.xpEntry.count({
       where: { userId: user.discordId },
     }),
-    prisma.user.findUnique({ where: { id: user.id } }),
   ]);
 
-  const timezone = dbUser?.timezone ?? 'UTC';
+  const timezone = user.timezone ?? 'UTC';
 
   // Daily-average mood over the last 30 local days, bucketed in the user's timezone.
   const moodSeries = buildMoodSeries(moodWindow, timezone, CHART_WINDOW_DAYS, now);
@@ -56,11 +57,11 @@ export default async function DashboardPage() {
   // Derive billing display from the SAME shared decision the bot gates on (decideAccess), so the
   // dashboard and the coaching gate can never disagree — e.g. a lapsed trial reads "Not subscribed"
   // here exactly when the bot stops coaching.
-  const access = decideAccess(dbUser, new Date());
+  const access = decideAccess(user, new Date());
   const billing = {
     hasActiveAccess: access.hasActiveAccess,
     subscriptionStatus: access.subscriptionStatus,
-    trialEndsAt: dbUser?.trialEndsAt ? dbUser.trialEndsAt.toISOString() : null,
+    trialEndsAt: user.trialEndsAt ? user.trialEndsAt.toISOString() : null,
   };
 
   return (
