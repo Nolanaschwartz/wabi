@@ -6,10 +6,13 @@
     "build": "tsc",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "dev": "RESEARCH_PORT=3002 nest start --watch",
-    "start:prod": "node dist/main.js"
+    "start:prod": "node dist/main.js",
+    "eval:seed": "ts-node scripts/eval-seed.ts",
+    "eval:gate": "ts-node scripts/eval-gate.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.68",
+    "@langfuse/client": "^5.4.1",
     "@nestjs/common": "^11.0.0",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.0",

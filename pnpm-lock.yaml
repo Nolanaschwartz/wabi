@@ -98,6 +98,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^3.0.68
         version: 3.0.68(zod@4.4.3)
+      '@langfuse/client':
+        specifier: ^5.4.1
+        version: 5.4.1(@opentelemetry/api@1.9.1)
       '@nestjs/common':
         specifier: ^11.0.0
         version: 11.1.24(reflect-metadata@0.2.2)(rxjs@7.8.2)
