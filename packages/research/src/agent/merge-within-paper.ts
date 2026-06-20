@@ -1,6 +1,9 @@
+import { generate } from '@wabi/shared/generate';
+import { triageMaxTokens } from '../config';
 import { Candidate, Lens } from '../types';
 import { StepTrace } from './relevance-gate';
-import { isDuplicateInRun } from './dedup';
+import { SIM_FLOOR, SIM_CEIL, lexSim } from './dedup';
+import { stripFences } from './extract';
 
 export interface MergeResult {
   candidates: Candidate[];
@@ -8,35 +11,91 @@ export interface MergeResult {
   traces: StepTrace[];
 }
 
-/** Collapse the lens candidates from ONE paper into its distinct techniques. Same-technique
- * candidates surfaced by different lenses merge into one, accumulating the contributing lenses and a
- * distinct-lens agreement count (a robustness signal for the judge, slice 05). Reuses the in-run
- * dedup similarity (Jaccard prefilter + triage-LLM tie-break on the ambiguous middle) so merge and
- * cross-paper dedup judge sameness the same way. The first survivor's verbatim sourceText is kept. */
+/** Collapse the lens candidates from ONE paper into its distinct techniques, replacing the old O(n²)
+ * pairwise loop (which could fire 100+ triage-LLM calls per paper) with a single clustering call
+ * (slice 06). The shared lexical prefilter (slice 04) does the cheap work first: pairs at or above the
+ * ceiling are obviously the same and merge with NO LLM; pairs below the floor are obviously distinct
+ * and stay apart. Only candidates caught in the ambiguous band go to the model — ONE call that groups
+ * same-technique candidates. Each resulting cluster yields one survivor keeping the first member's
+ * verbatim sourceText, with the contributing lenses unioned and a distinct-lens agreement count (the
+ * robustness signal the judge consumes). Fail-open (ADR-0021): a clustering error or unparseable reply
+ * keeps the lexical clusters as-is and never drops a candidate. */
 export async function mergeWithinPaper(candidates: Candidate[]): Promise<MergeResult> {
-  const merged: Candidate[] = [];
-  let tokens = 0;
-  const traces: StepTrace[] = [];
+  const n = candidates.length;
+  if (n <= 1) return { candidates: candidates.map(survivor), tokens: 0, traces: [] };
 
-  for (const c of candidates) {
-    let target: Candidate | undefined;
-    for (const m of merged) {
-      const dd = await isDuplicateInRun(c, [m]);
-      tokens += dd.tokens;
-      if (dd.trace) traces.push(dd.trace);
-      if (dd.duplicate) { target = m; break; }
-    }
-
-    if (target) {
-      const lenses = new Set<Lens>(target.lenses ?? []);
-      if (c.lens) lenses.add(c.lens);
-      target.lenses = [...lenses];
-      target.lensAgreement = target.lenses.length;
-    } else {
-      const lenses = c.lens ? [c.lens] : [];
-      merged.push({ ...c, lenses, lensAgreement: lenses.length });
+  // Union-find over the paper's candidates. Obvious duplicates (≥ ceiling) union deterministically;
+  // ambiguous-band pairs only flag their endpoints for the one LLM clustering call below.
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+  const union = (a: number, b: number) => { parent[find(a)] = find(b); };
+  const ambiguous = new Array(n).fill(false);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const s = lexSim(candidates[i], candidates[j]);
+      if (s >= SIM_CEIL) union(i, j);
+      else if (s >= SIM_FLOOR) { ambiguous[i] = true; ambiguous[j] = true; }
     }
   }
 
-  return { candidates: merged, tokens, traces };
+  let tokens = 0;
+  let traces: StepTrace[] = [];
+  const involved = candidates.map((_, i) => i).filter((i) => ambiguous[i]);
+  if (involved.length > 1) {
+    const prompt =
+      `These coping/wellbeing techniques came from one paper. Group the ones that describe essentially ` +
+      `the SAME technique. Return a JSON array of groups, each group an array of the 0-based indices ` +
+      `that belong together (every index appears in exactly one group).\n` +
+      involved.map((g, local) => `${local}: ${candidates[g].title} — ${candidates[g].technique}`).join('\n');
+    try {
+      const out = await generate('research-triage', { prompt, maxOutputTokens: triageMaxTokens() });
+      tokens = out.usage?.totalTokens ?? 0;
+      traces = [{ input: prompt, output: out.text, model: out.model, latencyMs: out.latencyMs, usage: out.usage }];
+      for (const group of parseGroups(out.text, involved.length)) {
+        for (const local of group) if (local !== group[0]) union(involved[group[0]], involved[local]);
+      }
+    } catch {
+      // Fail-open: keep the lexical clusters as they stand; never drop a candidate on a clustering error.
+    }
+  }
+
+  // Assemble one survivor per union-find component, in first-seen order so the survivor's verbatim
+  // sourceText is the earliest member's.
+  const byRoot = new Map<number, Candidate[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    (byRoot.get(r) ?? byRoot.set(r, []).get(r)!).push(candidates[i]);
+  }
+  return { candidates: [...byRoot.values()].map(mergeCluster), tokens, traces };
+}
+
+/** A lone candidate as a survivor: its own lens, agreement 1. */
+function survivor(c: Candidate): Candidate {
+  const lenses = c.lens ? [c.lens] : [];
+  return { ...c, lenses, lensAgreement: lenses.length };
+}
+
+/** Collapse a cluster into one survivor: first member's verbatim sourceText, unioned lenses, count. */
+function mergeCluster(members: Candidate[]): Candidate {
+  const lenses = new Set<Lens>();
+  for (const m of members) for (const l of m.lenses ?? (m.lens ? [m.lens] : [])) lenses.add(l);
+  return { ...members[0], lenses: [...lenses], lensAgreement: lenses.size };
+}
+
+/** Parse the model's group array; a non-array / unparseable reply yields [] (→ no extra merges). Each
+ * group is filtered to in-range integer indices [0, n) — a hallucinated/out-of-range index would
+ * otherwise resolve to `undefined` and silently corrupt the union-find (the catch never fires because
+ * it doesn't throw). */
+function parseGroups(text: string, n: number): number[][] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripFences(text.trim()));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(Array.isArray)
+    .map((g) => (g as unknown[]).filter((i): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < n))
+    .filter((g) => g.length > 0);
 }
