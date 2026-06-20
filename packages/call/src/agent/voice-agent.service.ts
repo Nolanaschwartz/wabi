@@ -156,18 +156,24 @@ export class VoiceAgentService {
       // Stream the reply sentence-by-sentence: play each chunk while the NEXT one is already being
       // synthesized (playback paces ~realtime, so the synth overlaps for free). First audio now lands
       // after the first sentence's TTS instead of the whole reply's.
+      // prefetch(): kick off a chunk's synth and immediately attach a no-op catch, so an
+      // in-flight-but-never-awaited prefetch can't escalate to an unhandledRejection no matter how the
+      // loop exits (clean finish, barge-in/hangup break, or a rejecting sink.write throwing us into the
+      // catch below). The explicit `await pending` still surfaces real synth errors into that catch.
+      const prefetch = (text: string): Promise<Int16Array> => {
+        const p = this.synth(text);
+        p.catch(() => {});
+        return p;
+      };
       const chunks = splitForTts(reply);
       let pending: Promise<Int16Array> | null =
-        chunks.length > 0 ? this.synth(chunks[0]) : null;
+        chunks.length > 0 ? prefetch(chunks[0]) : null;
       for (let i = 0; i < chunks.length; i++) {
         const pcm = await pending!;
-        pending = i + 1 < chunks.length ? this.synth(chunks[i + 1]) : null;
+        pending = i + 1 < chunks.length ? prefetch(chunks[i + 1]) : null;
         if (session.cancel || session.closed) break;
         await session.sink.write(pcm, () => session.cancel || session.closed);
       }
-      // A prefetched-but-unplayed chunk (barge-in/hangup mid-reply) must not surface as an
-      // unhandled rejection.
-      pending?.catch(() => {});
     } catch (e) {
       this.log.error(`pipeline failed: ${(e as Error).message}`);
     }
