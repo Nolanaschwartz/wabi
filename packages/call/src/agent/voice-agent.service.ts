@@ -18,6 +18,8 @@ import { AudioSink } from './audio-sink';
 import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
 import { composeSystemPrompt } from './memory-context';
+import { TurnTimer } from './turn-timer';
+import { prefetchSynth, SynthFn } from './synth-prefetcher';
 
 // Publish the assistant track at the TTS's native rate (24kHz mono) and let LiveKit resample to the
 // Discord bridge's 48kHz/stereo with its native resampler (the bridge's AudioStream already requests a
@@ -109,7 +111,10 @@ export function takeSentences(buf: string): { sentences: string[]; rest: string 
 // ponytail: energy-based turn detection — tune to your room; swap for Silero if it mis-triggers.
 const TURN_OPTS: TurnDetectorOpts = {
   vadRms: 600,
-  hangoverMs: 800,
+  // Trailing silence before a turn dispatches. The `total` in respond()'s per-turn `latency` line is
+  // the tuning signal: lower this to cut response delay, but don't go below ~250–300ms or speakers
+  // who pause mid-thought get clipped.
+  hangoverMs: 400,
   minTurnMs: 400,
   bargeMs: 250,
   prerollMs: 300,
@@ -221,11 +226,13 @@ export class VoiceAgentService {
   private async respond(session: Session, utt: Utterance): Promise<void> {
     const ctrl = new AbortController();
     session.abort = ctrl; // so a barge-in can abort the LLM stream mid-think
+    const timer = new TurnTimer(); // t0 = utterance ready; marks each stage, logs one `latency` line
     try {
       const wav = buildWav(utt.pcm, utt.rate, utt.channels);
       const text = (
         await withTimeout(this.pipeline!.transcriber.transcribe(wav), STT_TIMEOUT_MS, 'transcribe')
       ).trim();
+      timer.mark('stt');
       if (!text) return;
       this.log.log(`heard: ${text}`);
       session.messages.push({ role: 'user', content: text });
@@ -235,15 +242,24 @@ export class VoiceAgentService {
       session.cancel = false;
 
       // Producer: stream the reply token-by-token; as each full sentence forms, queue its TEXT.
-      // Consumer: for each sentence, stream its TTS audio (PCM frames) straight to the sink as it
-      // arrives — first audio ~0.6s after the sentence forms, not after its whole synth. Sentences play
-      // sequentially; the LLM keeps generating during playback, so the only seam between them is the next
-      // sentence's ~0.6s TTS first-frame. ponytail: no synth-ahead overlap — add it only if seams sound off.
+      // Consumer: prefetchSynth synthesizes each sentence's TTS audio and plays its PCM frames straight
+      // to the sink — first audio ~0.6s after the sentence forms, not after its whole synth. It runs
+      // depth-1 ahead: sentence N+1 synthesizes while N is still playing, so the ~0.6s TTS first-frame no
+      // longer shows up as a gap at each sentence boundary.
       const queue = new AsyncQueue<string>();
       let full = '';
       let produceErr: unknown;
+      let firstSentence = true;
+      const pushSentence = (s: string): void => {
+        if (firstSentence) {
+          timer.mark('sentence');
+          firstSentence = false;
+        }
+        queue.push(s);
+      };
       const produce = (async () => {
         let buf = '';
+        let firstDelta = true;
         try {
           const stream = withIdleTimeout(
             this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
@@ -252,14 +268,18 @@ export class VoiceAgentService {
           );
           for await (const delta of stream) {
             if (session.cancel || session.closed) break;
+            if (firstDelta) {
+              timer.mark('llm');
+              firstDelta = false;
+            }
             full += delta;
             buf += delta;
             const { sentences, rest } = takeSentences(buf);
             buf = rest;
-            for (const s of sentences) queue.push(s);
+            for (const s of sentences) pushSentence(s);
           }
           const tail = buf.trim();
-          if (tail && !(session.cancel || session.closed)) queue.push(tail);
+          if (tail && !(session.cancel || session.closed)) pushSentence(tail);
         } catch (e) {
           produceErr = e;
         } finally {
@@ -267,22 +287,28 @@ export class VoiceAgentService {
         }
       })();
 
-      let firstChunk = true;
-      for await (const sentence of queue) {
-        if (session.cancel || session.closed) break;
-        // Stream this sentence's PCM frames to the sink as they arrive; idle-timeout guards a stalled TTS.
-        // The sink carries sub-frame remainders across writes (and across sentences), so playback stays
-        // frame-aligned and gap-free; only the reply's very first sample needs a fade to de-click the onset.
-        const frames = withIdleTimeout(
-          this.pipeline!.synthesizer.synthesizeStream(sentence, ctrl.signal),
+      // idle-timeout guards a stalled TTS per next(); the sink carries sub-frame remainders across writes
+      // (and across sentences), so playback stays frame-aligned and gap-free.
+      const synth: SynthFn = (text, sig) =>
+        withIdleTimeout(
+          this.pipeline!.synthesizer.synthesizeStream(text, sig),
           TTS_TIMEOUT_MS,
           'synthesize',
         );
+      let firstChunk = true;
+      for await (const frames of prefetchSynth(
+        queue,
+        synth,
+        ctrl.signal,
+        () => session.cancel || session.closed,
+      )) {
+        if (session.cancel || session.closed) break;
         for await (const pcm of frames) {
           if (session.cancel || session.closed) break;
           if (firstChunk) {
             fadeIn(pcm, FADE_SAMPLES); // de-click the reply onset (TTS stream starts mid-waveform)
             firstChunk = false;
+            timer.mark('audio');
             this.log.log('first audio');
           }
           // 24kHz mono straight to the sink; LiveKit resamples to the bridge's 48kHz/stereo.
@@ -303,6 +329,10 @@ export class VoiceAgentService {
         }
       }
       this.log.log(`reply: ${full}`);
+      if (!(session.cancel || session.closed)) {
+        timer.mark('done');
+        this.log.log(timer.render()); // one structured per-turn latency line on the clean path
+      }
     } catch (e) {
       if (session.cancel || session.closed) this.log.log('reply interrupted');
       else this.log.error(`pipeline failed: ${(e as Error).message}`);

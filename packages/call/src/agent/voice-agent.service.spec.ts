@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { VoiceAgentService } from './voice-agent.service';
 import { SpeechPipeline } from './speech';
 
@@ -174,6 +175,50 @@ describe('VoiceAgentService.respond — streaming playback', () => {
       expect(sink.write).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
+    }
+  });
+
+  it('emits exactly one structured latency line per turn on the clean path', async () => {
+    const logs: string[] = [];
+    const spy = jest.spyOn(Logger.prototype, 'log').mockImplementation((m: any) => {
+      logs.push(String(m));
+    });
+    try {
+      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
+      const svc = make(pipelineFor('One. Two. Three.'));
+
+      await (svc as any).respond(sessionWith(sink), utt());
+      await drain();
+
+      const latency = logs.filter((l) => l.startsWith('latency '));
+      expect(latency).toHaveLength(1);
+      expect(latency[0]).toMatch(/^latency stt=\d+ms llm_ttft=\d+ms sent1=\d+ms tts_first=\d+ms first_audio=\d+ms total=\d+ms$/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('emits no latency line when a barge-in cancels the turn', async () => {
+    const logs: string[] = [];
+    const spy = jest.spyOn(Logger.prototype, 'log').mockImplementation((m: any) => {
+      logs.push(String(m));
+    });
+    try {
+      const session = sessionWith({
+        write: jest.fn().mockImplementation(async () => {
+          session.cancel = true; // barge-in after the first frame plays
+        }),
+        clear: jest.fn(),
+        flush: jest.fn().mockResolvedValue(undefined),
+      });
+      const svc = make(pipelineFor('One. Two. Three.'));
+
+      await (svc as any).respond(session, utt());
+      await drain();
+
+      expect(logs.filter((l) => l.startsWith('latency '))).toEqual([]);
+    } finally {
+      spy.mockRestore();
     }
   });
 
