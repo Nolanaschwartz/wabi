@@ -54,6 +54,36 @@ async function* withIdleTimeout<T>(
   }
 }
 
+// Minimal single-producer/single-consumer async queue. push() never blocks; the async iterator yields
+// items in push order and ends after close(). Lets the producer (LLM stream → synth) run ahead while
+// the consumer (playback) drains in order — so a sentence plays the moment ITS synth resolves, not a
+// sentence behind, while later synths overlap.
+class AsyncQueue<T> {
+  private items: T[] = [];
+  private waiters: ((r: IteratorResult<T>) => void)[] = [];
+  private done = false;
+  push(item: T): void {
+    const w = this.waiters.shift();
+    if (w) w({ value: item, done: false });
+    else this.items.push(item);
+  }
+  close(): void {
+    this.done = true;
+    let w: ((r: IteratorResult<T>) => void) | undefined;
+    while ((w = this.waiters.shift())) w({ value: undefined as never, done: true });
+  }
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return {
+      next: (): Promise<IteratorResult<T>> => {
+        if (this.items.length)
+          return Promise.resolve({ value: this.items.shift() as T, done: false });
+        if (this.done) return Promise.resolve({ value: undefined as never, done: true });
+        return new Promise((res) => this.waiters.push(res));
+      },
+    };
+  }
+}
+
 // Pull COMPLETE sentences (runs ending in . ! ?) off the front of a streaming buffer, leaving the
 // trailing partial in `rest` for the next delta. The turn loop synth's each completed sentence while
 // the LLM keeps generating, so first audio lands after sentence 1. ponytail: naive punctuation split —
@@ -205,46 +235,50 @@ export class VoiceAgentService {
         return p;
       };
 
-      // Stream the reply token-by-token; as each full sentence forms, synth it and play sentences in
-      // order with ONE synth running a sentence ahead of playback (overlap). The LLM keeps generating
-      // while a sentence plays, so first audio lands after sentence 1 — not the whole reply.
+      // Producer: stream the reply token-by-token; as each full sentence forms, start its TTS and queue
+      // the synth promise. Consumer: play queued synths in order, each the moment IT resolves. So first
+      // audio lands after sentence 1's synth (not a sentence behind), while later sentences' synths and
+      // the LLM keep running in the background — playback stays gapless given ~1x-realtime TTS.
+      const queue = new AsyncQueue<Promise<Int16Array>>();
       let full = '';
-      let buf = '';
-      let pending: Promise<Int16Array> | null = null;
-      const playPending = async (): Promise<void> => {
-        if (!pending) return;
-        const p = pending;
-        pending = null;
-        const pcm = await p; // bounded by the TTS timeout in synth()
-        if (session.cancel || session.closed) return;
-        await session.sink.write(pcm, () => session.cancel || session.closed);
-      };
-
-      const stream = withIdleTimeout(
-        this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
-        LLM_TIMEOUT_MS,
-        'responder',
-      );
-      for await (const delta of stream) {
-        if (session.cancel || session.closed) break;
-        full += delta;
-        buf += delta;
-        const { sentences, rest } = takeSentences(buf);
-        buf = rest;
-        for (const s of sentences) {
-          const next = prefetch(s); // start this sentence's synth (overlaps prior playback + streaming)
-          await playPending(); // play the previously-prefetched sentence
-          if (session.cancel || session.closed) break;
-          pending = next;
+      let produceErr: unknown;
+      const produce = (async () => {
+        let buf = '';
+        try {
+          const stream = withIdleTimeout(
+            this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
+            LLM_TIMEOUT_MS,
+            'responder',
+          );
+          for await (const delta of stream) {
+            if (session.cancel || session.closed) break;
+            full += delta;
+            buf += delta;
+            const { sentences, rest } = takeSentences(buf);
+            buf = rest;
+            for (const s of sentences) queue.push(prefetch(s));
+          }
+          const tail = buf.trim();
+          if (tail && !(session.cancel || session.closed)) queue.push(prefetch(tail));
+        } catch (e) {
+          produceErr = e;
+        } finally {
+          queue.close();
         }
+      })();
+
+      let firstAudio = false;
+      for await (const synthP of queue) {
+        const pcm = await synthP; // bounded by the TTS timeout in synth()
+        if (session.cancel || session.closed) break;
+        if (!firstAudio) {
+          this.log.log('first audio');
+          firstAudio = true;
+        }
+        await session.sink.write(pcm, () => session.cancel || session.closed);
       }
-      // Flush: the last prefetched sentence, then any trailing partial that never hit punctuation.
-      await playPending();
-      const tail = buf.trim();
-      if (tail && !(session.cancel || session.closed)) {
-        pending = prefetch(tail);
-        await playPending();
-      }
+      await produce; // settle the producer (history/`full` are complete once it returns)
+      if (produceErr) throw produceErr;
 
       full = full.trim();
       if (full) {

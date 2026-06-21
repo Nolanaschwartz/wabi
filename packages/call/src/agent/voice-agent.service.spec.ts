@@ -91,6 +91,30 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     });
   });
 
+  it('plays sentence 1 without waiting for sentence 2 to be generated', async () => {
+    // Regression: playback must not run a sentence behind. Sentence 1 should synth+play as soon as it
+    // forms, even while the LLM is still (slowly) generating sentence 2.
+    let releaseSecond!: () => void;
+    const gate = new Promise<void>((r) => (releaseSecond = r));
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const pipeline = pipelineFor('x');
+    pipeline.responder.respondStream = jest.fn().mockImplementation(async function* () {
+      yield 'One. ';
+      await gate; // sentence 2 is withheld
+      yield 'Two.';
+    });
+    const svc = make(pipeline);
+
+    const done = (svc as any).respond(sessionWith(sink), utt());
+    await drain();
+    await drain();
+    expect(sink.write).toHaveBeenCalledTimes(1); // sentence 1 played before sentence 2 existed
+
+    releaseSecond();
+    await done;
+    expect(sink.write).toHaveBeenCalledTimes(2);
+  });
+
   it('does not emit an unhandledRejection when sink.write rejects mid-reply', async () => {
     // chunk[1]'s synth is prefetched then never awaited once sink.write rejects and we jump to catch.
     const sink = {
