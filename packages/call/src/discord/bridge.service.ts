@@ -145,16 +145,7 @@ export class DiscordBridge {
     const SILENCE = Buffer.alloc(FRAME_BYTES);
     const MAX_OUT = FRAME_BYTES * 25; // ~500ms safety cap on the real-audio backlog (drop oldest beyond)
     let outBuf = Buffer.alloc(0); // remote PCM awaiting playout
-    const pcmOut = new Readable({
-      read() {
-        if (outBuf.length >= FRAME_BYTES) {
-          this.push(outBuf.subarray(0, FRAME_BYTES));
-          outBuf = outBuf.subarray(FRAME_BYTES);
-        } else {
-          this.push(SILENCE);
-        }
-      },
-    });
+    const pcmOut = new Readable({ read() {} });
     this.outs.set(guildId, pcmOut);
     // NoSubscriberBehavior.Play: keep playing in the brief window before the voice connection is ready,
     // so the resource isn't torn down to idle during startup.
@@ -169,6 +160,20 @@ export class DiscordBridge {
     );
     player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
     connection.subscribe(player);
+
+    // Pace exactly one 20ms frame to the player per tick — real audio if buffered, else silence. Pushing
+    // at the consume rate (vs letting discord pull-ahead) stops silence from pre-buffering in the player
+    // pipeline ahead of real audio — that pre-buffer was ~1-2s of latency (agent->bridge was only ~150ms).
+    // Still never starves, so the player won't latch to idle.
+    const paceTimer = setInterval(() => {
+      if (closed) return;
+      if (outBuf.length >= FRAME_BYTES) {
+        pcmOut.push(outBuf.subarray(0, FRAME_BYTES));
+        outBuf = outBuf.subarray(FRAME_BYTES);
+      } else {
+        pcmOut.push(SILENCE);
+      }
+    }, 20);
 
     room.on(RoomEvent.TrackSubscribed, (t, _pub, participant) => {
       if (t.kind !== TrackKind.KIND_AUDIO) return;
@@ -193,6 +198,7 @@ export class DiscordBridge {
     this.sessions.set(guildId, () => {
       closed = true; // stop captures/forwarding before tearing down the source
       clearInterval(mixTimer);
+      clearInterval(paceTimer);
       try {
         connection.destroy();
       } catch {}
