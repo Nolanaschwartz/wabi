@@ -12,7 +12,7 @@ import {
 } from '@livekit/rtc-node';
 import { LivekitService } from '../livekit/livekit.service';
 import { loadAgentConfig } from './agent.config';
-import { buildWav, resampleToMono } from './audio.util';
+import { buildWav, resampleToMono, fadeIn } from './audio.util';
 import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
 import { AudioSink } from './audio-sink';
 import { ChatMessage, SpeechPipeline } from './speech';
@@ -21,6 +21,7 @@ import { composeSystemPrompt } from './memory-context';
 
 const OUT_RATE = 48000; // assistant publishes 48kHz mono
 const SYNTH_RATE = 24000; // TTS pcm response_format is 24kHz mono s16le (OpenAI /v1/audio/speech spec)
+const FADE_SAMPLES = Math.round(OUT_RATE * 0.008); // ~8ms fade-in to de-click each sentence's onset
 
 // STT/LLM/TTS calls hit self-hosted endpoints that can hang with no response. An unbounded await in
 // respond() strands it — its .finally never runs, so the detector stays suppressed and the agent goes
@@ -270,16 +271,19 @@ export class VoiceAgentService {
           TTS_TIMEOUT_MS,
           'synthesize',
         );
+        let onset = true; // fade in each sentence's first frame: the TTS stream starts mid-waveform
         for await (const pcm of frames) {
           if (session.cancel || session.closed) break;
-          if (!firstAudio) {
-            this.log.log('first audio');
-            firstAudio = true;
+          const out = resampleToMono(pcm, SYNTH_RATE, 1, OUT_RATE);
+          if (onset) {
+            fadeIn(out, FADE_SAMPLES);
+            onset = false;
+            if (!firstAudio) {
+              this.log.log('first audio');
+              firstAudio = true;
+            }
           }
-          await session.sink.write(
-            resampleToMono(pcm, SYNTH_RATE, 1, OUT_RATE),
-            () => session.cancel || session.closed,
-          );
+          await session.sink.write(out, () => session.cancel || session.closed);
         }
       }
       await produce; // settle the producer (history/`full` are complete once it returns)

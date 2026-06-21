@@ -4,6 +4,7 @@ import {
   resampleToMono,
   concatInt16,
   mixFrames,
+  fadeIn,
 } from './audio.util';
 
 describe('audio.util', () => {
@@ -33,6 +34,12 @@ describe('audio.util', () => {
   it('concats chunks in order', () => {
     const out = concatInt16([Int16Array.from([1, 2]), Int16Array.from([3])]);
     expect(Array.from(out)).toEqual([1, 2, 3]);
+  });
+
+  it('fades in the first n samples and leaves the rest untouched', () => {
+    const p = Int16Array.from([1000, 1000, 1000, 1000]);
+    fadeIn(p, 2); // ramp first 2 by i/2 -> 0, 0.5; rest unchanged
+    expect(Array.from(p)).toEqual([0, 500, 1000, 1000]);
   });
 
   describe('mixFrames', () => {

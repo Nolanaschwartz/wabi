@@ -101,6 +101,14 @@ export function resampleToMono(
   return out;
 }
 
+// Linear fade-in over the first n samples (in place) to kill the click when streamed audio starts
+// mid-waveform with no leading silence (the TTS stream jumps straight to full amplitude). Returns pcm.
+export function fadeIn(pcm: Int16Array, n: number): Int16Array {
+  const k = Math.min(n, pcm.length);
+  for (let i = 0; i < k; i++) pcm[i] = Math.round((pcm[i] * i) / k);
+  return pcm;
+}
+
 export function rms(pcm: Int16Array): number {
   let sum = 0;
   for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
