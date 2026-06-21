@@ -20,7 +20,9 @@ export interface Responder {
 }
 
 export interface Synthesizer {
-  synthesize(text: string): Promise<Buffer>; // returns 16-bit PCM WAV bytes
+  // Streams 16-bit mono PCM (at SYNTH_RATE) as it's synthesized — first frame in ~0.6s — so playback
+  // starts before the whole utterance renders. `signal` aborts on barge-in/hangup.
+  synthesizeStream(text: string, signal?: AbortSignal): AsyncIterable<Int16Array>;
 }
 
 export interface SpeechPipeline {

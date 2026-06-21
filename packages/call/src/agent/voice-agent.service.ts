@@ -12,7 +12,7 @@ import {
 } from '@livekit/rtc-node';
 import { LivekitService } from '../livekit/livekit.service';
 import { loadAgentConfig } from './agent.config';
-import { buildWav, parseWav, resampleToMono } from './audio.util';
+import { buildWav, resampleToMono } from './audio.util';
 import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
 import { AudioSink } from './audio-sink';
 import { ChatMessage, SpeechPipeline } from './speech';
@@ -20,6 +20,7 @@ import { createOpenAiPipeline } from './openai-speech';
 import { composeSystemPrompt } from './memory-context';
 
 const OUT_RATE = 48000; // assistant publishes 48kHz mono
+const SYNTH_RATE = 24000; // TTS pcm response_format is 24kHz mono s16le (OpenAI /v1/audio/speech spec)
 
 // STT/LLM/TTS calls hit self-hosted endpoints that can hang with no response. An unbounded await in
 // respond() strands it — its .finally never runs, so the detector stays suppressed and the agent goes
@@ -227,19 +228,12 @@ export class VoiceAgentService {
       // interrupt. From here, only a barge DURING playback (below) stops the reply.
       session.cancel = false;
 
-      // prefetch(): start a sentence's TTS and attach a no-op catch, so an in-flight-but-unplayed synth
-      // (barge/hangup mid-reply) can't surface as an unhandledRejection.
-      const prefetch = (chunk: string): Promise<Int16Array> => {
-        const p = this.synth(chunk);
-        p.catch(() => {});
-        return p;
-      };
-
-      // Producer: stream the reply token-by-token; as each full sentence forms, start its TTS and queue
-      // the synth promise. Consumer: play queued synths in order, each the moment IT resolves. So first
-      // audio lands after sentence 1's synth (not a sentence behind), while later sentences' synths and
-      // the LLM keep running in the background — playback stays gapless given ~1x-realtime TTS.
-      const queue = new AsyncQueue<Promise<Int16Array>>();
+      // Producer: stream the reply token-by-token; as each full sentence forms, queue its TEXT.
+      // Consumer: for each sentence, stream its TTS audio (PCM frames) straight to the sink as it
+      // arrives — first audio ~0.6s after the sentence forms, not after its whole synth. Sentences play
+      // sequentially; the LLM keeps generating during playback, so the only seam between them is the next
+      // sentence's ~0.6s TTS first-frame. ponytail: no synth-ahead overlap — add it only if seams sound off.
+      const queue = new AsyncQueue<string>();
       let full = '';
       let produceErr: unknown;
       const produce = (async () => {
@@ -256,10 +250,10 @@ export class VoiceAgentService {
             buf += delta;
             const { sentences, rest } = takeSentences(buf);
             buf = rest;
-            for (const s of sentences) queue.push(prefetch(s));
+            for (const s of sentences) queue.push(s);
           }
           const tail = buf.trim();
-          if (tail && !(session.cancel || session.closed)) queue.push(prefetch(tail));
+          if (tail && !(session.cancel || session.closed)) queue.push(tail);
         } catch (e) {
           produceErr = e;
         } finally {
@@ -268,14 +262,25 @@ export class VoiceAgentService {
       })();
 
       let firstAudio = false;
-      for await (const synthP of queue) {
-        const pcm = await synthP; // bounded by the TTS timeout in synth()
+      for await (const sentence of queue) {
         if (session.cancel || session.closed) break;
-        if (!firstAudio) {
-          this.log.log('first audio');
-          firstAudio = true;
+        // Stream this sentence's PCM frames to the sink as they arrive; idle-timeout guards a stalled TTS.
+        const frames = withIdleTimeout(
+          this.pipeline!.synthesizer.synthesizeStream(sentence, ctrl.signal),
+          TTS_TIMEOUT_MS,
+          'synthesize',
+        );
+        for await (const pcm of frames) {
+          if (session.cancel || session.closed) break;
+          if (!firstAudio) {
+            this.log.log('first audio');
+            firstAudio = true;
+          }
+          await session.sink.write(
+            resampleToMono(pcm, SYNTH_RATE, 1, OUT_RATE),
+            () => session.cancel || session.closed,
+          );
         }
-        await session.sink.write(pcm, () => session.cancel || session.closed);
       }
       await produce; // settle the producer (history/`full` are complete once it returns)
       if (produceErr) throw produceErr;
@@ -295,13 +300,5 @@ export class VoiceAgentService {
       ctrl.abort(); // close the LLM stream if a barge/error left it open
       if (session.abort === ctrl) session.abort = undefined;
     }
-  }
-
-  // Synthesize one text chunk to OUT_RATE mono PCM.
-  private async synth(text: string): Promise<Int16Array> {
-    const out = parseWav(
-      await withTimeout(this.pipeline!.synthesizer.synthesize(text), TTS_TIMEOUT_MS, 'synthesize'),
-    );
-    return resampleToMono(out.data, out.rate, out.channels, OUT_RATE);
   }
 }

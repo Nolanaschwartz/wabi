@@ -79,7 +79,10 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
     },
 
     synthesizer: {
-      async synthesize(text: string): Promise<Buffer> {
+      async *synthesizeStream(
+        text: string,
+        signal?: AbortSignal,
+      ): AsyncIterable<Int16Array> {
         const res = await fetch(`${cfg.tts.url}/v1/audio/speech`, {
           method: 'POST',
           headers: {
@@ -90,11 +93,35 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
             model: cfg.tts.model,
             voice: cfg.tts.voice,
             input: text,
-            response_format: 'wav',
+            response_format: 'pcm', // raw 16-bit mono LE @ SYNTH_RATE — streamable, no header
+            stream: true,
           }),
+          signal,
         });
         if (!res.ok) throw new Error(`TTS ${res.status}: ${await res.text()}`);
-        return Buffer.from(await res.arrayBuffer());
+        if (!res.body) return;
+
+        // Decode the chunked PCM byte stream into Int16Array frames, carrying a split sample across reads.
+        const reader = res.body.getReader();
+        let carry: Buffer = Buffer.alloc(0);
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            const buf = carry.length
+              ? Buffer.concat([carry, Buffer.from(value)])
+              : Buffer.from(value);
+            const usable = buf.length - (buf.length % 2);
+            if (usable > 0) {
+              const samples = new Int16Array(usable / 2);
+              for (let i = 0; i < samples.length; i++) samples[i] = buf.readInt16LE(i * 2);
+              yield samples;
+            }
+            carry = usable < buf.length ? buf.subarray(usable) : Buffer.alloc(0);
+          }
+        } finally {
+          reader.cancel().catch(() => {});
+        }
       },
     },
   };
