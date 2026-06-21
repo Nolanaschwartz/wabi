@@ -46,6 +46,28 @@ describe('AudioSink', () => {
     expect(src.frames[1].first).toBe(22); // would be 11 if we sent a shared view
   });
 
+  it('buffers a sub-frame remainder across writes instead of emitting partial frames', async () => {
+    const src = new FakeSource();
+    const sink = new AudioSink(src as any, 48000, 1); // 960/frame
+    await sink.write(new Int16Array(960 + 100)); // 1 full frame, 100 held
+    expect(src.frames.length).toBe(1);
+    await sink.write(new Int16Array(860)); // 100 + 860 = 960 -> 1 more full frame
+    expect(src.frames.length).toBe(2);
+    expect(src.frames.every((f) => f.len === 960)).toBe(true);
+  });
+
+  it('flush emits the trailing partial frame (and nothing when empty)', async () => {
+    const src = new FakeSource();
+    const sink = new AudioSink(src as any, 48000, 1);
+    await sink.write(new Int16Array(500)); // < 1 frame, all held
+    expect(src.frames.length).toBe(0);
+    await sink.flush();
+    expect(src.frames.length).toBe(1);
+    expect(src.frames[0].len).toBe(500);
+    await sink.flush(); // nothing left
+    expect(src.frames.length).toBe(1);
+  });
+
   it('stops mid-write when shouldStop flips (barge-in)', async () => {
     const src = new FakeSource();
     const sink = new AudioSink(src as any, 48000, 1);

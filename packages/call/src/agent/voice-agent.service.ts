@@ -262,29 +262,30 @@ export class VoiceAgentService {
         }
       })();
 
-      let firstAudio = false;
+      let firstChunk = true;
       for await (const sentence of queue) {
         if (session.cancel || session.closed) break;
         // Stream this sentence's PCM frames to the sink as they arrive; idle-timeout guards a stalled TTS.
+        // The sink carries sub-frame remainders across writes (and across sentences), so playback stays
+        // frame-aligned and gap-free; only the reply's very first sample needs a fade to de-click the onset.
         const frames = withIdleTimeout(
           this.pipeline!.synthesizer.synthesizeStream(sentence, ctrl.signal),
           TTS_TIMEOUT_MS,
           'synthesize',
         );
-        let onset = true; // fade in each sentence's first frame: the TTS stream starts mid-waveform
         for await (const pcm of frames) {
           if (session.cancel || session.closed) break;
           const out = resampleToMono(pcm, SYNTH_RATE, 1, OUT_RATE);
-          if (onset) {
-            fadeIn(out, FADE_SAMPLES);
-            onset = false;
-            if (!firstAudio) {
-              this.log.log('first audio');
-              firstAudio = true;
-            }
+          if (firstChunk) {
+            fadeIn(out, FADE_SAMPLES); // de-click the reply onset (TTS stream starts mid-waveform)
+            firstChunk = false;
+            this.log.log('first audio');
           }
           await session.sink.write(out, () => session.cancel || session.closed);
         }
+      }
+      if (!(session.cancel || session.closed)) {
+        await session.sink.flush(() => session.cancel || session.closed); // emit the final sub-frame tail
       }
       await produce; // settle the producer (history/`full` are complete once it returns)
       if (produceErr) throw produceErr;

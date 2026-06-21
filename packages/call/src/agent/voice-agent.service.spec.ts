@@ -54,7 +54,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
   };
 
   it('plays every sentence in order on the clean path and leaks nothing', async () => {
-    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
     const svc = make(pipelineFor('One. Two. Three.'));
 
     await (svc as any).respond(sessionWith(sink), utt());
@@ -65,7 +65,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
   });
 
   it('assembles sentences that span multiple stream deltas', async () => {
-    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
     const session = sessionWith(sink);
     const pipeline = pipelineFor('x');
     pipeline.responder.respondStream = streamOf('Hello the', 're. How ', 'are you?');
@@ -86,7 +86,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     // as it forms, even while the LLM is still (slowly) generating sentence 2.
     let releaseSecond!: () => void;
     const gate = new Promise<void>((r) => (releaseSecond = r));
-    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
     const pipeline = pipelineFor('x');
     pipeline.responder.respondStream = jest.fn().mockImplementation(async function* () {
       yield 'One. ';
@@ -109,6 +109,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     const sink = {
       write: jest.fn().mockRejectedValue(new Error('sink torn down')),
       clear: jest.fn(),
+      flush: jest.fn().mockResolvedValue(undefined),
     };
     const svc = make(pipelineFor('One. Two. Three.'));
 
@@ -126,6 +127,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
         session.cancel = true; // barge-in after the first frame plays
       }),
       clear: jest.fn(),
+      flush: jest.fn().mockResolvedValue(undefined),
     });
     const svc = make(pipelineFor('One. Two. Three.'));
 
@@ -136,7 +138,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
   });
 
   it('clears a barge that fired during STT so the reply still plays', async () => {
-    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
     const session = sessionWith(sink);
     const pipeline = pipelineFor('One. Two. Three.');
     (pipeline.transcriber.transcribe as jest.Mock).mockImplementation(async () => {
@@ -159,7 +161,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
       pipeline.synthesizer.synthesizeStream = jest.fn().mockReturnValue({
         [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
       });
-      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
       const svc = make(pipeline);
 
       let settled = false;
@@ -182,7 +184,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
       pipeline.responder.respondStream = jest.fn().mockReturnValue({
         [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
       });
-      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
       const svc = make(pipeline);
 
       let settled = false;
