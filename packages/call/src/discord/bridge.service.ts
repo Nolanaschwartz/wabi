@@ -4,6 +4,7 @@ import {
   createAudioPlayer,
   createAudioResource,
   StreamType,
+  NoSubscriberBehavior,
   EndBehaviorType,
 } from '@discordjs/voice';
 import { VoiceBasedChannel } from 'discord.js';
@@ -139,7 +140,11 @@ export class DiscordBridge {
     // LiveKit -> Discord: feed remote participant PCM into one raw stream the player drains.
     const pcmOut = new Readable({ read() {} });
     this.outs.set(guildId, pcmOut);
-    const player = createAudioPlayer();
+    // NoSubscriberBehavior.Play: keep playing even in the brief window before the voice connection is
+    // ready, so the resource isn't torn down to idle during startup.
+    const player = createAudioPlayer({
+      behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+    });
     player.on('error', (e) =>
       this.log.error(`discord player error: ${e.message}`),
     );
@@ -148,6 +153,16 @@ export class DiscordBridge {
     );
     player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
     connection.subscribe(player);
+
+    // Silence heartbeat: a Raw stream that starves (no remote audio yet, or gaps between replies) ends
+    // and the player latches to idle forever, dropping all later audio. Push a 20ms silence frame
+    // whenever no real frame arrived in the last tick, so pcmOut never starves and the player stays live.
+    const SILENCE = Buffer.alloc(FRAME_SAMPLES * CHANNELS * 2); // 20ms @ 48kHz stereo s16le
+    let lastRealPush = 0;
+    const keepAlive = setInterval(() => {
+      if (closed) return;
+      if (Date.now() - lastRealPush >= 20) pcmOut.push(SILENCE);
+    }, 20);
 
     room.on(RoomEvent.TrackSubscribed, (t, _pub, participant) => {
       if (t.kind !== TrackKind.KIND_AUDIO) return;
@@ -162,6 +177,7 @@ export class DiscordBridge {
           if (closed) break;
           // copy: rtc-node may reuse the frame buffer after we yield.
           pcmOut.push(Buffer.copyBytesFrom(frame.data));
+          lastRealPush = Date.now(); // suppress the heartbeat while real audio is flowing
         }
       })().catch((e) => this.log.warn(`livekit stream: ${e.message}`));
     });
@@ -170,6 +186,7 @@ export class DiscordBridge {
     this.sessions.set(guildId, () => {
       closed = true; // stop captures/forwarding before tearing down the source
       clearInterval(mixTimer);
+      clearInterval(keepAlive);
       try {
         connection.destroy();
       } catch {}
