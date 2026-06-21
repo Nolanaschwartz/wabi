@@ -151,7 +151,10 @@ export class VoiceAgentService {
       dynacast: true,
     });
 
-    const source = new AudioSource(SYNTH_RATE, 1);
+    // queueSize 100ms (default 1000ms): the reply is fully synthesized before we write it, so a deep
+    // playout buffer just adds latency between writing and hearing. A small buffer keeps it snappy; the
+    // data is all ready so it won't underrun.
+    const source = new AudioSource(SYNTH_RATE, 1, 100);
     const track = LocalAudioTrack.createAudioTrack('assistant', source);
     const opts = new TrackPublishOptions();
     opts.source = TrackSource.SOURCE_MICROPHONE;
