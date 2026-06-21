@@ -79,6 +79,10 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
     },
 
     synthesizer: {
+      // NOTE: the server's `stream:true` pcm path produces distorted audio (its CUDA-graph streaming
+      // mode); its non-streaming pcm/wav output is clean. So fetch the full sentence (one request per
+      // sentence — sentence-level pipelining still overlaps TTS with LLM generation) and yield it once.
+      // If the server's streaming path is ever fixed, switch back to chunked reads with stream:true.
       async *synthesizeStream(
         text: string,
         signal?: AbortSignal,
@@ -93,35 +97,17 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
             model: cfg.tts.model,
             voice: cfg.tts.voice,
             input: text,
-            response_format: 'pcm', // raw 16-bit mono LE @ SYNTH_RATE — streamable, no header
-            stream: true,
+            response_format: 'pcm', // raw 16-bit mono LE @ SYNTH_RATE, no header
           }),
           signal,
         });
         if (!res.ok) throw new Error(`TTS ${res.status}: ${await res.text()}`);
-        if (!res.body) return;
-
-        // Decode the chunked PCM byte stream into Int16Array frames, carrying a split sample across reads.
-        const reader = res.body.getReader();
-        let carry: Buffer = Buffer.alloc(0);
-        try {
-          for (;;) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            const buf = carry.length
-              ? Buffer.concat([carry, Buffer.from(value)])
-              : Buffer.from(value);
-            const usable = buf.length - (buf.length % 2);
-            if (usable > 0) {
-              const samples = new Int16Array(usable / 2);
-              for (let i = 0; i < samples.length; i++) samples[i] = buf.readInt16LE(i * 2);
-              yield samples;
-            }
-            carry = usable < buf.length ? buf.subarray(usable) : Buffer.alloc(0);
-          }
-        } finally {
-          reader.cancel().catch(() => {});
-        }
+        const bytes = Buffer.from(await res.arrayBuffer());
+        const n = bytes.length - (bytes.length % 2);
+        if (n <= 0) return;
+        const pcm = new Int16Array(n / 2);
+        for (let i = 0; i < pcm.length; i++) pcm[i] = bytes.readInt16LE(i * 2);
+        yield pcm;
       },
     },
   };
