@@ -27,7 +27,10 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
     },
 
     responder: {
-      async respond(messages: ChatMessage[]): Promise<string> {
+      async *respondStream(
+        messages: ChatMessage[],
+        signal?: AbortSignal,
+      ): AsyncIterable<string> {
         const res = await fetch(`${cfg.llm.url}/v1/chat/completions`, {
           method: 'POST',
           headers: {
@@ -38,10 +41,40 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
             model: cfg.llm.model,
             messages,
             temperature: 0.6,
+            stream: true,
           }),
+          signal,
         });
         if (!res.ok) throw new Error(`LLM ${res.status}: ${await res.text()}`);
-        return (await res.json()).choices?.[0]?.message?.content ?? '';
+        if (!res.body) return;
+
+        // Parse the OpenAI SSE stream: lines of `data: {json}`, terminated by `data: [DONE]`.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf('\n')) >= 0) {
+              const line = buf.slice(0, nl).trim();
+              buf = buf.slice(nl + 1);
+              if (!line.startsWith('data:')) continue; // skip blank lines / comments
+              const data = line.slice(5).trim();
+              if (data === '[DONE]') return;
+              try {
+                const delta = JSON.parse(data).choices?.[0]?.delta?.content;
+                if (delta) yield delta as string;
+              } catch {
+                /* keepalive or partial frame — ignore */
+              }
+            }
+          }
+        } finally {
+          reader.cancel().catch(() => {});
+        }
       },
     },
 

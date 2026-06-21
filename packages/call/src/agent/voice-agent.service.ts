@@ -38,13 +38,38 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
-// Split a reply into sentence-ish chunks so TTS can start playing the first sentence while the rest
-// is still being synthesized. ponytail: naive punctuation split — "3.14"/"Dr." over-split into two
-// chunks, a harmless extra TTS boundary; swap for an NLP segmenter only if that ever sounds wrong.
-export function splitForTts(text: string): string[] {
-  return (text.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) ?? [text])
-    .map((s) => s.trim())
-    .filter(Boolean);
+// Like withTimeout but per-step over a stream: each next() must arrive within `ms` (an IDLE timeout),
+// so a stalled LLM stream can't strand respond() forever. The underlying error (HTTP/abort) also
+// propagates — abort fires when a barge cancels the turn.
+async function* withIdleTimeout<T>(
+  it: AsyncIterable<T>,
+  ms: number,
+  label: string,
+): AsyncGenerator<T> {
+  const iter = it[Symbol.asyncIterator]();
+  for (;;) {
+    const r = await withTimeout(Promise.resolve(iter.next()), ms, label);
+    if (r.done) return;
+    yield r.value;
+  }
+}
+
+// Pull COMPLETE sentences (runs ending in . ! ?) off the front of a streaming buffer, leaving the
+// trailing partial in `rest` for the next delta. The turn loop synth's each completed sentence while
+// the LLM keeps generating, so first audio lands after sentence 1. ponytail: naive punctuation split —
+// "3.14"/"Dr." over-split into two chunks (a harmless extra TTS boundary); swap for an NLP segmenter
+// only if that ever sounds wrong.
+export function takeSentences(buf: string): { sentences: string[]; rest: string } {
+  const sentences: string[] = [];
+  const re = /[^.!?]*[.!?]+/g;
+  let end = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(buf)) !== null) {
+    const s = m[0].trim();
+    if (s) sentences.push(s);
+    end = re.lastIndex;
+  }
+  return { sentences, rest: buf.slice(end) };
 }
 
 // ponytail: energy-based turn detection — tune to your room; swap for Silero if it mis-triggers.
@@ -63,6 +88,7 @@ interface Session {
   messages: ChatMessage[];
   cancel: boolean; // set on barge-in; AudioSink.write stops on it
   closed: boolean;
+  abort?: AbortController; // in-flight reply's LLM stream; barge-in aborts it
 }
 
 @Injectable()
@@ -143,6 +169,7 @@ export class VoiceAgentService {
       if ('barge' in event) {
         this.log.log('barge-in — cutting off assistant');
         session.cancel = true;
+        session.abort?.abort(); // stop the LLM stream even if it's mid-think (no delta to break on)
         session.sink.clear();
         continue;
       }
@@ -155,6 +182,8 @@ export class VoiceAgentService {
   }
 
   private async respond(session: Session, utt: Utterance): Promise<void> {
+    const ctrl = new AbortController();
+    session.abort = ctrl; // so a barge-in can abort the LLM stream mid-think
     try {
       const wav = buildWav(utt.pcm, utt.rate, utt.channels);
       const text = (
@@ -162,48 +191,75 @@ export class VoiceAgentService {
       ).trim();
       if (!text) return;
       this.log.log(`heard: ${text}`);
-
       session.messages.push({ role: 'user', content: text });
-      const reply = await withTimeout(
-        this.pipeline!.responder.respond(session.messages),
-        LLM_TIMEOUT_MS,
-        'responder',
-      );
-      session.messages.push({ role: 'assistant', content: reply });
-      if (session.messages.length > 11) {
-        session.messages.splice(1, session.messages.length - 11); // keep system + last 10
-      }
-      this.log.log(`reply: ${reply}`);
 
-      // Clear any barge that fired while we were still generating: the detector is suppressed from the
-      // moment a turn is dispatched, but the assistant isn't audible until now, so those barges had
-      // nothing to interrupt. Reset here so only a barge DURING the playback below stops this reply —
-      // resetting at dispatch let a during-generation barge stick and drop the whole reply.
+      // Clear any barge that fired during STT — the assistant isn't audible yet, so it had nothing to
+      // interrupt. From here, only a barge DURING playback (below) stops the reply.
       session.cancel = false;
 
-      // Stream the reply sentence-by-sentence: play each chunk while the NEXT one is already being
-      // synthesized (playback paces ~realtime, so the synth overlaps for free). First audio now lands
-      // after the first sentence's TTS instead of the whole reply's.
-      // prefetch(): kick off a chunk's synth and immediately attach a no-op catch, so an
-      // in-flight-but-never-awaited prefetch can't escalate to an unhandledRejection no matter how the
-      // loop exits (clean finish, barge-in/hangup break, or a rejecting sink.write throwing us into the
-      // catch below). The explicit `await pending` still surfaces real synth errors into that catch.
-      const prefetch = (text: string): Promise<Int16Array> => {
-        const p = this.synth(text);
+      // prefetch(): start a sentence's TTS and attach a no-op catch, so an in-flight-but-unplayed synth
+      // (barge/hangup mid-reply) can't surface as an unhandledRejection.
+      const prefetch = (chunk: string): Promise<Int16Array> => {
+        const p = this.synth(chunk);
         p.catch(() => {});
         return p;
       };
-      const chunks = splitForTts(reply);
-      let pending: Promise<Int16Array> | null =
-        chunks.length > 0 ? prefetch(chunks[0]) : null;
-      for (let i = 0; i < chunks.length; i++) {
-        const pcm = await pending!;
-        pending = i + 1 < chunks.length ? prefetch(chunks[i + 1]) : null;
-        if (session.cancel || session.closed) break;
+
+      // Stream the reply token-by-token; as each full sentence forms, synth it and play sentences in
+      // order with ONE synth running a sentence ahead of playback (overlap). The LLM keeps generating
+      // while a sentence plays, so first audio lands after sentence 1 — not the whole reply.
+      let full = '';
+      let buf = '';
+      let pending: Promise<Int16Array> | null = null;
+      const playPending = async (): Promise<void> => {
+        if (!pending) return;
+        const p = pending;
+        pending = null;
+        const pcm = await p; // bounded by the TTS timeout in synth()
+        if (session.cancel || session.closed) return;
         await session.sink.write(pcm, () => session.cancel || session.closed);
+      };
+
+      const stream = withIdleTimeout(
+        this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
+        LLM_TIMEOUT_MS,
+        'responder',
+      );
+      for await (const delta of stream) {
+        if (session.cancel || session.closed) break;
+        full += delta;
+        buf += delta;
+        const { sentences, rest } = takeSentences(buf);
+        buf = rest;
+        for (const s of sentences) {
+          const next = prefetch(s); // start this sentence's synth (overlaps prior playback + streaming)
+          await playPending(); // play the previously-prefetched sentence
+          if (session.cancel || session.closed) break;
+          pending = next;
+        }
       }
+      // Flush: the last prefetched sentence, then any trailing partial that never hit punctuation.
+      await playPending();
+      const tail = buf.trim();
+      if (tail && !(session.cancel || session.closed)) {
+        pending = prefetch(tail);
+        await playPending();
+      }
+
+      full = full.trim();
+      if (full) {
+        session.messages.push({ role: 'assistant', content: full });
+        if (session.messages.length > 11) {
+          session.messages.splice(1, session.messages.length - 11); // keep system + last 10
+        }
+      }
+      this.log.log(`reply: ${full}`);
     } catch (e) {
-      this.log.error(`pipeline failed: ${(e as Error).message}`);
+      if (session.cancel || session.closed) this.log.log('reply interrupted');
+      else this.log.error(`pipeline failed: ${(e as Error).message}`);
+    } finally {
+      ctrl.abort(); // close the LLM stream if a barge/error left it open
+      if (session.abort === ctrl) session.abort = undefined;
     }
   }
 

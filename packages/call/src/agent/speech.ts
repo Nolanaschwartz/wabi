@@ -11,7 +11,12 @@ export interface Transcriber {
 }
 
 export interface Responder {
-  respond(messages: ChatMessage[]): Promise<string>;
+  // Streams the reply as text deltas so the turn loop can synth+play sentence-by-sentence (first audio
+  // after sentence 1, not the whole reply). `signal` aborts the upstream call on barge-in/hangup.
+  respondStream(
+    messages: ChatMessage[],
+    signal?: AbortSignal,
+  ): AsyncIterable<string>;
 }
 
 export interface Synthesizer {

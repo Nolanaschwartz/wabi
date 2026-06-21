@@ -6,14 +6,20 @@ import { SpeechPipeline } from './speech';
 const wavOf = (samples = 480) =>
   buildWav(new Int16Array(samples).fill(1), 24000, 1);
 
-// Pipeline that transcribes to a multi-sentence utterance and synth's every chunk.
-// rejectChunk: 0-based chunk index whose TTS synth should reject (default: none) — used to
-// arm a *prefetched-but-never-awaited* chunk so a leaked promise would surface as unhandled.
+// A responder.respondStream mock that yields the given text deltas in order.
+const streamOf = (...deltas: string[]) =>
+  jest.fn().mockImplementation(async function* () {
+    for (const d of deltas) yield d;
+  });
+
+// Pipeline whose responder streams `reply` (as one delta) and synth's every sentence.
+// rejectChunk: 0-based synth call whose TTS should reject (default: none) — used to arm a
+// *prefetched-but-never-awaited* chunk so a leaked promise would surface as unhandled.
 const pipelineFor = (reply: string, rejectChunk = -1): SpeechPipeline => {
   let n = 0;
   return {
     transcriber: { transcribe: jest.fn().mockResolvedValue('hey') },
-    responder: { respond: jest.fn().mockResolvedValue(reply) },
+    responder: { respondStream: streamOf(reply) },
     synthesizer: {
       synthesize: jest.fn().mockImplementation(async () =>
         n++ === rejectChunk
@@ -21,10 +27,10 @@ const pipelineFor = (reply: string, rejectChunk = -1): SpeechPipeline => {
           : wavOf(),
       ),
     },
-  };
+  } as unknown as SpeechPipeline;
 };
 
-// Minimal session: respond() only touches sink, messages, cancel, closed.
+// Minimal session: respond() only touches sink, messages, cancel, closed, abort.
 const sessionWith = (sink: any) =>
   ({
     sink,
@@ -35,7 +41,13 @@ const sessionWith = (sink: any) =>
 
 const utt = () => ({ pcm: new Int16Array(160), rate: 16000, channels: 1 }) as any;
 
-describe('VoiceAgentService.respond — prefetch never leaks', () => {
+const make = (pipeline: SpeechPipeline) => {
+  const svc = new VoiceAgentService({} as any);
+  svc.setPipeline(pipeline);
+  return svc;
+};
+
+describe('VoiceAgentService.respond — streaming playback', () => {
   let rejections: unknown[];
   const onRejection = (r: unknown) => rejections.push(r);
 
@@ -45,24 +57,42 @@ describe('VoiceAgentService.respond — prefetch never leaks', () => {
   });
   afterEach(() => process.off('unhandledRejection', onRejection));
 
-  // Let any unhandled-rejection macrotasks fire before we assert. Node emits
-  // 'unhandledRejection' only after the microtask queue drains with no handler attached,
-  // so a couple of macrotask turns make a real leak deterministically observable.
+  // Let any unhandled-rejection macrotasks fire before we assert.
   const drain = async () => {
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
   };
 
-  const make = (pipeline: SpeechPipeline) => {
-    const svc = new VoiceAgentService({} as any);
-    svc.setPipeline(pipeline);
-    return svc;
-  };
+  it('plays every sentence in order on the clean path and leaks nothing', async () => {
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const svc = make(pipelineFor('One. Two. Three.'));
+
+    await (svc as any).respond(sessionWith(sink), utt());
+    await drain();
+
+    expect(sink.write).toHaveBeenCalledTimes(3);
+    expect(rejections).toEqual([]);
+  });
+
+  it('assembles sentences that span multiple stream deltas', async () => {
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const session = sessionWith(sink);
+    const pipeline = pipelineFor('x');
+    pipeline.responder.respondStream = streamOf('Hello the', 're. How ', 'are you?');
+    const svc = make(pipeline);
+
+    await (svc as any).respond(session, utt());
+    await drain();
+
+    expect(sink.write).toHaveBeenCalledTimes(2); // "Hello there." + "How are you?"
+    expect(session.messages.at(-1)).toEqual({
+      role: 'assistant',
+      content: 'Hello there. How are you?',
+    });
+  });
 
   it('does not emit an unhandledRejection when sink.write rejects mid-reply', async () => {
-    // Arm chunk[1]'s synth to reject. Loop order: prefetch(0) ok -> await -> prefetch(1) [rejects,
-    // in flight] -> write(0) rejects -> jump to catch, never awaiting chunk[1]. Without the
-    // always-attached .catch, that rejecting prefetch is an unhandledRejection (can crash the call).
+    // chunk[1]'s synth is prefetched then never awaited once sink.write rejects and we jump to catch.
     const sink = {
       write: jest.fn().mockRejectedValue(new Error('sink torn down')),
       clear: jest.fn(),
@@ -77,10 +107,10 @@ describe('VoiceAgentService.respond — prefetch never leaks', () => {
     expect(rejections).toEqual([]);
   });
 
-  it('drains the prefetched chunk when a barge-in (cancel) aborts the loop', async () => {
+  it('drains the prefetched chunk when a barge-in (cancel) aborts playback', async () => {
     const session = sessionWith({
       write: jest.fn().mockImplementation(async () => {
-        session.cancel = true; // barge-in after the first chunk plays
+        session.cancel = true; // barge-in after the first sentence plays
       }),
       clear: jest.fn(),
     });
@@ -92,39 +122,25 @@ describe('VoiceAgentService.respond — prefetch never leaks', () => {
     expect(rejections).toEqual([]);
   });
 
-  it('plays every chunk on the clean path and leaks nothing', async () => {
-    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
-    const svc = make(pipelineFor('One. Two. Three.'));
-
-    await (svc as any).respond(sessionWith(sink), utt());
-    await drain();
-
-    expect(sink.write).toHaveBeenCalledTimes(3);
-    expect(rejections).toEqual([]);
-  });
-
-  it('still plays the reply when a barge set cancel DURING generation (not playback)', async () => {
-    // The detector is suppressed the moment a turn is dispatched, but the assistant isn't actually
-    // playing until LLM+TTS finish. A user/noise barge in that window sets session.cancel; without
-    // a reset right before playback it stuck true and the whole reply was dropped (never played).
+  it('clears a barge that fired during STT so the reply still plays', async () => {
+    // A barge while transcribing (assistant not audible yet) must not drop the reply: respond resets
+    // cancel after STT, so only a barge during playback stops it.
     const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
     const session = sessionWith(sink);
     const pipeline = pipelineFor('One. Two. Three.');
-    (pipeline.responder.respond as jest.Mock).mockImplementation(async () => {
-      session.cancel = true; // a barge fires while we're still generating
-      return 'One. Two. Three.';
+    (pipeline.transcriber.transcribe as jest.Mock).mockImplementation(async () => {
+      session.cancel = true; // a barge fires mid-transcription
+      return 'hey';
     });
     const svc = make(pipeline);
 
     await (svc as any).respond(session, utt());
     await drain();
 
-    expect(sink.write).toHaveBeenCalledTimes(3); // reply plays despite the during-generation barge
+    expect(sink.write).toHaveBeenCalledTimes(3);
   });
 
-  it('settles when a pipeline call hangs, so the detector is never stranded suppressed', async () => {
-    // A hung TTS/LLM/STT endpoint must not leave respond() pending forever — otherwise the caller's
-    // .finally never restores the turn detector and the agent goes permanently deaf.
+  it('settles when a TTS synth call hangs, so the detector is never stranded', async () => {
     jest.useFakeTimers();
     try {
       const pipeline = pipelineFor('One. Two.');
@@ -140,6 +156,30 @@ describe('VoiceAgentService.respond — prefetch never leaks', () => {
       });
 
       await jest.advanceTimersByTimeAsync(20_000); // past the 15s TTS timeout
+      expect(settled).toBe(true);
+      expect(sink.write).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('settles when the LLM stream stalls (idle timeout), never stranding the detector', async () => {
+    jest.useFakeTimers();
+    try {
+      const pipeline = pipelineFor('x');
+      // A stream whose first token never arrives.
+      pipeline.responder.respondStream = jest.fn().mockReturnValue({
+        [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+      });
+      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+      const svc = make(pipeline);
+
+      let settled = false;
+      void (svc as any).respond(sessionWith(sink), utt()).then(() => {
+        settled = true;
+      });
+
+      await jest.advanceTimersByTimeAsync(31_000); // past the 30s LLM idle timeout
       expect(settled).toBe(true);
       expect(sink.write).not.toHaveBeenCalled();
     } finally {

@@ -1,23 +1,31 @@
-import { splitForTts } from './voice-agent.service';
+import { takeSentences } from './voice-agent.service';
 
-describe('splitForTts', () => {
-  it('splits a multi-sentence reply on . ! ?', () => {
-    expect(splitForTts('Hi there. How are you? Glad you came!')).toEqual([
-      'Hi there.',
-      'How are you?',
-      'Glad you came!',
-    ]);
+describe('takeSentences', () => {
+  it('pulls complete sentences and leaves the trailing partial in rest', () => {
+    expect(takeSentences('Hi there. How are you? Glad you came!')).toEqual({
+      sentences: ['Hi there.', 'How are you?', 'Glad you came!'],
+      rest: '',
+    });
   });
 
-  it('keeps a punctuation-less reply as a single chunk', () => {
-    expect(splitForTts('just one breath')).toEqual(['just one breath']);
+  it('holds back text that has not hit terminal punctuation yet', () => {
+    expect(takeSentences('Done. now this')).toEqual({
+      sentences: ['Done.'],
+      rest: ' now this',
+    });
   });
 
-  it('keeps trailing text with no terminal punctuation', () => {
-    expect(splitForTts('Done. now this')).toEqual(['Done.', 'now this']);
+  it('returns no sentences for a punctuation-less buffer', () => {
+    expect(takeSentences('just one breath')).toEqual({
+      sentences: [],
+      rest: 'just one breath',
+    });
   });
 
-  it('drops whitespace-only input to nothing', () => {
-    expect(splitForTts('   ')).toEqual([]);
+  it('collapses repeated terminal punctuation into one sentence', () => {
+    expect(takeSentences('Wait... really?')).toEqual({
+      sentences: ['Wait...', 'really?'],
+      rest: '',
+    });
   });
 });
