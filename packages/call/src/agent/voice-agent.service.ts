@@ -108,6 +108,34 @@ export function takeSentences(buf: string): { sentences: string[]; rest: string 
   return { sentences, rest: buf.slice(end) };
 }
 
+// TTS first-frame dominates time-to-first-word: the server buffers the whole chunk before returning
+// audio, so a long first sentence = a long wait. Flush a SMALLER first unit so the opener synthesizes
+// fast; later chunks revert to whole sentences (prefetch hides their seams). Only the first chunk of a
+// turn uses this — it's the one the user is waiting on. Returns null until a good early cut exists.
+// ponytail: char thresholds, tune via the `latency` line's tts_first. Won't help a short, boundary-less
+// reply (nothing to cut) — that needs server-side TTS streaming, which is off by choice.
+const FIRST_MIN = 10; // don't fragment tiny openers ("Hi,")
+const FIRST_MAX = 48; // bound a run-on with no punctuation at all
+export function takeFirstChunk(buf: string): { chunk: string | null; rest: string } {
+  // 1. A complete sentence already? Take it as-is (natural, no fragmenting).
+  const sent = /^[^.!?]*[.!?]+/.exec(buf);
+  if (sent) {
+    const chunk = sent[0].trim();
+    if (chunk) return { chunk, rest: buf.slice(sent[0].length) };
+  }
+  // 2. A clause boundary past FIRST_MIN — flush up to and including it.
+  for (let i = FIRST_MIN - 1; i < buf.length; i++) {
+    if (/[,;:—]/.test(buf[i])) return { chunk: buf.slice(0, i + 1).trim(), rest: buf.slice(i + 1) };
+  }
+  // 3. A long run-on with no boundary — cut at the last word break under FIRST_MAX.
+  if (buf.length >= FIRST_MAX) {
+    const cut = buf.lastIndexOf(' ', FIRST_MAX);
+    const at = cut > FIRST_MIN ? cut : FIRST_MAX;
+    return { chunk: buf.slice(0, at).trim(), rest: buf.slice(at) };
+  }
+  return { chunk: null, rest: buf };
+}
+
 // ponytail: energy-based turn detection — tune to your room; swap for Silero if it mis-triggers.
 const TURN_OPTS: TurnDetectorOpts = {
   vadRms: 600,
@@ -260,6 +288,7 @@ export class VoiceAgentService {
       const produce = (async () => {
         let buf = '';
         let firstDelta = true;
+        let firstChunkDone = false;
         try {
           const stream = withIdleTimeout(
             this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
@@ -274,6 +303,14 @@ export class VoiceAgentService {
             }
             full += delta;
             buf += delta;
+            // Flush a small first unit early (the user is waiting on it); then whole sentences.
+            if (!firstChunkDone) {
+              const { chunk, rest } = takeFirstChunk(buf);
+              if (!chunk) continue; // no good early cut yet — keep accumulating
+              buf = rest;
+              firstChunkDone = true;
+              pushSentence(chunk);
+            }
             const { sentences, rest } = takeSentences(buf);
             buf = rest;
             for (const s of sentences) pushSentence(s);
