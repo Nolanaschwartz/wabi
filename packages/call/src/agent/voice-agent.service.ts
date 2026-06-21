@@ -108,39 +108,6 @@ export function takeSentences(buf: string): { sentences: string[]; rest: string 
   return { sentences, rest: buf.slice(end) };
 }
 
-// TTS first-frame dominates time-to-first-word: the server buffers the whole chunk before returning
-// audio, so a long first sentence = a long wait. Flush a SMALLER first unit so the opener synthesizes
-// fast; later chunks revert to whole sentences (prefetch hides their seams). Only the first chunk of a
-// turn uses this — it's the one the user is waiting on. Returns null until a good early cut exists.
-// ponytail: char thresholds, tune via the `latency` line's tts_first. Won't help a short, boundary-less
-// reply (nothing to cut) — that needs server-side TTS streaming, which is off by choice.
-const FIRST_MIN = 10; // don't fragment tiny openers at an early comma ("Hi,")
-const FIRST_MAX = 48; // bound a run-on with no punctuation at all
-export function takeFirstChunk(buf: string): { chunk: string | null; rest: string } {
-  // Cut at the EARLIEST boundary so a long opener doesn't synthesize whole: a terminal .!? (always a
-  // clean cut, even short — "Hi.") or a clause ,;:— past FIRST_MIN (so we don't split "Hi,"). Whichever
-  // comes first wins — a comma at char 15 beats a period at char 45.
-  for (let i = 0; i < buf.length; i++) {
-    const c = buf[i];
-    if (c === '.' || c === '!' || c === '?') {
-      let j = i;
-      while (j + 1 < buf.length && /[.!?]/.test(buf[j + 1])) j++; // include a run ("...")
-      const chunk = buf.slice(0, j + 1).trim();
-      if (chunk) return { chunk, rest: buf.slice(j + 1) };
-    }
-    if ((c === ',' || c === ';' || c === ':' || c === '—') && i >= FIRST_MIN - 1) {
-      return { chunk: buf.slice(0, i + 1).trim(), rest: buf.slice(i + 1) };
-    }
-  }
-  // No boundary yet — cut a long run-on at the last word break under FIRST_MAX, else keep waiting.
-  if (buf.length >= FIRST_MAX) {
-    const cut = buf.lastIndexOf(' ', FIRST_MAX);
-    const at = cut > FIRST_MIN ? cut : FIRST_MAX;
-    return { chunk: buf.slice(0, at).trim(), rest: buf.slice(at) };
-  }
-  return { chunk: null, rest: buf };
-}
-
 // ponytail: energy-based turn detection — tune to your room; swap for Silero if it mis-triggers.
 const TURN_OPTS: TurnDetectorOpts = {
   vadRms: 600,
@@ -295,7 +262,6 @@ export class VoiceAgentService {
       const produce = (async () => {
         let buf = '';
         let firstDelta = true;
-        let firstChunkDone = false;
         try {
           const stream = withIdleTimeout(
             this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
@@ -310,14 +276,6 @@ export class VoiceAgentService {
             }
             full += delta;
             buf += delta;
-            // Flush a small first unit early (the user is waiting on it); then whole sentences.
-            if (!firstChunkDone) {
-              const { chunk, rest } = takeFirstChunk(buf);
-              if (!chunk) continue; // no good early cut yet — keep accumulating
-              buf = rest;
-              firstChunkDone = true;
-              pushSentence(chunk);
-            }
             const { sentences, rest } = takeSentences(buf);
             buf = rest;
             for (const s of sentences) pushSentence(s);
