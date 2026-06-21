@@ -121,4 +121,29 @@ describe('VoiceAgentService.respond — prefetch never leaks', () => {
 
     expect(sink.write).toHaveBeenCalledTimes(3); // reply plays despite the during-generation barge
   });
+
+  it('settles when a pipeline call hangs, so the detector is never stranded suppressed', async () => {
+    // A hung TTS/LLM/STT endpoint must not leave respond() pending forever — otherwise the caller's
+    // .finally never restores the turn detector and the agent goes permanently deaf.
+    jest.useFakeTimers();
+    try {
+      const pipeline = pipelineFor('One. Two.');
+      (pipeline.synthesizer.synthesize as jest.Mock).mockReturnValue(
+        new Promise(() => {}), // never resolves
+      );
+      const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+      const svc = make(pipeline);
+
+      let settled = false;
+      void (svc as any).respond(sessionWith(sink), utt()).then(() => {
+        settled = true;
+      });
+
+      await jest.advanceTimersByTimeAsync(20_000); // past the 15s TTS timeout
+      expect(settled).toBe(true);
+      expect(sink.write).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

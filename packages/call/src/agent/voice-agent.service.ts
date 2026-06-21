@@ -21,6 +21,23 @@ import { composeSystemPrompt } from './memory-context';
 
 const OUT_RATE = 48000; // assistant publishes 48kHz mono
 
+// STT/LLM/TTS calls hit self-hosted endpoints that can hang with no response. An unbounded await in
+// respond() strands it — its .finally never runs, so the detector stays suppressed and the agent goes
+// permanently deaf with no error. Bound each call so a hung endpoint fails soft (caught in respond)
+// and the detector resumes. ponytail: generous caps, fail-open — widen only if a real call needs it.
+const STT_TIMEOUT_MS = 15_000;
+const LLM_TIMEOUT_MS = 30_000;
+const TTS_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
 // Split a reply into sentence-ish chunks so TTS can start playing the first sentence while the rest
 // is still being synthesized. ponytail: naive punctuation split — "3.14"/"Dr." over-split into two
 // chunks, a harmless extra TTS boundary; swap for an NLP segmenter only if that ever sounds wrong.
@@ -140,12 +157,18 @@ export class VoiceAgentService {
   private async respond(session: Session, utt: Utterance): Promise<void> {
     try {
       const wav = buildWav(utt.pcm, utt.rate, utt.channels);
-      const text = (await this.pipeline!.transcriber.transcribe(wav)).trim();
+      const text = (
+        await withTimeout(this.pipeline!.transcriber.transcribe(wav), STT_TIMEOUT_MS, 'transcribe')
+      ).trim();
       if (!text) return;
       this.log.log(`heard: ${text}`);
 
       session.messages.push({ role: 'user', content: text });
-      const reply = await this.pipeline!.responder.respond(session.messages);
+      const reply = await withTimeout(
+        this.pipeline!.responder.respond(session.messages),
+        LLM_TIMEOUT_MS,
+        'responder',
+      );
       session.messages.push({ role: 'assistant', content: reply });
       if (session.messages.length > 11) {
         session.messages.splice(1, session.messages.length - 11); // keep system + last 10
@@ -186,7 +209,9 @@ export class VoiceAgentService {
 
   // Synthesize one text chunk to OUT_RATE mono PCM.
   private async synth(text: string): Promise<Int16Array> {
-    const out = parseWav(await this.pipeline!.synthesizer.synthesize(text));
+    const out = parseWav(
+      await withTimeout(this.pipeline!.synthesizer.synthesize(text), TTS_TIMEOUT_MS, 'synthesize'),
+    );
     return resampleToMono(out.data, out.rate, out.channels, OUT_RATE);
   }
 }
