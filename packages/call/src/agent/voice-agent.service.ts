@@ -114,20 +114,25 @@ export function takeSentences(buf: string): { sentences: string[]; rest: string 
 // turn uses this — it's the one the user is waiting on. Returns null until a good early cut exists.
 // ponytail: char thresholds, tune via the `latency` line's tts_first. Won't help a short, boundary-less
 // reply (nothing to cut) — that needs server-side TTS streaming, which is off by choice.
-const FIRST_MIN = 10; // don't fragment tiny openers ("Hi,")
+const FIRST_MIN = 10; // don't fragment tiny openers at an early comma ("Hi,")
 const FIRST_MAX = 48; // bound a run-on with no punctuation at all
 export function takeFirstChunk(buf: string): { chunk: string | null; rest: string } {
-  // 1. A complete sentence already? Take it as-is (natural, no fragmenting).
-  const sent = /^[^.!?]*[.!?]+/.exec(buf);
-  if (sent) {
-    const chunk = sent[0].trim();
-    if (chunk) return { chunk, rest: buf.slice(sent[0].length) };
+  // Cut at the EARLIEST boundary so a long opener doesn't synthesize whole: a terminal .!? (always a
+  // clean cut, even short — "Hi.") or a clause ,;:— past FIRST_MIN (so we don't split "Hi,"). Whichever
+  // comes first wins — a comma at char 15 beats a period at char 45.
+  for (let i = 0; i < buf.length; i++) {
+    const c = buf[i];
+    if (c === '.' || c === '!' || c === '?') {
+      let j = i;
+      while (j + 1 < buf.length && /[.!?]/.test(buf[j + 1])) j++; // include a run ("...")
+      const chunk = buf.slice(0, j + 1).trim();
+      if (chunk) return { chunk, rest: buf.slice(j + 1) };
+    }
+    if ((c === ',' || c === ';' || c === ':' || c === '—') && i >= FIRST_MIN - 1) {
+      return { chunk: buf.slice(0, i + 1).trim(), rest: buf.slice(i + 1) };
+    }
   }
-  // 2. A clause boundary past FIRST_MIN — flush up to and including it.
-  for (let i = FIRST_MIN - 1; i < buf.length; i++) {
-    if (/[,;:—]/.test(buf[i])) return { chunk: buf.slice(0, i + 1).trim(), rest: buf.slice(i + 1) };
-  }
-  // 3. A long run-on with no boundary — cut at the last word break under FIRST_MAX.
+  // No boundary yet — cut a long run-on at the last word break under FIRST_MAX, else keep waiting.
   if (buf.length >= FIRST_MAX) {
     const cut = buf.lastIndexOf(' ', FIRST_MAX);
     const at = cut > FIRST_MIN ? cut : FIRST_MAX;
@@ -278,8 +283,10 @@ export class VoiceAgentService {
       let full = '';
       let produceErr: unknown;
       let firstSentence = true;
+      let firstChunkChars = 0; // size of the opener — confirms early-flush is producing a small unit
       const pushSentence = (s: string): void => {
         if (firstSentence) {
+          firstChunkChars = s.length;
           timer.mark('sentence');
           firstSentence = false;
         }
@@ -368,7 +375,8 @@ export class VoiceAgentService {
       this.log.log(`reply: ${full}`);
       if (!(session.cancel || session.closed)) {
         timer.mark('done');
-        this.log.log(timer.render()); // one structured per-turn latency line on the clean path
+        // one structured per-turn latency line on the clean path; chunk1 = opener size (small = good)
+        this.log.log(`${timer.render()} chunk1=${firstChunkChars}c`);
       }
     } catch (e) {
       if (session.cancel || session.closed) this.log.log('reply interrupted');

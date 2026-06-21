@@ -45,6 +45,14 @@ describe('takeFirstChunk', () => {
     });
   });
 
+  it('cuts a long opener at its earliest comma, not the far-off period', () => {
+    // Regression: a complete-but-long first sentence must not synthesize whole — the early comma wins.
+    expect(takeFirstChunk("I'm doing great, always here when you need me.")).toEqual({
+      chunk: "I'm doing great,",
+      rest: ' always here when you need me.',
+    });
+  });
+
   it('does not fragment a tiny opener whose comma is below the minimum', () => {
     expect(takeFirstChunk('Hi, there')).toEqual({ chunk: null, rest: 'Hi, there' });
   });

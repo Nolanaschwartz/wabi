@@ -192,7 +192,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
 
       const latency = logs.filter((l) => l.startsWith('latency '));
       expect(latency).toHaveLength(1);
-      expect(latency[0]).toMatch(/^latency stt=\d+ms llm_ttft=\d+ms sent1=\d+ms tts_first=\d+ms first_audio=\d+ms total=\d+ms$/);
+      expect(latency[0]).toMatch(/^latency stt=\d+ms llm_ttft=\d+ms sent1=\d+ms tts_first=\d+ms first_audio=\d+ms total=\d+ms chunk1=\d+c$/);
     } finally {
       spy.mockRestore();
     }
