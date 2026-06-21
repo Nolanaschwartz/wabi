@@ -12,16 +12,18 @@ import {
 } from '@livekit/rtc-node';
 import { LivekitService } from '../livekit/livekit.service';
 import { loadAgentConfig } from './agent.config';
-import { buildWav, resampleToMono, fadeIn } from './audio.util';
+import { buildWav, fadeIn } from './audio.util';
 import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
 import { AudioSink } from './audio-sink';
 import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
 import { composeSystemPrompt } from './memory-context';
 
-const OUT_RATE = 48000; // assistant publishes 48kHz mono
+// Publish the assistant track at the TTS's native rate (24kHz mono) and let LiveKit resample to the
+// Discord bridge's 48kHz/stereo with its native resampler (the bridge's AudioStream already requests a
+// format and LiveKit converts). Avoids a hand-rolled linear-interp resample on the hot path.
 const SYNTH_RATE = 24000; // TTS pcm response_format is 24kHz mono s16le (OpenAI /v1/audio/speech spec)
-const FADE_SAMPLES = Math.round(OUT_RATE * 0.008); // ~8ms fade-in to de-click each sentence's onset
+const FADE_SAMPLES = Math.round(SYNTH_RATE * 0.008); // ~8ms fade-in to de-click the reply onset
 
 // STT/LLM/TTS calls hit self-hosted endpoints that can hang with no response. An unbounded await in
 // respond() strands it — its .finally never runs, so the detector stays suppressed and the agent goes
@@ -149,7 +151,7 @@ export class VoiceAgentService {
       dynacast: true,
     });
 
-    const source = new AudioSource(OUT_RATE, 1);
+    const source = new AudioSource(SYNTH_RATE, 1);
     const track = LocalAudioTrack.createAudioTrack('assistant', source);
     const opts = new TrackPublishOptions();
     opts.source = TrackSource.SOURCE_MICROPHONE;
@@ -157,7 +159,7 @@ export class VoiceAgentService {
 
     const session: Session = {
       room,
-      sink: new AudioSink(source, OUT_RATE, 1),
+      sink: new AudioSink(source, SYNTH_RATE, 1),
       detector: new TurnDetector(TURN_OPTS),
       messages: [
         { role: 'system', content: composeSystemPrompt(cfg.systemPrompt, memoryBlock) },
@@ -275,13 +277,13 @@ export class VoiceAgentService {
         );
         for await (const pcm of frames) {
           if (session.cancel || session.closed) break;
-          const out = resampleToMono(pcm, SYNTH_RATE, 1, OUT_RATE);
           if (firstChunk) {
-            fadeIn(out, FADE_SAMPLES); // de-click the reply onset (TTS stream starts mid-waveform)
+            fadeIn(pcm, FADE_SAMPLES); // de-click the reply onset (TTS stream starts mid-waveform)
             firstChunk = false;
             this.log.log('first audio');
           }
-          await session.sink.write(out, () => session.cancel || session.closed);
+          // 24kHz mono straight to the sink; LiveKit resamples to the bridge's 48kHz/stereo.
+          await session.sink.write(pcm, () => session.cancel || session.closed);
         }
       }
       if (!(session.cancel || session.closed)) {
