@@ -161,19 +161,22 @@ export class DiscordBridge {
     player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
     connection.subscribe(player);
 
-    // Pace exactly one 20ms frame to the player per tick — real audio if buffered, else silence. Pushing
-    // at the consume rate (vs letting discord pull-ahead) stops silence from pre-buffering in the player
-    // pipeline ahead of real audio — that pre-buffer was ~1-2s of latency (agent->bridge was only ~150ms).
-    // Still never starves, so the player won't latch to idle.
+    // Keep a small jitter cushion (~TARGET) buffered into the player and no more: enough that timer /
+    // event-loop jitter doesn't underrun (which sounds choppy), but small so latency stays low. Letting
+    // discord pull-ahead freely pre-buffered ~1-2s of silence ahead of real audio; pushing zero cushion
+    // underran. Refill to TARGET each tick from real audio, or silence to keep the player alive.
+    const TARGET = FRAME_BYTES * 5; // ~100ms cushion
     const paceTimer = setInterval(() => {
       if (closed) return;
-      if (outBuf.length >= FRAME_BYTES) {
-        pcmOut.push(outBuf.subarray(0, FRAME_BYTES));
-        outBuf = outBuf.subarray(FRAME_BYTES);
-      } else {
-        pcmOut.push(SILENCE);
+      while (pcmOut.readableLength < TARGET) {
+        if (outBuf.length >= FRAME_BYTES) {
+          pcmOut.push(outBuf.subarray(0, FRAME_BYTES));
+          outBuf = outBuf.subarray(FRAME_BYTES);
+        } else {
+          pcmOut.push(SILENCE);
+        }
       }
-    }, 20);
+    }, 10);
 
     room.on(RoomEvent.TrackSubscribed, (t, _pub, participant) => {
       if (t.kind !== TrackKind.KIND_AUDIO) return;
