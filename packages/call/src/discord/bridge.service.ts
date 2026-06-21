@@ -137,11 +137,27 @@ export class DiscordBridge {
       if (mixed) void sink.write(mixed); // sink owns offset-0 framing + close-race
     }, 20);
 
-    // LiveKit -> Discord: feed remote participant PCM into one raw stream the player drains.
-    const pcmOut = new Readable({ read() {} });
+    // LiveKit -> Discord, PULL-paced. Discord pulls 20ms frames at playback rate; we hand back the next
+    // buffered real frame, or silence when there's none. Pull-based (vs pushing on a timer) bounds the
+    // stream to the consumer's high-water mark, so silence can't pile up ahead of real audio and delay it
+    // — while still never starving (which would latch the player to idle and drop all audio).
+    const FRAME_BYTES = FRAME_SAMPLES * CHANNELS * 2; // 20ms @ 48kHz stereo s16le
+    const SILENCE = Buffer.alloc(FRAME_BYTES);
+    const MAX_OUT = FRAME_BYTES * 25; // ~500ms safety cap on the real-audio backlog (drop oldest beyond)
+    let outBuf = Buffer.alloc(0); // remote PCM awaiting playout
+    const pcmOut = new Readable({
+      read() {
+        if (outBuf.length >= FRAME_BYTES) {
+          this.push(outBuf.subarray(0, FRAME_BYTES));
+          outBuf = outBuf.subarray(FRAME_BYTES);
+        } else {
+          this.push(SILENCE);
+        }
+      },
+    });
     this.outs.set(guildId, pcmOut);
-    // NoSubscriberBehavior.Play: keep playing even in the brief window before the voice connection is
-    // ready, so the resource isn't torn down to idle during startup.
+    // NoSubscriberBehavior.Play: keep playing in the brief window before the voice connection is ready,
+    // so the resource isn't torn down to idle during startup.
     const player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Play },
     });
@@ -153,16 +169,6 @@ export class DiscordBridge {
     );
     player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
     connection.subscribe(player);
-
-    // Silence heartbeat: a Raw stream that starves (no remote audio yet, or gaps between replies) ends
-    // and the player latches to idle forever, dropping all later audio. Push a 20ms silence frame
-    // whenever no real frame arrived in the last tick, so pcmOut never starves and the player stays live.
-    const SILENCE = Buffer.alloc(FRAME_SAMPLES * CHANNELS * 2); // 20ms @ 48kHz stereo s16le
-    let lastRealPush = 0;
-    const keepAlive = setInterval(() => {
-      if (closed) return;
-      if (Date.now() - lastRealPush >= 20) pcmOut.push(SILENCE);
-    }, 20);
 
     room.on(RoomEvent.TrackSubscribed, (t, _pub, participant) => {
       if (t.kind !== TrackKind.KIND_AUDIO) return;
@@ -176,8 +182,9 @@ export class DiscordBridge {
         for await (const frame of stream) {
           if (closed) break;
           // copy: rtc-node may reuse the frame buffer after we yield.
-          pcmOut.push(Buffer.copyBytesFrom(frame.data));
-          lastRealPush = Date.now(); // suppress the heartbeat while real audio is flowing
+          const next = Buffer.copyBytesFrom(frame.data);
+          outBuf = outBuf.length ? Buffer.concat([outBuf, next]) : next;
+          if (outBuf.length > MAX_OUT) outBuf = outBuf.subarray(outBuf.length - MAX_OUT);
         }
       })().catch((e) => this.log.warn(`livekit stream: ${e.message}`));
     });
@@ -186,7 +193,6 @@ export class DiscordBridge {
     this.sessions.set(guildId, () => {
       closed = true; // stop captures/forwarding before tearing down the source
       clearInterval(mixTimer);
-      clearInterval(keepAlive);
       try {
         connection.destroy();
       } catch {}
