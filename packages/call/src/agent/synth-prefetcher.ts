@@ -54,32 +54,22 @@ class FrameBuffer {
 }
 
 /**
- * A single sentence's synthesis job. The constructor kicks off a background drain loop that
- * pulls frames from `synth(text, signal)` into an in-memory buffer, capturing any thrown error
- * (whether synth throws while constructing the iterable or its iterator rejects mid-stream) so
- * it surfaces only when this job's `stream()` is consumed — never as an unhandled rejection.
+ * Start synthesizing one sentence: kicks off a background drain loop that pulls frames from
+ * `synth(text, signal)` into a buffer, capturing any thrown error (whether synth throws while
+ * constructing the iterable or its iterator rejects mid-stream) so it surfaces only when the
+ * returned stream is consumed — never as an unhandled rejection. Returns the buffered frame-stream.
  */
-class Job {
-  private readonly buffer = new FrameBuffer();
-
-  constructor(text: string, synth: SynthFn, signal: AbortSignal) {
-    void this.drain(text, synth, signal);
-  }
-
-  stream(): AsyncIterable<Int16Array> {
-    return this.buffer.stream();
-  }
-
-  private async drain(text: string, synth: SynthFn, signal: AbortSignal): Promise<void> {
+function startJob(text: string, synth: SynthFn, signal: AbortSignal): AsyncIterable<Int16Array> {
+  const buffer = new FrameBuffer();
+  void (async () => {
     try {
-      for await (const frame of synth(text, signal)) {
-        this.buffer.push(frame);
-      }
-      this.buffer.close();
+      for await (const frame of synth(text, signal)) buffer.push(frame);
+      buffer.close();
     } catch (err) {
-      this.buffer.close(err ?? new Error('synth failed'));
+      buffer.close(err ?? new Error('synth failed'));
     }
-  }
+  })();
+  return buffer.stream();
 }
 
 /**
@@ -96,11 +86,11 @@ export async function* prefetchSynth(
 ): AsyncGenerator<AsyncIterable<Int16Array>> {
   const iter = sentences[Symbol.asyncIterator]();
 
-  // Pulls the next sentence text and, once it lands, constructs its Job (kicking off synth).
-  // Returns a pending promise without blocking the caller when the text isn't ready yet.
-  const nextJob = async (): Promise<Job | undefined> => {
+  // Pulls the next sentence text and, once it lands, starts its synth — returning the buffered
+  // stream. A pending promise without blocking the caller when the text isn't ready yet.
+  const nextJob = async (): Promise<AsyncIterable<Int16Array> | undefined> => {
     const r = await iter.next();
-    return r.done ? undefined : new Job(r.value, synth, signal);
+    return r.done ? undefined : startJob(r.value, synth, signal);
   };
 
   let curP = nextJob();
@@ -113,7 +103,7 @@ export async function* prefetchSynth(
     // sentence text isn't ready yet.
     const aheadP = nextJob();
 
-    yield cur.stream();
+    yield cur;
 
     if (cancelled()) {
       // Drop any buffered-but-unconsumed lookahead. The caller aborts `signal` separately, which

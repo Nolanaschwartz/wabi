@@ -250,10 +250,8 @@ export class VoiceAgentService {
       let full = '';
       let produceErr: unknown;
       let firstSentence = true;
-      let firstChunkChars = 0; // size of the opener — confirms early-flush is producing a small unit
       const pushSentence = (s: string): void => {
         if (firstSentence) {
-          firstChunkChars = s.length;
           timer.mark('sentence');
           firstSentence = false;
         }
@@ -333,8 +331,7 @@ export class VoiceAgentService {
       this.log.log(`reply: ${full}`);
       if (!(session.cancel || session.closed)) {
         timer.mark('done');
-        // one structured per-turn latency line on the clean path; chunk1 = opener size (small = good)
-        this.log.log(`${timer.render()} chunk1=${firstChunkChars}c`);
+        this.log.log(timer.render()); // one structured per-turn latency line on the clean path
       }
     } catch (e) {
       if (session.cancel || session.closed) this.log.log('reply interrupted');
