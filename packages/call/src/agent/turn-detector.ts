@@ -43,7 +43,7 @@ export class TurnDetector {
   }
 
   // Returns a completed Utterance, a barge-in signal, or null. Copies frames it keeps
-  // (rtc-node reuses the underlying buffer after we yield).
+  // (the caller may reuse the underlying buffer after we return).
   push(frame: Int16Array, rate: number, channels: number): TurnEvent | null {
     const frameMs = (frame.length / channels / rate) * 1000;
     const isSpeech = rms(frame) > this.o.vadRms;

@@ -101,12 +101,15 @@ export function resampleToMono(
   return out;
 }
 
-// Linear fade-in over the first n samples (in place) to kill the click when streamed audio starts
-// mid-waveform with no leading silence (the TTS stream jumps straight to full amplitude). Returns pcm.
-export function fadeIn(pcm: Int16Array, n: number): Int16Array {
-  const k = Math.min(n, pcm.length);
-  for (let i = 0; i < k; i++) pcm[i] = Math.round((pcm[i] * i) / k);
-  return pcm;
+// Duplicate a mono PCM stream into interleaved stereo (L=R). Discord wants 48kHz stereo and the TTS is
+// mono, so pair this with resampleToMono(...,24000,1,48000) on the agent->Discord hop.
+export function monoToStereo(mono: Int16Array): Int16Array {
+  const out = new Int16Array(mono.length * 2);
+  for (let i = 0; i < mono.length; i++) {
+    out[2 * i] = mono[i];
+    out[2 * i + 1] = mono[i];
+  }
+  return out;
 }
 
 export function rms(pcm: Int16Array): number {

@@ -2,14 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { GuildMember } from 'discord.js';
 import { DiscordBridge } from './bridge.service';
-import { VoiceAgentService } from '../agent/voice-agent.service';
 import { VoiceMemoryService } from '../agent/voice-memory.service';
 
 @Injectable()
 export class CallCommands {
   constructor(
     private readonly bridge: DiscordBridge,
-    private readonly agent: VoiceAgentService,
     private readonly memory: VoiceMemoryService,
   ) {}
 
@@ -30,8 +28,7 @@ export class CallCommands {
       // Recall once at call start (single round trip, no per-turn latency). Empty for group calls
       // (privacy gate), unknown users, or a degraded store — the agent then runs as a plain assistant.
       const memoryBlock = await this.memory.contextFor(channel);
-      const room = await this.bridge.start(channel);
-      await this.agent.start(room, memoryBlock); // AI joins the same LiveKit room
+      await this.bridge.start(channel, memoryBlock); // bridge wires Discord audio straight to the agent
       return interaction.editReply(
         `📞 Connected — talk to the assistant in \`${channel.name}\`.`,
       );
@@ -61,8 +58,7 @@ export class CallCommands {
   })
   async onHangup(@Context() [interaction]: SlashCommandContext) {
     const guildId = (interaction.member as GuildMember).guild.id;
-    this.agent.stop(`discord-${guildId}`);
-    this.bridge.stop(guildId);
+    this.bridge.stop(guildId); // also stops the agent
     return interaction.reply({ content: '👋 Hung up.', ephemeral: true });
   }
 }

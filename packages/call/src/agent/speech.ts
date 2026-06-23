@@ -11,8 +11,8 @@ export interface Transcriber {
 }
 
 export interface Responder {
-  // Streams the reply as text deltas so the turn loop can synth+play sentence-by-sentence (first audio
-  // after sentence 1, not the whole reply). `signal` aborts the upstream call on barge-in/hangup.
+  // Streams the reply as text deltas; the turn loop accumulates them into the full reply (and times
+  // TTFT / can abort early on barge). `signal` aborts the upstream call on barge-in/hangup.
   respondStream(
     messages: ChatMessage[],
     signal?: AbortSignal,

@@ -34,7 +34,7 @@ const sessionWith = (sink: any) =>
 const utt = () => ({ pcm: new Int16Array(160), rate: 16000, channels: 1 }) as any;
 
 const make = (pipeline: SpeechPipeline) => {
-  const svc = new VoiceAgentService({} as any);
+  const svc = new VoiceAgentService();
   svc.setPipeline(pipeline);
   return svc;
 };
@@ -54,18 +54,22 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     await new Promise((r) => setTimeout(r, 0));
   };
 
-  it('plays every sentence in order on the clean path and leaks nothing', async () => {
+  it('synthesizes the whole reply in one request and leaks nothing', async () => {
     const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
-    const svc = make(pipelineFor('One. Two. Three.'));
+    const pipeline = pipelineFor('One. Two. Three.');
+    const svc = make(pipeline);
 
     await (svc as any).respond(sessionWith(sink), utt());
     await drain();
 
-    expect(sink.write).toHaveBeenCalledTimes(3); // 1 PCM frame per sentence
+    // one synth for the whole reply (no chunking — this server stretches short inputs), mock yields 1 frame
+    const synth = pipeline.synthesizer.synthesizeStream as jest.Mock;
+    expect(synth.mock.calls.map((c) => c[0])).toEqual(['One. Two. Three.']);
+    expect(sink.write).toHaveBeenCalledTimes(1);
     expect(rejections).toEqual([]);
   });
 
-  it('assembles sentences that span multiple stream deltas', async () => {
+  it('accumulates the full reply across multiple stream deltas', async () => {
     const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
     const session = sessionWith(sink);
     const pipeline = pipelineFor('x');
@@ -75,23 +79,29 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     await (svc as any).respond(session, utt());
     await drain();
 
-    expect(sink.write).toHaveBeenCalledTimes(2); // "Hello there." + "How are you?"
+    expect(sink.write).toHaveBeenCalledTimes(1); // whole reply -> one synth
+    // clear() drops any leftover from the prior reply before this one queues, so playout can't fall
+    // behind across turns. Must fire before the first write, else the reply's own audio is dropped.
+    expect(sink.clear).toHaveBeenCalledTimes(1);
+    expect(sink.clear.mock.invocationCallOrder[0]).toBeLessThan(
+      sink.write.mock.invocationCallOrder[0],
+    );
     expect(session.messages.at(-1)).toEqual({
       role: 'assistant',
       content: 'Hello there. How are you?',
     });
   });
 
-  it('plays sentence 1 without waiting for sentence 2 to be generated', async () => {
-    // Regression: first audio must not wait a sentence behind. Sentence 1 should stream+play as soon
-    // as it forms, even while the LLM is still (slowly) generating sentence 2.
-    let releaseSecond!: () => void;
-    const gate = new Promise<void>((r) => (releaseSecond = r));
+  it('waits for the full reply before synthesizing (single stream)', async () => {
+    // Whole-reply deliberately holds synth until the LLM's last token: no audio until the gated second
+    // delta lands, then one synth for the complete text. (This is the onset cost we accept for one stream.)
+    let releaseRest!: () => void;
+    const gate = new Promise<void>((r) => (releaseRest = r));
     const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn(), flush: jest.fn().mockResolvedValue(undefined) };
     const pipeline = pipelineFor('x');
     pipeline.responder.respondStream = jest.fn().mockImplementation(async function* () {
       yield 'One. ';
-      await gate; // sentence 2 is withheld
+      await gate; // rest of the reply withheld
       yield 'Two.';
     });
     const svc = make(pipeline);
@@ -99,18 +109,19 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     const done = (svc as any).respond(sessionWith(sink), utt());
     await drain();
     await drain();
-    expect(sink.write).toHaveBeenCalledTimes(1); // sentence 1 played before sentence 2 existed
+    expect(sink.write).not.toHaveBeenCalled(); // nothing synthesized until the reply is complete
 
-    releaseSecond();
+    releaseRest();
     await done;
-    expect(sink.write).toHaveBeenCalledTimes(2);
+    expect(sink.write).toHaveBeenCalledTimes(1); // whole reply -> one synth
   });
 
-  it('settles without leaking when sink.write rejects mid-reply', async () => {
+  it('settles without leaking when sink.write throws mid-reply', async () => {
     const sink = {
-      write: jest.fn().mockRejectedValue(new Error('sink torn down')),
+      write: jest.fn(() => {
+        throw new Error('sink torn down');
+      }),
       clear: jest.fn(),
-      flush: jest.fn().mockResolvedValue(undefined),
     };
     const svc = make(pipelineFor('One. Two. Three.'));
 
@@ -151,7 +162,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     await (svc as any).respond(session, utt());
     await drain();
 
-    expect(sink.write).toHaveBeenCalledTimes(3);
+    expect(sink.write).toHaveBeenCalledTimes(1); // whole reply -> one synth, reply still plays
   });
 
   it('settles when a TTS stream stalls, so the detector is never stranded', async () => {
@@ -170,7 +181,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
         settled = true;
       });
 
-      await jest.advanceTimersByTimeAsync(20_000); // past the 15s TTS idle timeout
+      await jest.advanceTimersByTimeAsync(65_000); // past the 60s TTS synth timeout
       expect(settled).toBe(true);
       expect(sink.write).not.toHaveBeenCalled();
     } finally {
