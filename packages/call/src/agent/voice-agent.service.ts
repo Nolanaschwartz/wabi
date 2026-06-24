@@ -296,11 +296,13 @@ export class VoiceAgentService {
       if (chunk1) {
         // Two-phase: chunk1 already synthesized above; now the remainder as one request.
         const rest = full.slice(chunk1.length).trim();
+        this.log.log(`early-synth: split chunk1=${chunk1.length}ch rest=${rest.length}ch`);
         if (rest && !(session.cancel || session.closed)) {
           synthSamples += await this.synthChunk(session, rest, ctrl.signal, timer, true); // fade the seam
         }
       } else if (reply && !(session.cancel || session.closed)) {
         // No split (short/run-on reply) — synthesize the whole reply as one request (the original path).
+        this.log.log(`early-synth: whole-reply ${reply.length}ch (no split)`);
         timer.mark('sentence');
         session.sink.clear();
         synthSamples += await this.synthChunk(session, reply, ctrl.signal, timer);
