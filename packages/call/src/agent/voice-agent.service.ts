@@ -36,6 +36,9 @@ const DRAIN_TIMEOUT_MS = 8_000;
 const STT_TIMEOUT_MS = 15_000;
 const LLM_TIMEOUT_MS = 30_000;
 const TTS_TIMEOUT_MS = 15_000; // streaming: per-frame idle gap, not whole-clip (see STREAM_TTS)
+// Per-endpoint cap on the start-of-session connection warm-up. Generous but bounded so a cold/down
+// endpoint delays the call coming online by at most this, then we proceed (fail-open).
+const WARMUP_TIMEOUT_MS = 4_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -91,6 +94,7 @@ export class VoiceAgentService {
   private readonly log = new Logger(VoiceAgentService.name);
   private readonly sessions = new Map<string, Session>(); // guildId -> session
   private pipeline?: SpeechPipeline;
+  private warmed = false; // connection pools warmed once on first session start
 
   // Seam for tests: inject a fake pipeline before start().
   setPipeline(p: SpeechPipeline): void {
@@ -104,6 +108,14 @@ export class VoiceAgentService {
     const cfg = loadAgentConfig(); // lazy — only needs AI env when a call starts
     this.pipeline ??= createOpenAiPipeline(cfg);
 
+    // Warm the STT/LLM/TTS connection pools once so the first real turn doesn't pay a fresh TLS/TCP
+    // handshake (~1 RTT off tts_first et al.). Awaited so the TTS warm fully drains before any real
+    // synth — the server is single-stream, and a half-open warm stream would corrupt the first reply.
+    if (!this.warmed) {
+      this.warmed = true;
+      await this.warmUp();
+    }
+
     this.sessions.set(id, {
       sink,
       detector: new TurnDetector(TURN_OPTS),
@@ -114,6 +126,33 @@ export class VoiceAgentService {
       closed: false,
     });
     this.log.log(`agent ready ${id}`);
+  }
+
+  // Best-effort, fail-open connection warm-up: hit each endpoint once so the pool is hot before the
+  // first turn. Output is discarded (never reaches the sink). The TTS warm is fully drained because the
+  // server is single-stream. Each ping is bounded + caught so a down endpoint can't block the call.
+  private async warmUp(): Promise<void> {
+    const p = this.pipeline;
+    if (!p) return;
+    const ping = (label: string, fn: () => Promise<void>) =>
+      withTimeout(fn(), WARMUP_TIMEOUT_MS, label).catch(() => undefined);
+    await Promise.all([
+      ping('warm-stt', async () => {
+        await p.transcriber.transcribe(buildWav(new Int16Array(160), 16000, 1));
+      }),
+      ping('warm-llm', async () => {
+        for await (const _ of p.responder.respondStream([
+          { role: 'user', content: 'hi' },
+        ])) {
+          /* drain */
+        }
+      }),
+      ping('warm-tts', async () => {
+        for await (const _ of p.synthesizer.synthesizeStream('hi')) {
+          /* drain fully — single-stream server must not see a half-open warm stream */
+        }
+      }),
+    ]);
   }
 
   stop(id: string): void {

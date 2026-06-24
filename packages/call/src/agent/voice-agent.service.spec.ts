@@ -70,6 +70,19 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     expect(rejections).toEqual([]);
   });
 
+  it('warms STT/LLM/TTS connections, draining each, fail-open', async () => {
+    const pipeline = pipelineFor('hi');
+    // STT endpoint cold: warm-up must still resolve (fail-open).
+    (pipeline.transcriber.transcribe as jest.Mock).mockRejectedValue(new Error('cold'));
+    const svc = make(pipeline);
+
+    await expect((svc as any).warmUp()).resolves.toBeUndefined();
+
+    expect(pipeline.transcriber.transcribe).toHaveBeenCalledTimes(1);
+    expect(pipeline.responder.respondStream).toHaveBeenCalledTimes(1);
+    expect(pipeline.synthesizer.synthesizeStream).toHaveBeenCalledTimes(1);
+  });
+
   it('downsamples the utterance to 16kHz mono before STT', async () => {
     let sentWav: Buffer | undefined;
     const pipeline = pipelineFor('hi');
