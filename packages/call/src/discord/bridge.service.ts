@@ -11,17 +11,13 @@ import { VoiceBasedChannel } from 'discord.js';
 import { Readable } from 'node:stream';
 import * as prism from 'prism-media';
 import { VoiceAgentService, ReplySink } from '../agent/voice-agent.service';
-import { resampleToMono, monoToStereo } from '../agent/audio.util';
 import { SpeakerMixer } from './speaker-mixer';
-import { PlayoutDrain } from './playout-drain';
+import { VoicePlayout } from './voice-playout';
 
 // Discord voice is always 48kHz stereo s16le.
 const RATE = 48000;
 const CHANNELS = 2;
 const FRAME_SAMPLES = 960; // 20ms @ 48kHz
-// The Qwen3-TTS server emits 24kHz mono (verified from its WAV header). outSink resamples 24k->48k and
-// duplicates to stereo for Discord. Keep in sync with TTS_MODEL if you swap to a model at another rate.
-const TTS_RATE = 24000;
 
 @Injectable()
 export class DiscordBridge {
@@ -69,40 +65,22 @@ export class DiscordBridge {
 
     let closed = false; // set on hangup; stops captures/forwarding mid-stream
 
-    // --- agent -> Discord (set up first so outBuf exists before the agent starts) ---
-    // The agent dumps a whole reply into outBuf faster than realtime; the pacer below drains it at
-    // realtime into the player, keeping a small cushion and emitting silence only on a genuine underrun
-    // (so the player never latches to idle and drops audio).
-    const FRAME_BYTES = FRAME_SAMPLES * CHANNELS * 2; // 20ms @ 48kHz stereo s16le
-    const SILENCE = Buffer.alloc(FRAME_BYTES);
-    // So outBuf legitimately holds seconds of pending audio: cap only as a runaway backstop — a normal
-    // reply is cleared per turn / on barge. (A tight cap here truncated the START of the reply.)
-    const MAX_OUT = FRAME_BYTES * 50 * 30; // ~30s backstop
-    let outBuf = Buffer.alloc(0); // assistant PCM awaiting playout
+    // --- agent -> Discord (set up first so the playout buffer exists before the agent starts) ---
+    // VoicePlayout owns the pending-PCM buffer, the realtime pacer, and the slice-6 drain signal: the
+    // agent dumps a whole reply into it faster than realtime via write(); pump() (driven by paceTimer
+    // below) drains it at realtime into pcmOut, keeping a small cushion of real audio and a silence floor
+    // so the player never latches to idle. outSink is a thin closed-aware delegate to it.
+    const playout = new VoicePlayout();
     const pcmOut = new Readable({ read() {} });
     this.outs.set(guildId, pcmOut);
 
-    // Drain signal for slice 6 (barge-in playout tail). The pacer below calls drain.update() each tick;
-    // the agent gates setSuppressed(false) on whenDrained() so the detector stays suppressed through the
-    // tail. clear()/teardown release it so the gate is never left hanging.
-    const drain = new PlayoutDrain();
-
-    // The agent writes 24kHz mono reply chunks here; resample to Discord's 48kHz stereo and append. The
-    // pacer below re-slices outBuf into exact 20ms frames, so chunks need no framing of their own.
     const outSink: ReplySink = {
       write: (pcm) => {
         if (closed) return;
-        const stereo = Buffer.copyBytesFrom(monoToStereo(resampleToMono(pcm, TTS_RATE, 1, RATE)));
-        outBuf = outBuf.length ? Buffer.concat([outBuf, stereo]) : stereo;
-        if (outBuf.length > MAX_OUT) outBuf = outBuf.subarray(outBuf.length - MAX_OUT);
+        playout.write(pcm);
       },
-      clear: () => {
-        outBuf = Buffer.alloc(0);
-        drain.clear(); // queued audio just dropped — playout is drained by definition; release the gate
-      },
-      // Resolves once the tail has actually played out (outBuf empty + no real frames left in the
-      // player), and on barge/teardown so the agent's drain gate is never left hanging.
-      whenDrained: () => drain.whenDrained(),
+      clear: () => playout.clear(),
+      whenDrained: () => playout.whenDrained(),
     };
     await this.agent.start(guildId, outSink, memoryBlock);
 
@@ -120,29 +98,12 @@ export class DiscordBridge {
     player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
     connection.subscribe(player);
 
-    // Two-tier buffering (LiveKit's jitter buffer used to do this for us). Buffer REAL audio up to
-    // CUSHION; fill SILENCE only to a shallow FLOOR so idle gaps don't pile silence ahead of the next
-    // reply and inflate onset latency. CUSHION only has to ride out Node timer jitter on the playout
-    // pacer now: under whole-reply synthesis + server RTF < 1, the whole reply lands in outBuf faster
-    // than realtime, so a mid-stream TTS stall can't starve playout (the old reason for a deep lead).
-    // CUSHION is the jitter <-> latency knob: raise it if replies underrun, lower it if onset feels
-    // laggy. Go back to a deep lead (~12 frames) only if you return to sentence-streaming, where a
-    // generation stall mid-reply is real again. A sub-frame remainder stays in outBuf for a later chunk.
-    const CUSHION = FRAME_BYTES * 3; // ~60ms real-audio lead (3 frames) — covers timer jitter, not a stall
-    const FLOOR = FRAME_BYTES * 2; // ~40ms silence floor to keep the player from latching idle
+    // Realtime playout pacer: each tick, VoicePlayout fills the cushion of real audio and the silence
+    // floor into pcmOut and updates its drain signal. The two-tier buffering and drain semantics live in
+    // the module (voice-playout.ts); the bridge only owns the clock and the Discord Readable.
     const paceTimer = setInterval(() => {
       if (closed) return;
-      while (pcmOut.readableLength < CUSHION && outBuf.length >= FRAME_BYTES) {
-        pcmOut.push(outBuf.subarray(0, FRAME_BYTES));
-        outBuf = outBuf.subarray(FRAME_BYTES);
-      }
-      while (pcmOut.readableLength < FLOOR) {
-        pcmOut.push(SILENCE);
-      }
-      // Drain check (slice 6): real assistant audio is still pending iff outBuf holds at least one more
-      // real frame, OR the player still has real frames queued above the silence floor. Once both are
-      // false, only the silence floor remains — the tail has played out, so release the detector.
-      drain.update(outBuf.length >= FRAME_BYTES || pcmOut.readableLength > FLOOR);
+      playout.pump(pcmOut);
     }, 10);
 
     // --- Discord -> agent: decode each speaker separately and feed the mixer, which combines
@@ -198,8 +159,8 @@ export class DiscordBridge {
     this.log.log(`bridge up: #${channel.name} <-> agent (guild ${guildId})`);
     this.sessions.set(guildId, () => {
       closed = true; // stop captures/forwarding before tearing down
-      drain.close(); // pacer is about to stop; resolve any pending/future drain gate so the detector
-      //                isn't stranded suppressed (deaf) after teardown — fail-open
+      playout.close(); // pacer is about to stop; resolve any pending/future drain gate so the detector
+      //                  isn't stranded suppressed (deaf) after teardown — fail-open
       clearInterval(mixTimer);
       clearInterval(paceTimer);
       this.agent.stop(guildId);
