@@ -1,29 +1,37 @@
 import { Injectable, Logger } from '@nestjs/common';
-import {
-  Room,
-  RoomEvent,
-  AudioSource,
-  AudioStream,
-  LocalAudioTrack,
-  TrackPublishOptions,
-  TrackSource,
-  TrackKind,
-  RemoteAudioTrack,
-} from '@livekit/rtc-node';
-import { LivekitService } from '../livekit/livekit.service';
 import { loadAgentConfig } from './agent.config';
-import { buildWav, fadeIn } from './audio.util';
+import { buildWav, resampleToMono, fadeIn } from './audio.util';
 import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
-import { AudioSink } from './audio-sink';
 import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
 import { composeSystemPrompt } from './memory-context';
+import { TurnTimer } from './turn-timer';
+import { splitFirstChunk } from './first-chunk';
 
-// Publish the assistant track at the TTS's native rate (24kHz mono) and let LiveKit resample to the
-// Discord bridge's 48kHz/stereo with its native resampler (the bridge's AudioStream already requests a
-// format and LiveKit converts). Avoids a hand-rolled linear-interp resample on the hot path.
-const SYNTH_RATE = 24000; // TTS pcm response_format is 24kHz mono s16le (OpenAI /v1/audio/speech spec)
-const FADE_SAMPLES = Math.round(SYNTH_RATE * 0.008); // ~8ms fade-in to de-click the reply onset
+// Where synthesized reply audio goes. The agent writes 24kHz mono PCM chunks; the implementation (the
+// Discord bridge) resamples to its output format and paces playout. clear() drops queued audio on barge.
+export interface ReplySink {
+  write(pcm: Int16Array): void;
+  clear(): void;
+  // Optional: the reply's synthesis is complete — release any startup playout prime so a reply shorter
+  // than the prime backlog still plays out. No-op for sinks without a prime.
+  flush?(): void;
+  // Resolves when assistant audio has finished PLAYING OUT — not just been received from TTS. TTS runs
+  // faster than realtime, so respond() finishes receiving the reply while the bridge keeps playing the
+  // tail out of its buffer for up to a few seconds; the detector must stay suppressed for that whole
+  // tail (slice 6), or speech in the tail starts a new turn instead of barging. The bridge resolves
+  // this when its outBuf is empty and the pacer has no real frames left, and also on clear()/teardown
+  // so the gate is never left hanging. Optional: a sink without it (test fakes) means "no playout tail
+  // to wait for" — the caller un-suppresses immediately.
+  whenDrained?(): Promise<void>;
+}
+
+// Fail-open backstop for the drain gate. If the bridge's drain signal is missed (a frame-accounting
+// bug, a swallowed teardown), the detector must NOT stay suppressed (deaf) forever. After this long we
+// un-suppress regardless — a missed drain is worse than re-opening the mic a touch early. Generous:
+// real playout tails are 1-3s, so this only fires on a genuinely stuck signal. Mirrors the withTimeout
+// fail-soft philosophy below.
+const DRAIN_TIMEOUT_MS = 8_000;
 
 // STT/LLM/TTS calls hit self-hosted endpoints that can hang with no response. An unbounded await in
 // respond() strands it — its .finally never runs, so the detector stays suppressed and the agent goes
@@ -31,7 +39,20 @@ const FADE_SAMPLES = Math.round(SYNTH_RATE * 0.008); // ~8ms fade-in to de-click
 // and the detector resumes. ponytail: generous caps, fail-open — widen only if a real call needs it.
 const STT_TIMEOUT_MS = 15_000;
 const LLM_TIMEOUT_MS = 30_000;
-const TTS_TIMEOUT_MS = 15_000;
+const TTS_TIMEOUT_MS = 15_000; // streaming: per-frame idle gap, not whole-clip (see STREAM_TTS)
+// Approach B session PCM idle timeout. The FIRST frame can't arrive until the LLM emits its first text
+// (TTFT, up to LLM_TIMEOUT on a slow reasoning turn), so this must clear that — not the tight per-frame gap.
+const SESSION_TTS_TIMEOUT_MS = 35_000;
+// Per-endpoint cap on the start-of-session connection warm-up. Generous but bounded so a cold/down
+// endpoint delays the call coming online by at most this, then we proceed (fail-open).
+const WARMUP_TIMEOUT_MS = 4_000;
+// ~5ms fade-in on the remainder clip's onset (24kHz synth rate) to mask the click at the chunk1->remainder
+// seam. The click-suppression knob: lengthen if the seam still pops, shorten if it softens word onsets.
+const FADE_SAMPLES = 120;
+// Approach B (streaming-text TTS over one WS session): stream LLM deltas into a single continuous synthesis
+// — no seam, no tone jump. ON — the server WS endpoint (/v1/audio/stream) is live and validated. Replaces
+// the approach-C two-phase split (which slice 6 removes once B is confirmed on a live call).
+const STREAM_SESSION = true;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -58,69 +79,26 @@ async function* withIdleTimeout<T>(
   }
 }
 
-// Minimal single-producer/single-consumer async queue. push() never blocks; the async iterator yields
-// items in push order and ends after close(). Lets the producer (LLM stream → synth) run ahead while
-// the consumer (playback) drains in order — so a sentence plays the moment ITS synth resolves, not a
-// sentence behind, while later synths overlap.
-class AsyncQueue<T> {
-  private items: T[] = [];
-  private waiters: ((r: IteratorResult<T>) => void)[] = [];
-  private done = false;
-  push(item: T): void {
-    const w = this.waiters.shift();
-    if (w) w({ value: item, done: false });
-    else this.items.push(item);
-  }
-  close(): void {
-    this.done = true;
-    let w: ((r: IteratorResult<T>) => void) | undefined;
-    while ((w = this.waiters.shift())) w({ value: undefined as never, done: true });
-  }
-  [Symbol.asyncIterator](): AsyncIterator<T> {
-    return {
-      next: (): Promise<IteratorResult<T>> => {
-        if (this.items.length)
-          return Promise.resolve({ value: this.items.shift() as T, done: false });
-        if (this.done) return Promise.resolve({ value: undefined as never, done: true });
-        return new Promise((res) => this.waiters.push(res));
-      },
-    };
-  }
-}
-
-// Pull COMPLETE sentences (runs ending in . ! ?) off the front of a streaming buffer, leaving the
-// trailing partial in `rest` for the next delta. The turn loop synth's each completed sentence while
-// the LLM keeps generating, so first audio lands after sentence 1. ponytail: naive punctuation split —
-// "3.14"/"Dr." over-split into two chunks (a harmless extra TTS boundary); swap for an NLP segmenter
-// only if that ever sounds wrong.
-export function takeSentences(buf: string): { sentences: string[]; rest: string } {
-  const sentences: string[] = [];
-  const re = /[^.!?]*[.!?]+/g;
-  let end = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(buf)) !== null) {
-    const s = m[0].trim();
-    if (s) sentences.push(s);
-    end = re.lastIndex;
-  }
-  return { sentences, rest: buf.slice(end) };
-}
-
 // ponytail: energy-based turn detection — tune to your room; swap for Silero if it mis-triggers.
 const TURN_OPTS: TurnDetectorOpts = {
   vadRms: 600,
-  hangoverMs: 800,
+  // Trailing silence before a turn dispatches — pure additive onset latency on every turn (it fires
+  // before the latency timer's t0, so it's invisible in the `latency` line). 300ms is the floor: lower
+  // clips speakers who pause mid-thought. Raise back toward 400 if mid-sentence pauses get cut off.
+  hangoverMs: 300,
   minTurnMs: 400,
-  bargeMs: 250,
+  // Sustained speech (while the assistant talks) before a barge fires. Dominates perceived interrupt
+  // latency (~bargeMs detection + ~one cushion of queued audio). 180ms feels snappy; lower risks a cough
+  // or "mm-hm" backchannel cutting the assistant off. Tuned after slice 6 made tail-interruption correct.
+  bargeMs: 180,
   prerollMs: 300,
 };
 
 interface Session {
-  room: Room;
-  sink: AudioSink;
+  sink: ReplySink;
   detector: TurnDetector;
   messages: ChatMessage[];
-  cancel: boolean; // set on barge-in; AudioSink.write stops on it
+  cancel: boolean; // set on barge-in; respond()'s stream/synth loops break on it
   closed: boolean;
   abort?: AbortController; // in-flight reply's LLM stream; barge-in aborts it
 }
@@ -128,104 +106,227 @@ interface Session {
 @Injectable()
 export class VoiceAgentService {
   private readonly log = new Logger(VoiceAgentService.name);
-  private readonly sessions = new Map<string, Session>(); // roomName -> session
+  private readonly sessions = new Map<string, Session>(); // guildId -> session
   private pipeline?: SpeechPipeline;
-
-  constructor(private readonly livekit: LivekitService) {}
+  private warmed = false; // connection pools warmed once on first session start
 
   // Seam for tests: inject a fake pipeline before start().
   setPipeline(p: SpeechPipeline): void {
     this.pipeline = p;
   }
 
-  // memoryBlock: recalled facts to prepend to the system prompt; '' = plain assistant (see issue 03).
-  async start(roomName: string, memoryBlock = ''): Promise<void> {
-    if (this.sessions.has(roomName)) return;
+  // sink: where synthesized reply audio goes (the Discord bridge's output sink). memoryBlock: recalled
+  // facts to prepend to the system prompt; '' = plain assistant (see issue 03).
+  async start(id: string, sink: ReplySink, memoryBlock = ''): Promise<void> {
+    if (this.sessions.has(id)) return;
     const cfg = loadAgentConfig(); // lazy — only needs AI env when a call starts
     this.pipeline ??= createOpenAiPipeline(cfg);
 
-    const token = await this.livekit.createToken('assistant', roomName);
-    const room = new Room();
-    await room.connect(process.env.LIVEKIT_URL!, token, {
-      autoSubscribe: true,
-      dynacast: true,
-    });
+    // Warm the STT/LLM/TTS connection pools once so the first real turn doesn't pay a fresh TLS/TCP
+    // handshake (~1 RTT off tts_first et al.). Awaited so the TTS warm fully drains before any real
+    // synth — the server is single-stream, and a half-open warm stream would corrupt the first reply.
+    if (!this.warmed) {
+      this.warmed = true;
+      await this.warmUp();
+    }
 
-    // queueSize 100ms (default 1000ms): the reply is fully synthesized before we write it, so a deep
-    // playout buffer just adds latency between writing and hearing. A small buffer keeps it snappy; the
-    // data is all ready so it won't underrun.
-    const source = new AudioSource(SYNTH_RATE, 1, 100);
-    const track = LocalAudioTrack.createAudioTrack('assistant', source);
-    const opts = new TrackPublishOptions();
-    opts.source = TrackSource.SOURCE_MICROPHONE;
-    await room.localParticipant!.publishTrack(track, opts);
-
-    const session: Session = {
-      room,
-      sink: new AudioSink(source, SYNTH_RATE, 1),
+    this.sessions.set(id, {
+      sink,
       detector: new TurnDetector(TURN_OPTS),
       messages: [
         { role: 'system', content: composeSystemPrompt(cfg.systemPrompt, memoryBlock) },
       ],
       cancel: false,
       closed: false,
-    };
-    this.sessions.set(roomName, session);
-
-    room.on(RoomEvent.TrackSubscribed, (t) => {
-      if (t.kind === TrackKind.KIND_AUDIO)
-        void this.listen(session, t as RemoteAudioTrack);
     });
-    this.log.log(`agent joined ${roomName}`);
+    this.log.log(`agent ready ${id}`);
   }
 
-  stop(roomName: string): void {
-    const s = this.sessions.get(roomName);
+  // Best-effort, fail-open connection warm-up: hit each endpoint once so the pool is hot before the
+  // first turn. Output is discarded (never reaches the sink). The TTS warm is fully drained because the
+  // server is single-stream. Each ping is bounded + caught so a down endpoint can't block the call.
+  private async warmUp(): Promise<void> {
+    const p = this.pipeline;
+    if (!p) return;
+    const ping = (label: string, fn: () => Promise<void>) =>
+      withTimeout(fn(), WARMUP_TIMEOUT_MS, label).catch(() => undefined);
+    await Promise.all([
+      ping('warm-stt', async () => {
+        await p.transcriber.transcribe(buildWav(new Int16Array(160), 16000, 1));
+      }),
+      ping('warm-llm', async () => {
+        for await (const _ of p.responder.respondStream([
+          { role: 'user', content: 'hi' },
+        ])) {
+          /* drain */
+        }
+      }),
+      ping('warm-tts', async () => {
+        for await (const _ of p.synthesizer.synthesizeStream('hi')) {
+          /* drain fully — single-stream server must not see a half-open warm stream */
+        }
+      }),
+    ]);
+  }
+
+  stop(id: string): void {
+    const s = this.sessions.get(id);
     if (!s) return;
     s.closed = true;
-    void s.room.disconnect();
-    this.sessions.delete(roomName);
-    this.log.log(`agent left ${roomName}`);
+    s.abort?.abort();
+    this.sessions.delete(id);
+    this.log.log(`agent left ${id}`);
   }
 
-  // Drive frames through the turn detector; dispatch utterances, honour barge-ins.
-  private async listen(
-    session: Session,
-    track: RemoteAudioTrack,
-  ): Promise<void> {
-    const stream = new AudioStream(track);
-    for await (const frame of stream) {
-      if (session.closed) break;
-      const event = session.detector.push(
-        frame.data as Int16Array,
-        frame.sampleRate,
-        frame.channels,
-      );
-      if (!event) continue;
+  // Drive one input frame through the turn detector; dispatch utterances, honour barge-ins. The bridge
+  // calls this per 20ms mixed Discord frame (48kHz stereo).
+  feed(id: string, pcm: Int16Array, rate: number, channels: number): void {
+    const session = this.sessions.get(id);
+    if (!session || session.closed) return;
+    const event = session.detector.push(pcm, rate, channels);
+    if (!event) return;
 
-      if ('barge' in event) {
-        this.log.log('barge-in — cutting off assistant');
-        session.cancel = true;
-        session.abort?.abort(); // stop the LLM stream even if it's mid-think (no delta to break on)
-        session.sink.clear();
-        continue;
-      }
+    if ('barge' in event) {
+      this.log.log('barge-in — cutting off assistant');
+      session.cancel = true;
+      session.abort?.abort(); // stop the LLM stream even if it's mid-think (no delta to break on)
+      session.sink.clear();
+      return;
+    }
 
-      session.detector.setSuppressed(true);
-      this.respond(session, event.utterance).finally(() => {
+    session.detector.setSuppressed(true);
+    this.respond(session, event.utterance).finally(() => {
+      // respond() resolving means the reply has been RECEIVED from TTS, not that it has finished
+      // PLAYING. Keep the detector suppressed through the playout tail (the bridge drains outBuf faster
+      // than the reply was synthesized) so tail speech barges instead of starting a new turn. Gate
+      // un-suppress on the bridge's drain signal, behind a fail-open timeout so a missed signal can
+      // never leave the detector deaf. (clear() on barge and teardown resolve whenDrained() too.)
+      void this.afterDrained(session).then(() => {
         session.detector.setSuppressed(false);
       });
+    });
+  }
+
+  // Resolve when the bridge reports playout drained, or after DRAIN_TIMEOUT_MS as a fail-open backstop,
+  // whichever comes first. A sink with no whenDrained() (test fakes) has no tail to wait for.
+  private afterDrained(session: Session): Promise<void> {
+    const drained = session.sink.whenDrained?.();
+    if (!drained) return Promise.resolve();
+    return withTimeout(drained, DRAIN_TIMEOUT_MS, 'drain').catch(() => undefined);
+  }
+
+  // Synthesize one text chunk to the sink. Marks 'audio' on the first frame of the reply (idempotent via
+  // the local guard, so chunk1's first frame wins the onset mark). Returns the PCM sample count for the
+  // synth_audio canary. Honors barge/teardown via cancel/closed.
+  private async synthChunk(
+    session: Session,
+    text: string,
+    signal: AbortSignal,
+    timer: TurnTimer,
+    fade = false, // fade the onset in — only the remainder clip, to mask the chunk1->remainder seam click
+  ): Promise<number> {
+    let first = true;
+    let samples = 0;
+    let faded = 0;
+    const frames = withIdleTimeout(
+      this.pipeline!.synthesizer.synthesizeStream(text, signal),
+      TTS_TIMEOUT_MS,
+      'synthesize',
+    );
+    for await (const pcm of frames) {
+      if (session.cancel || session.closed) break;
+      if (first) {
+        first = false;
+        timer.mark('audio');
+      }
+      if (fade && faded < FADE_SAMPLES) faded = fadeIn(pcm, faded, FADE_SAMPLES);
+      samples += pcm.length;
+      session.sink.write(pcm);
+    }
+    return samples;
+  }
+
+  // Approach B turn: feed LLM reply deltas into one continuous TTS session and pipe its PCM to the sink.
+  // The session ends (server EOS flush) when the LLM stream completes; a barge aborts ctrl which closes
+  // the session socket. One synthesis take, so no seam. Called only when STREAM_SESSION + the synthesizer
+  // exposes synthesizeSession().
+  private async respondViaSession(
+    session: Session,
+    ctrl: AbortController,
+    timer: TurnTimer,
+  ): Promise<void> {
+    let full = '';
+    let firstDelta = true;
+    const pipeline = this.pipeline!;
+    // Text source: the LLM deltas. Accumulates the full reply (for history) and marks llm/sentence. The
+    // session pulls this as it generates; `sentence` marks when the last token is in (text complete).
+    const textSource = async function* (): AsyncIterable<string> {
+      const stream = withIdleTimeout(
+        pipeline.responder.respondStream(session.messages, ctrl.signal),
+        LLM_TIMEOUT_MS,
+        'responder',
+      );
+      for await (const delta of stream) {
+        if (session.cancel || session.closed) return;
+        if (firstDelta) {
+          timer.mark('llm');
+          firstDelta = false;
+        }
+        full += delta;
+        yield delta;
+      }
+      timer.mark('sentence'); // reply text complete (the session will get its `end`)
+    };
+
+    session.sink.clear();
+    let firstFrame = true;
+    let synthSamples = 0;
+    const frames = withIdleTimeout(
+      pipeline.synthesizer.synthesizeSession!(textSource(), ctrl.signal),
+      SESSION_TTS_TIMEOUT_MS, // spans LLM TTFT (no PCM until the LLM emits text)
+      'synthesize',
+    );
+    for await (const pcm of frames) {
+      if (session.cancel || session.closed) break;
+      if (firstFrame) {
+        firstFrame = false;
+        timer.mark('audio');
+      }
+      synthSamples += pcm.length;
+      session.sink.write(pcm);
+    }
+    session.sink.flush?.(); // synthesis done — release the startup prime so a short reply still plays out
+
+    const reply = full.trim();
+    if (reply) {
+      session.messages.push({ role: 'assistant', content: reply });
+      if (session.messages.length > 11) {
+        session.messages.splice(1, session.messages.length - 11); // keep system + last 10
+      }
+    }
+    if (reply && !(session.cancel || session.closed)) {
+      this.log.log(`synth_audio=${(synthSamples / 24000).toFixed(2)}s (24kHz mono)`);
+    }
+    this.log.log(`reply: ${reply}`);
+    if (!(session.cancel || session.closed)) {
+      timer.mark('done');
+      this.log.log(timer.render());
     }
   }
 
   private async respond(session: Session, utt: Utterance): Promise<void> {
     const ctrl = new AbortController();
     session.abort = ctrl; // so a barge-in can abort the LLM stream mid-think
+    const timer = new TurnTimer(); // t0 = utterance ready; marks each stage, logs one `latency` line
     try {
-      const wav = buildWav(utt.pcm, utt.rate, utt.channels);
+      // Downsample the capture (48kHz stereo from Discord) to 16kHz mono before STT: ~6x fewer bytes to
+      // upload/decode, and Whisper-class STT resamples to 16k mono internally anyway — no accuracy loss.
+      const sttPcm = resampleToMono(utt.pcm, utt.rate, utt.channels, 16000);
+      const wav = buildWav(sttPcm, 16000, 1);
       const text = (
         await withTimeout(this.pipeline!.transcriber.transcribe(wav), STT_TIMEOUT_MS, 'transcribe')
       ).trim();
+      timer.mark('stt');
       if (!text) return;
       this.log.log(`heard: ${text}`);
       session.messages.push({ role: 'user', content: text });
@@ -234,75 +335,81 @@ export class VoiceAgentService {
       // interrupt. From here, only a barge DURING playback (below) stops the reply.
       session.cancel = false;
 
-      // Producer: stream the reply token-by-token; as each full sentence forms, queue its TEXT.
-      // Consumer: for each sentence, stream its TTS audio (PCM frames) straight to the sink as it
-      // arrives — first audio ~0.6s after the sentence forms, not after its whole synth. Sentences play
-      // sequentially; the LLM keeps generating during playback, so the only seam between them is the next
-      // sentence's ~0.6s TTS first-frame. ponytail: no synth-ahead overlap — add it only if seams sound off.
-      const queue = new AsyncQueue<string>();
+      // Approach B: stream the reply text straight into ONE continuous TTS session (no per-request seam).
+      // Flag-gated + needs the streaming-session synthesizer; default off until the server WS endpoint is
+      // live. When on, this replaces the approach-C two-phase synth below.
+      if (STREAM_SESSION && this.pipeline!.synthesizer.synthesizeSession) {
+        await this.respondViaSession(session, ctrl, timer);
+        return; // finally still runs (aborts the ctrl, clears session.abort)
+      }
+
+      // Stream the reply token-by-token. As soon as the splitter yields a sizeable first chunk (a sentence
+      // boundary past MIN_FIRST_CHARS), synthesize it WHILE the LLM keeps generating the rest — first audio
+      // starts after chunk1 instead of the last token. Single-stream-safe: chunk1 synth overlaps only the
+      // LLM token stream, and the remainder synth runs strictly AFTER chunk1 drains (never two at once).
       let full = '';
-      let produceErr: unknown;
-      const produce = (async () => {
-        let buf = '';
-        try {
-          const stream = withIdleTimeout(
-            this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
-            LLM_TIMEOUT_MS,
-            'responder',
-          );
-          for await (const delta of stream) {
-            if (session.cancel || session.closed) break;
-            full += delta;
-            buf += delta;
-            const { sentences, rest } = takeSentences(buf);
-            buf = rest;
-            for (const s of sentences) queue.push(s);
-          }
-          const tail = buf.trim();
-          if (tail && !(session.cancel || session.closed)) queue.push(tail);
-        } catch (e) {
-          produceErr = e;
-        } finally {
-          queue.close();
-        }
-      })();
-
-      let firstChunk = true;
-      for await (const sentence of queue) {
+      let firstDelta = true;
+      let chunk1: string | null = null;
+      let synth1: Promise<number> | undefined;
+      let synthSamples = 0; // diagnostic: total PCM samples synthesized for this reply
+      const stream = withIdleTimeout(
+        this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
+        LLM_TIMEOUT_MS,
+        'responder',
+      );
+      for await (const delta of stream) {
         if (session.cancel || session.closed) break;
-        // Stream this sentence's PCM frames to the sink as they arrive; idle-timeout guards a stalled TTS.
-        // The sink carries sub-frame remainders across writes (and across sentences), so playback stays
-        // frame-aligned and gap-free; only the reply's very first sample needs a fade to de-click the onset.
-        const frames = withIdleTimeout(
-          this.pipeline!.synthesizer.synthesizeStream(sentence, ctrl.signal),
-          TTS_TIMEOUT_MS,
-          'synthesize',
-        );
-        for await (const pcm of frames) {
-          if (session.cancel || session.closed) break;
-          if (firstChunk) {
-            fadeIn(pcm, FADE_SAMPLES); // de-click the reply onset (TTS stream starts mid-waveform)
-            firstChunk = false;
-            this.log.log('first audio');
+        if (firstDelta) {
+          timer.mark('llm');
+          firstDelta = false;
+        }
+        full += delta;
+        if (!chunk1) {
+          const split = splitFirstChunk(full);
+          if (split) {
+            chunk1 = split.chunk1;
+            timer.mark('sentence'); // first synthesizable chunk ready — drives onset
+            session.sink.clear(); // drop the prior reply's tail before this reply's first write
+            synth1 = this.synthChunk(session, chunk1, ctrl.signal, timer);
           }
-          // 24kHz mono straight to the sink; LiveKit resamples to the bridge's 48kHz/stereo.
-          await session.sink.write(pcm, () => session.cancel || session.closed);
         }
       }
-      if (!(session.cancel || session.closed)) {
-        await session.sink.flush(() => session.cancel || session.closed); // emit the final sub-frame tail
-      }
-      await produce; // settle the producer (history/`full` are complete once it returns)
-      if (produceErr) throw produceErr;
+      // Settle the in-flight chunk1 synth before the remainder (single-stream: never two synths at once),
+      // and so a barge-aborted synth can't dangle as an unhandled rejection.
+      if (synth1) synthSamples += await synth1.catch(() => 0);
 
-      full = full.trim();
-      if (full) {
-        session.messages.push({ role: 'assistant', content: full });
+      const reply = full.trim();
+      if (chunk1) {
+        // Two-phase: chunk1 already synthesized above; now the remainder as one request.
+        const rest = full.slice(chunk1.length).trim();
+        this.log.log(`early-synth: split chunk1=${chunk1.length}ch rest=${rest.length}ch`);
+        if (rest && !(session.cancel || session.closed)) {
+          synthSamples += await this.synthChunk(session, rest, ctrl.signal, timer, true); // fade the seam
+        }
+      } else if (reply && !(session.cancel || session.closed)) {
+        // No split (short/run-on reply) — synthesize the whole reply as one request (the original path).
+        this.log.log(`early-synth: whole-reply ${reply.length}ch (no split)`);
+        timer.mark('sentence');
+        session.sink.clear();
+        synthSamples += await this.synthChunk(session, reply, ctrl.signal, timer);
+      }
+      if ((chunk1 || reply) && !(session.cancel || session.closed)) {
+        // synth_audio ≫ the reply's natural spoken length = the server stretched it; canary for regressions.
+        this.log.log(`synth_audio=${(synthSamples / 24000).toFixed(2)}s (24kHz mono)`);
+      }
+      session.sink.flush?.(); // synthesis done — release the startup prime so a short reply still plays out
+
+      if (reply) {
+        session.messages.push({ role: 'assistant', content: reply });
         if (session.messages.length > 11) {
           session.messages.splice(1, session.messages.length - 11); // keep system + last 10
         }
       }
-      this.log.log(`reply: ${full}`);
+      this.log.log(`reply: ${reply}`);
+      if (!(session.cancel || session.closed)) {
+        timer.mark('done');
+        this.log.log(timer.render()); // one structured per-turn latency line on the clean path
+      }
     } catch (e) {
       if (session.cancel || session.closed) this.log.log('reply interrupted');
       else this.log.error(`pipeline failed: ${(e as Error).message}`);

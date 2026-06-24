@@ -10,22 +10,11 @@ import {
 import { VoiceBasedChannel } from 'discord.js';
 import { Readable } from 'node:stream';
 import * as prism from 'prism-media';
-import {
-  Room,
-  RoomEvent,
-  AudioSource,
-  AudioStream,
-  LocalAudioTrack,
-  TrackPublishOptions,
-  TrackSource,
-  TrackKind,
-  RemoteAudioTrack,
-} from '@livekit/rtc-node';
-import { LivekitService } from '../livekit/livekit.service';
-import { AudioSink } from '../agent/audio-sink';
+import { VoiceAgentService, ReplySink } from '../agent/voice-agent.service';
 import { SpeakerMixer } from './speaker-mixer';
+import { VoicePlayout, STARTUP_PRIME_BYTES } from './voice-playout';
 
-// Discord voice is always 48kHz stereo s16le; we run LiveKit at the same rate so no resampling.
+// Discord voice is always 48kHz stereo s16le.
 const RATE = 48000;
 const CHANNELS = 2;
 const FRAME_SAMPLES = 960; // 20ms @ 48kHz
@@ -36,9 +25,9 @@ export class DiscordBridge {
   private readonly sessions = new Map<string, () => void>(); // guildId -> cleanup
   private readonly outs = new Map<string, Readable>(); // guildId -> Discord PCM sink
 
-  constructor(private readonly livekit: LivekitService) {}
+  constructor(private readonly agent: VoiceAgentService) {}
 
-  // Diagnostic: push 1s of 440Hz tone straight into the Discord player, bypassing LiveKit/TTS.
+  // Diagnostic: push 1s of 440Hz tone straight into the Discord player, bypassing the agent/TTS.
   // If you hear this but not the assistant, the Discord transmit path is fine and the issue is upstream.
   playTone(guildId: string): boolean {
     const pcmOut = this.outs.get(guildId);
@@ -55,26 +44,10 @@ export class DiscordBridge {
     return true;
   }
 
-  async start(channel: VoiceBasedChannel): Promise<string> {
+  // memoryBlock: recalled facts for the agent's system prompt; '' = plain assistant.
+  async start(channel: VoiceBasedChannel, memoryBlock = ''): Promise<void> {
     const guildId = channel.guild.id;
     this.stop(guildId); // ponytail: one bridge per guild; restart replaces it
-
-    const roomName = `discord-${guildId}`;
-
-    // --- LiveKit: connect and publish the Discord audio as a mic track ---
-    const token = await this.livekit.createToken('discord-bridge', roomName);
-    const room = new Room();
-    await room.connect(process.env.LIVEKIT_URL!, token, {
-      autoSubscribe: true,
-      dynacast: true,
-    });
-
-    const source = new AudioSource(RATE, CHANNELS);
-    const track = LocalAudioTrack.createAudioTrack('discord', source);
-    const pubOpts = new TrackPublishOptions();
-    pubOpts.source = TrackSource.SOURCE_MICROPHONE;
-    await room.localParticipant!.publishTrack(track, pubOpts);
-    const sink = new AudioSink(source, RATE, CHANNELS);
 
     // --- Discord: join the voice channel ---
     const connection = joinVoiceChannel({
@@ -90,13 +63,58 @@ export class DiscordBridge {
       this.log.error(`voice connection error: ${e.message}`),
     );
 
-    let closed = false; // set on hangup; stops captures into a torn-down LiveKit source
+    let closed = false; // set on hangup; stops captures/forwarding mid-stream
 
-    // Discord -> LiveKit: decode each speaker separately and feed the mixer, which
-    // combines simultaneous talkers into one steady 48kHz stereo stream.
+    // --- agent -> Discord (set up first so the playout buffer exists before the agent starts) ---
+    // VoicePlayout owns the pending-PCM buffer, the realtime pacer, and the slice-6 drain signal: the
+    // agent dumps a whole reply into it faster than realtime via write(); pump() (driven by paceTimer
+    // below) drains it at realtime into pcmOut, keeping a small cushion of real audio and a silence floor
+    // so the player never latches to idle. outSink is a thin closed-aware delegate to it.
+    const playout = new VoicePlayout(STARTUP_PRIME_BYTES); // prime the startup backlog for streaming synth
+    const pcmOut = new Readable({ read() {} });
+    this.outs.set(guildId, pcmOut);
+
+    const outSink: ReplySink = {
+      write: (pcm) => {
+        if (closed) return;
+        playout.write(pcm);
+      },
+      clear: () => playout.clear(),
+      flush: () => playout.flush(), // reply done: release the prime so a short reply still plays out
+      whenDrained: () => playout.whenDrained(),
+    };
+    await this.agent.start(guildId, outSink, memoryBlock);
+
+    // NoSubscriberBehavior.Play: keep playing in the brief window before the voice connection is ready,
+    // so the resource isn't torn down to idle during startup.
+    const player = createAudioPlayer({
+      behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+    });
+    player.on('error', (e) =>
+      this.log.error(`discord player error: ${e.message}`),
+    );
+    player.on('stateChange', (o, n) =>
+      this.log.log(`discord player ${o.status} -> ${n.status}`),
+    );
+    player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
+    connection.subscribe(player);
+
+    // Realtime playout pacer: each tick, VoicePlayout fills the cushion of real audio and the silence
+    // floor into pcmOut and updates its drain signal. The two-tier buffering and drain semantics live in
+    // the module (voice-playout.ts); the bridge only owns the clock and the Discord Readable.
+    const paceTimer = setInterval(() => {
+      if (closed) return;
+      playout.pump(pcmOut);
+    }, 10);
+
+    // --- Discord -> agent: decode each speaker separately and feed the mixer, which combines
+    // simultaneous talkers into one steady 48kHz stereo stream. ---
     const FRAME_LEN = FRAME_SAMPLES * CHANNELS; // int16s per 20ms frame (960 * 2)
     const mixer = new SpeakerMixer(FRAME_LEN);
     const subscribed = new Set<string>(); // opus-stream dedup (a transport concern)
+    // Track live decode streams so teardown can destroy them deterministically rather than relying on
+    // connection.destroy() cascading (a mid-stream prism decoder can otherwise linger).
+    const decoders = new Map<string, { opus: { destroy(): void }; decoder: { destroy(): void } }>();
 
     connection.receiver.speaking.on('start', (userId) => {
       if (subscribed.has(userId)) return;
@@ -110,6 +128,7 @@ export class DiscordBridge {
         frameSize: FRAME_SAMPLES,
       });
       opus.pipe(decoder);
+      decoders.set(userId, { opus, decoder });
       decoder.on('data', (pcm: Buffer) => {
         if (closed) return;
         const frame = new Int16Array(FRAME_LEN); // fresh offset-0 buffer (copy)
@@ -125,91 +144,40 @@ export class DiscordBridge {
       decoder.on('error', (e) => this.log.warn(`decoder: ${e.message}`));
       opus.on('end', () => {
         subscribed.delete(userId);
+        decoders.delete(userId); // ended naturally; nothing to destroy
         mixer.drop(userId); // stops after 1s silence; re-added on next 'start'
       });
     });
 
-    // Mixer tick: every 20ms pull one mixed frame and write it to LiveKit via the sink.
-    // ponytail: setInterval clock; jitter is absorbed by the AudioSource queue.
+    // Mixer tick: every 20ms pull one mixed frame and feed it to the agent's turn detector.
+    // ponytail: setInterval clock; jitter is absorbed by the detector's frame buffer.
     const mixTimer = setInterval(() => {
       if (closed) return;
       const mixed = mixer.tick();
-      if (mixed) void sink.write(mixed); // sink owns offset-0 framing + close-race
+      if (mixed) this.agent.feed(guildId, mixed, RATE, CHANNELS);
     }, 20);
 
-    // LiveKit -> Discord, PULL-paced. Discord pulls 20ms frames at playback rate; we hand back the next
-    // buffered real frame, or silence when there's none. Pull-based (vs pushing on a timer) bounds the
-    // stream to the consumer's high-water mark, so silence can't pile up ahead of real audio and delay it
-    // — while still never starving (which would latch the player to idle and drop all audio).
-    const FRAME_BYTES = FRAME_SAMPLES * CHANNELS * 2; // 20ms @ 48kHz stereo s16le
-    const SILENCE = Buffer.alloc(FRAME_BYTES);
-    const MAX_OUT = FRAME_BYTES * 25; // ~500ms safety cap on the real-audio backlog (drop oldest beyond)
-    let outBuf = Buffer.alloc(0); // remote PCM awaiting playout
-    const pcmOut = new Readable({ read() {} });
-    this.outs.set(guildId, pcmOut);
-    // NoSubscriberBehavior.Play: keep playing in the brief window before the voice connection is ready,
-    // so the resource isn't torn down to idle during startup.
-    const player = createAudioPlayer({
-      behaviors: { noSubscriber: NoSubscriberBehavior.Play },
-    });
-    player.on('error', (e) =>
-      this.log.error(`discord player error: ${e.message}`),
-    );
-    player.on('stateChange', (o, n) =>
-      this.log.log(`discord player ${o.status} -> ${n.status}`),
-    );
-    player.play(createAudioResource(pcmOut, { inputType: StreamType.Raw }));
-    connection.subscribe(player);
-
-    // Keep a small jitter cushion (~TARGET) buffered into the player and no more: enough that timer /
-    // event-loop jitter doesn't underrun (which sounds choppy), but small so latency stays low. Letting
-    // discord pull-ahead freely pre-buffered ~1-2s of silence ahead of real audio; pushing zero cushion
-    // underran. Refill to TARGET each tick from real audio, or silence to keep the player alive.
-    const TARGET = FRAME_BYTES * 5; // ~100ms cushion
-    const paceTimer = setInterval(() => {
-      if (closed) return;
-      while (pcmOut.readableLength < TARGET) {
-        if (outBuf.length >= FRAME_BYTES) {
-          pcmOut.push(outBuf.subarray(0, FRAME_BYTES));
-          outBuf = outBuf.subarray(FRAME_BYTES);
-        } else {
-          pcmOut.push(SILENCE);
-        }
-      }
-    }, 10);
-
-    room.on(RoomEvent.TrackSubscribed, (t, _pub, participant) => {
-      if (t.kind !== TrackKind.KIND_AUDIO) return;
-      this.log.log(
-        `forwarding LiveKit audio from "${participant?.identity}" -> Discord`,
-      );
-      const stream = new AudioStream(t as RemoteAudioTrack, RATE, CHANNELS);
-      // ponytail: each remote track streamed unmixed — fine for 1:1, garbles if >1 speaks at once.
-      // Upgrade path: sum Int16 frames into a mix buffer keyed by timestamp before push.
-      void (async () => {
-        for await (const frame of stream) {
-          if (closed) break;
-          // copy: rtc-node may reuse the frame buffer after we yield.
-          const next = Buffer.copyBytesFrom(frame.data);
-          outBuf = outBuf.length ? Buffer.concat([outBuf, next]) : next;
-          if (outBuf.length > MAX_OUT) outBuf = outBuf.subarray(outBuf.length - MAX_OUT);
-        }
-      })().catch((e) => this.log.warn(`livekit stream: ${e.message}`));
-    });
-
-    this.log.log(`bridge up: #${channel.name} <-> LiveKit ${roomName}`);
+    this.log.log(`bridge up: #${channel.name} <-> agent (guild ${guildId})`);
     this.sessions.set(guildId, () => {
-      closed = true; // stop captures/forwarding before tearing down the source
+      closed = true; // stop captures/forwarding before tearing down
+      playout.close(); // pacer is about to stop; resolve any pending/future drain gate so the detector
+      //                  isn't stranded suppressed (deaf) after teardown — fail-open
       clearInterval(mixTimer);
       clearInterval(paceTimer);
+      this.agent.stop(guildId);
+      for (const { opus, decoder } of decoders.values()) {
+        try {
+          opus.destroy();
+          decoder.destroy();
+        } catch {}
+      }
+      decoders.clear();
       try {
         connection.destroy();
       } catch {}
       pcmOut.push(null);
       this.outs.delete(guildId);
-      void room.disconnect();
     });
-    return roomName;
   }
 
   stop(guildId: string) {

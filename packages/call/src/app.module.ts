@@ -2,7 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { LivekitModule } from './livekit/livekit.module';
 import { DiscordModule } from './discord/discord.module';
 
 @Module({
@@ -14,7 +13,6 @@ import { DiscordModule } from './discord/discord.module';
       // bootstrap, so the lazy-config rule holds — read env per call, never cache it in a field.
       envFilePath: ['.env', '../../.env'],
     }),
-    LivekitModule,
     DiscordModule,
   ],
   controllers: [AppController],

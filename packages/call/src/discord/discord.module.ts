@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { NecordModule } from 'necord';
 import { GatewayIntentBits } from 'discord.js';
-import { LivekitModule } from '../livekit/livekit.module';
 import { AgentModule } from '../agent/agent.module';
 import { CallCommands } from './call.commands';
 import { DiscordBridge } from './bridge.service';
@@ -21,7 +20,6 @@ import { DiscordBridge } from './bridge.service';
           : undefined,
       }),
     }),
-    LivekitModule,
     AgentModule,
   ],
   providers: [CallCommands, DiscordBridge],
