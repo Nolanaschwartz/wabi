@@ -43,6 +43,10 @@ const WARMUP_TIMEOUT_MS = 4_000;
 // ~5ms fade-in on the remainder clip's onset (24kHz synth rate) to mask the click at the chunk1->remainder
 // seam. The click-suppression knob: lengthen if the seam still pops, shorten if it softens word onsets.
 const FADE_SAMPLES = 120;
+// Approach B (streaming-text TTS over one WS session): stream LLM deltas into a single continuous synthesis
+// — no seam, no tone jump. Off until the server WS endpoint (slice 3) is live; flip on to replace the
+// approach-C two-phase split. See .scratch/streaming-tts-websocket.
+const STREAM_SESSION = false;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -236,6 +240,73 @@ export class VoiceAgentService {
     return samples;
   }
 
+  // Approach B turn: feed LLM reply deltas into one continuous TTS session and pipe its PCM to the sink.
+  // The session ends (server EOS flush) when the LLM stream completes; a barge aborts ctrl which closes
+  // the session socket. One synthesis take, so no seam. Called only when STREAM_SESSION + the synthesizer
+  // exposes synthesizeSession().
+  private async respondViaSession(
+    session: Session,
+    ctrl: AbortController,
+    timer: TurnTimer,
+  ): Promise<void> {
+    let full = '';
+    let firstDelta = true;
+    const pipeline = this.pipeline!;
+    // Text source: the LLM deltas. Accumulates the full reply (for history) and marks llm/sentence. The
+    // session pulls this as it generates; `sentence` marks when the last token is in (text complete).
+    const textSource = async function* (): AsyncIterable<string> {
+      const stream = withIdleTimeout(
+        pipeline.responder.respondStream(session.messages, ctrl.signal),
+        LLM_TIMEOUT_MS,
+        'responder',
+      );
+      for await (const delta of stream) {
+        if (session.cancel || session.closed) return;
+        if (firstDelta) {
+          timer.mark('llm');
+          firstDelta = false;
+        }
+        full += delta;
+        yield delta;
+      }
+      timer.mark('sentence'); // reply text complete (the session will get its `end`)
+    };
+
+    session.sink.clear();
+    let firstFrame = true;
+    let synthSamples = 0;
+    const frames = withIdleTimeout(
+      pipeline.synthesizer.synthesizeSession!(textSource(), ctrl.signal),
+      TTS_TIMEOUT_MS,
+      'synthesize',
+    );
+    for await (const pcm of frames) {
+      if (session.cancel || session.closed) break;
+      if (firstFrame) {
+        firstFrame = false;
+        timer.mark('audio');
+      }
+      synthSamples += pcm.length;
+      session.sink.write(pcm);
+    }
+
+    const reply = full.trim();
+    if (reply) {
+      session.messages.push({ role: 'assistant', content: reply });
+      if (session.messages.length > 11) {
+        session.messages.splice(1, session.messages.length - 11); // keep system + last 10
+      }
+    }
+    if (reply && !(session.cancel || session.closed)) {
+      this.log.log(`synth_audio=${(synthSamples / 24000).toFixed(2)}s (24kHz mono)`);
+    }
+    this.log.log(`reply: ${reply}`);
+    if (!(session.cancel || session.closed)) {
+      timer.mark('done');
+      this.log.log(timer.render());
+    }
+  }
+
   private async respond(session: Session, utt: Utterance): Promise<void> {
     const ctrl = new AbortController();
     session.abort = ctrl; // so a barge-in can abort the LLM stream mid-think
@@ -256,6 +327,14 @@ export class VoiceAgentService {
       // Clear any barge that fired during STT — the assistant isn't audible yet, so it had nothing to
       // interrupt. From here, only a barge DURING playback (below) stops the reply.
       session.cancel = false;
+
+      // Approach B: stream the reply text straight into ONE continuous TTS session (no per-request seam).
+      // Flag-gated + needs the streaming-session synthesizer; default off until the server WS endpoint is
+      // live. When on, this replaces the approach-C two-phase synth below.
+      if (STREAM_SESSION && this.pipeline!.synthesizer.synthesizeSession) {
+        await this.respondViaSession(session, ctrl, timer);
+        return; // finally still runs (aborts the ctrl, clears session.abort)
+      }
 
       // Stream the reply token-by-token. As soon as the splitter yields a sizeable first chunk (a sentence
       // boundary past MIN_FIRST_CHARS), synthesize it WHILE the LLM keeps generating the rest — first audio

@@ -2,6 +2,16 @@ import { Logger } from '@nestjs/common';
 import { VoiceAgentService } from './voice-agent.service';
 import { SpeechPipeline } from './speech';
 import { parseWav } from './audio.util';
+import { TurnTimer } from './turn-timer';
+
+// A fake streaming-session synthesizer (approach B): consumes the text iterable, yields one PCM frame per
+// delta. Captures the text it received so tests can assert the deltas were streamed in.
+const sessionSynth = () =>
+  jest.fn((text: AsyncIterable<string>) =>
+    (async function* () {
+      for await (const _ of text) yield new Int16Array(2).fill(1);
+    })(),
+  );
 
 // A responder.respondStream mock that yields the given text deltas in order.
 const streamOf = (...deltas: string[]) =>
@@ -148,6 +158,42 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     await drain();
 
     expect(pipeline.synthesizer.synthesizeStream).toHaveBeenCalledTimes(1); // only chunk1
+  });
+
+  it('approach B: streams reply deltas into one session and pipes PCM to the sink', async () => {
+    const sink = { write: jest.fn(), clear: jest.fn() };
+    const session = sessionWith(sink);
+    const pipeline = pipelineFor('x');
+    pipeline.responder.respondStream = streamOf('Hello ', 'there. ', 'How are you?');
+    pipeline.synthesizer.synthesizeSession = sessionSynth();
+    const svc = make(pipeline);
+
+    await (svc as any).respondViaSession(session, new AbortController(), new TurnTimer());
+
+    expect(pipeline.synthesizer.synthesizeSession).toHaveBeenCalledTimes(1);
+    expect(sink.clear).toHaveBeenCalled(); // dropped the prior reply before the first write
+    expect(sink.write).toHaveBeenCalledTimes(3); // one PCM frame per streamed delta
+    expect(session.messages.at(-1)).toEqual({
+      role: 'assistant',
+      content: 'Hello there. How are you?', // full reply accumulated for history
+    });
+  });
+
+  it('approach B: a barge during playback stops writing', async () => {
+    const session = sessionWith({
+      write: jest.fn().mockImplementation(() => {
+        session.cancel = true; // barge after the first frame
+      }),
+      clear: jest.fn(),
+    });
+    const pipeline = pipelineFor('x');
+    pipeline.responder.respondStream = streamOf('a ', 'b ', 'c ', 'd');
+    pipeline.synthesizer.synthesizeSession = sessionSynth();
+    const svc = make(pipeline);
+
+    await (svc as any).respondViaSession(session, new AbortController(), new TurnTimer());
+
+    expect(session.sink.write).toHaveBeenCalledTimes(1); // stopped after the barge
   });
 
   it('warms STT/LLM/TTS connections, draining each, fail-open', async () => {
