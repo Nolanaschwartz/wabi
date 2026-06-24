@@ -37,6 +37,9 @@ const DRAIN_TIMEOUT_MS = 8_000;
 const STT_TIMEOUT_MS = 15_000;
 const LLM_TIMEOUT_MS = 30_000;
 const TTS_TIMEOUT_MS = 15_000; // streaming: per-frame idle gap, not whole-clip (see STREAM_TTS)
+// Approach B session PCM idle timeout. The FIRST frame can't arrive until the LLM emits its first text
+// (TTFT, up to LLM_TIMEOUT on a slow reasoning turn), so this must clear that — not the tight per-frame gap.
+const SESSION_TTS_TIMEOUT_MS = 35_000;
 // Per-endpoint cap on the start-of-session connection warm-up. Generous but bounded so a cold/down
 // endpoint delays the call coming online by at most this, then we proceed (fail-open).
 const WARMUP_TIMEOUT_MS = 4_000;
@@ -277,7 +280,7 @@ export class VoiceAgentService {
     let synthSamples = 0;
     const frames = withIdleTimeout(
       pipeline.synthesizer.synthesizeSession!(textSource(), ctrl.signal),
-      TTS_TIMEOUT_MS,
+      SESSION_TTS_TIMEOUT_MS, // spans LLM TTFT (no PCM until the LLM emits text)
       'synthesize',
     );
     for await (const pcm of frames) {

@@ -126,9 +126,11 @@ export async function* streamSession(
     sock.send(JSON.stringify({ type: 'end' }));
   })();
   // Fire-and-forget with its own handler. NOT awaited in finally: on abort the pump can be parked in the
-  // text source's next() forever, and awaiting it would hang the generator's teardown.
+  // text source's next() forever, and awaiting it would hang the generator's teardown. ping() so a pump
+  // failure (e.g. a send error) wakes the yield loop to surface it immediately, not after the idle timeout.
   void pump.catch((e) => {
     err = err ?? e;
+    ping();
   });
 
   try {
@@ -155,8 +157,17 @@ export function wsSocket(baseUrl: string, path = '/v1/audio/stream'): SynthSocke
   const url = baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '') + path;
   const ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
+  // send() before the socket opens throws "still in CONNECTING state" — the session sends `init`
+  // immediately, so buffer until 'open' and flush in order.
+  let open = false;
+  const queued: (string | Uint8Array)[] = [];
+  ws.addEventListener('open', () => {
+    open = true;
+    for (const d of queued) ws.send(d);
+    queued.length = 0;
+  });
   return {
-    send: (d) => ws.send(d),
+    send: (d) => (open ? ws.send(d) : queued.push(d)),
     onMessage: (cb) => ws.addEventListener('message', (e) => cb(e.data)),
     onClose: (cb) => ws.addEventListener('close', () => cb()),
     onError: (cb) => ws.addEventListener('error', () => cb(new Error('tts websocket error'))),
