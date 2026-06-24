@@ -21,9 +21,9 @@ describe('loadAgentConfig — output cap + pacing knobs', () => {
     process.env = saved;
   });
 
-  it('defaults llm.maxTokens to a generous cap (>=120 so a reasoning model still emits text)', () => {
-    expect(loadAgentConfig().llm.maxTokens).toBe(160);
-    expect(loadAgentConfig().llm.maxTokens).toBeGreaterThanOrEqual(120);
+  it('defaults llm.maxTokens to a generous backstop (large so a reasoning model still emits text)', () => {
+    expect(loadAgentConfig().llm.maxTokens).toBe(2048);
+    expect(loadAgentConfig().llm.maxTokens).toBeGreaterThanOrEqual(1024);
   });
 
   it('reads LLM_MAX_TOKENS as a number when set', () => {
@@ -41,7 +41,7 @@ describe('loadAgentConfig — output cap + pacing knobs', () => {
   });
 
   it('resolves lazily: a change between calls is reflected, never cached at import', () => {
-    expect(loadAgentConfig().llm.maxTokens).toBe(160);
+    expect(loadAgentConfig().llm.maxTokens).toBe(2048);
     process.env.LLM_MAX_TOKENS = '200';
     process.env.TTS_SPEED = '0.9';
     expect(loadAgentConfig().llm.maxTokens).toBe(200);

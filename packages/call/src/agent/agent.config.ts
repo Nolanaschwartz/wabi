@@ -1,7 +1,8 @@
 // Loaded lazily on first /call so the app boots without these set.
 export interface AgentConfig {
   stt: { url: string; model: string; key?: string };
-  // maxTokens caps the reply length to keep turns short and TTS first-frame latency low.
+  // maxTokens is a runaway BACKSTOP (the brevity prompt controls length). Must stay generous: this is a
+  // reasoning model, and a tight cap starves the visible reply to empty.
   llm: { url: string; model: string; key?: string; maxTokens: number };
   // speed paces the synthesized voice (1.0 = native). The TTS server is single-stream.
   tts: { url: string; model: string; voice: string; key?: string; speed: number };
@@ -34,10 +35,12 @@ export function loadAgentConfig(): AgentConfig {
       url: req('LLM_URL'),
       model: process.env.LLM_MODEL ?? 'gpt-4o-mini',
       key: process.env.LLM_API_KEY,
-      // Default 160: generous enough that a reasoning model still emits text after
-      // spending some budget on reasoning tokens (see "reasoning-model output caps"),
-      // while still capping a 1-2 sentence spoken reply.
-      maxTokens: numEnv('LLM_MAX_TOKENS', 160),
+      // Runaway BACKSTOP, not the length control. This LLM is a reasoning model: it spends hidden
+      // reasoning tokens before any visible text, so a tight cap (160 was tried) starves the content
+      // and the reply comes back EMPTY (see "reasoning-model output caps"). Keep this generous so the
+      // model always produces text; the brevity system prompt is what keeps replies short. Raise via
+      // LLM_MAX_TOKENS if replies ever return empty (reasoning budget exceeded).
+      maxTokens: numEnv('LLM_MAX_TOKENS', 2048),
     },
     tts: {
       url: req('TTS_URL'),
