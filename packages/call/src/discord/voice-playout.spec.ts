@@ -132,45 +132,6 @@ describe('VoicePlayout', () => {
     expect(await settled(gate)).toBe(true);
   });
 
-  describe('startup prime (streaming)', () => {
-    const PRIME = FRAME_BYTES * 20;
-
-    it('holds real audio (silence only) until the prime backlog accumulates, then drains', () => {
-      const p = new VoicePlayout(PRIME);
-      writeFrames(p, 5); // below the 20-frame prime
-      const port = new FakePort();
-      p.pump(port);
-      expect(port.pushed.every((b) => b.equals(Buffer.alloc(FRAME_BYTES)))).toBe(true); // only silence
-      expect(p.pendingBytes()).toBeGreaterThan(0); // real audio still held back
-
-      writeFrames(p, 20); // now past the prime
-      const port2 = new FakePort();
-      p.pump(port2);
-      expect(port2.pushed.some((b) => !b.equals(Buffer.alloc(FRAME_BYTES)))).toBe(true); // real flows
-    });
-
-    it('flush() releases the prime so a reply shorter than the prime still plays', () => {
-      const p = new VoicePlayout(PRIME);
-      writeFrames(p, 2); // tiny reply, below prime
-      p.flush();
-      const port = new FakePort();
-      p.pump(port);
-      expect(port.pushed.some((b) => !b.equals(Buffer.alloc(FRAME_BYTES)))).toBe(true);
-    });
-
-    it('clear() re-arms the prime for the next reply', () => {
-      const p = new VoicePlayout(PRIME);
-      writeFrames(p, 2);
-      p.flush();
-      p.pump(new FakePort()); // primed + played
-      p.clear();
-      writeFrames(p, 2); // new short reply, not yet flushed
-      const port = new FakePort();
-      p.pump(port);
-      expect(port.pushed.every((b) => b.equals(Buffer.alloc(FRAME_BYTES)))).toBe(true); // held again
-    });
-  });
-
   it('close() resolves any pending and future drain gates (teardown fail-open)', async () => {
     const p = new VoicePlayout();
     writeFrames(p, 3);

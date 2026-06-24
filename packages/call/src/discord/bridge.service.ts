@@ -12,7 +12,7 @@ import { Readable } from 'node:stream';
 import * as prism from 'prism-media';
 import { VoiceAgentService, ReplySink } from '../agent/voice-agent.service';
 import { SpeakerMixer } from './speaker-mixer';
-import { VoicePlayout, STARTUP_PRIME_BYTES } from './voice-playout';
+import { VoicePlayout } from './voice-playout';
 
 // Discord voice is always 48kHz stereo s16le.
 const RATE = 48000;
@@ -70,7 +70,7 @@ export class DiscordBridge {
     // agent dumps a whole reply into it faster than realtime via write(); pump() (driven by paceTimer
     // below) drains it at realtime into pcmOut, keeping a small cushion of real audio and a silence floor
     // so the player never latches to idle. outSink is a thin closed-aware delegate to it.
-    const playout = new VoicePlayout(STARTUP_PRIME_BYTES); // prime the startup backlog for streaming synth
+    const playout = new VoicePlayout();
     const pcmOut = new Readable({ read() {} });
     this.outs.set(guildId, pcmOut);
 
@@ -80,7 +80,6 @@ export class DiscordBridge {
         playout.write(pcm);
       },
       clear: () => playout.clear(),
-      flush: () => playout.flush(), // reply done: release the prime so a short reply still plays out
       whenDrained: () => playout.whenDrained(),
     };
     await this.agent.start(guildId, outSink, memoryBlock);

@@ -13,9 +13,6 @@ import { splitFirstChunk } from './first-chunk';
 export interface ReplySink {
   write(pcm: Int16Array): void;
   clear(): void;
-  // Optional: the reply's synthesis is complete — release any startup playout prime so a reply shorter
-  // than the prime backlog still plays out. No-op for sinks without a prime.
-  flush?(): void;
   // Resolves when assistant audio has finished PLAYING OUT — not just been received from TTS. TTS runs
   // faster than realtime, so respond() finishes receiving the reply while the bridge keeps playing the
   // tail out of its buffer for up to a few seconds; the detector must stay suppressed for that whole
@@ -295,7 +292,6 @@ export class VoiceAgentService {
       synthSamples += pcm.length;
       session.sink.write(pcm);
     }
-    session.sink.flush?.(); // synthesis done — release the startup prime so a short reply still plays out
 
     const reply = full.trim();
     if (reply) {
@@ -397,7 +393,6 @@ export class VoiceAgentService {
         // synth_audio ≫ the reply's natural spoken length = the server stretched it; canary for regressions.
         this.log.log(`synth_audio=${(synthSamples / 24000).toFixed(2)}s (24kHz mono)`);
       }
-      session.sink.flush?.(); // synthesis done — release the startup prime so a short reply still plays out
 
       if (reply) {
         session.messages.push({ role: 'assistant', content: reply });
