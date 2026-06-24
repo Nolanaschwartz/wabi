@@ -7,9 +7,9 @@ const ttsLog = new Logger('OpenAiSpeech'); // DIAGNOSTIC: wire tally for the TTS
 // OpenAI-compatible adapters for the speech pipeline seam. All knowledge of the wire
 // format — multipart fields, /v1 paths, response shapes — is concentrated here.
 
-// Streaming TTS (true) vs buffered (false) — see synthesizeStream. DIAGNOSTIC: streaming temporarily on
-// to localize the ~5x audio inflation (wire chunk/byte tally below). Set back to false (buffered, which
-// renders correct duration) once the streaming consumer/producer split is settled.
+// Streaming TTS (true) vs buffered (false) — see synthesizeStream. Streaming yields first audio ~0.2s in
+// vs waiting ~RTF*duration for the whole clip. The server's streaming over-generation (missing
+// repetition penalty) is fixed in the TTS fork's stream_generate_pcm, so streaming is the default again.
 const STREAM_TTS = true;
 
 export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {

@@ -20,10 +20,7 @@ export interface ReplySink {
 // and the detector resumes. ponytail: generous caps, fail-open — widen only if a real call needs it.
 const STT_TIMEOUT_MS = 15_000;
 const LLM_TIMEOUT_MS = 30_000;
-// Buffered whole-reply synth (see STREAM_TTS): this bounds the ENTIRE clip's render, not a per-frame
-// gap. A long reply can take 40s+ as one shot, so this is generous — at the cost of a hung TTS endpoint
-// stranding the turn this long before it fails soft.
-const TTS_TIMEOUT_MS = 60_000;
+const TTS_TIMEOUT_MS = 15_000; // streaming: per-frame idle gap, not whole-clip (see STREAM_TTS)
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;

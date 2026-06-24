@@ -181,7 +181,7 @@ describe('VoiceAgentService.respond — streaming playback', () => {
         settled = true;
       });
 
-      await jest.advanceTimersByTimeAsync(65_000); // past the 60s TTS synth timeout
+      await jest.advanceTimersByTimeAsync(20_000); // past the 15s TTS idle timeout
       expect(settled).toBe(true);
       expect(sink.write).not.toHaveBeenCalled();
     } finally {
