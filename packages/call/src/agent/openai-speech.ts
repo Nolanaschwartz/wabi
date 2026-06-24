@@ -1,8 +1,5 @@
-import { Logger } from '@nestjs/common';
 import { AgentConfig, authHeader } from './agent.config';
 import { ChatMessage, SpeechPipeline } from './speech';
-
-const ttsLog = new Logger('OpenAiSpeech'); // DIAGNOSTIC: wire tally for the TTS inflation investigation
 
 // OpenAI-compatible adapters for the speech pipeline seam. All knowledge of the wire
 // format — multipart fields, /v1 paths, response shapes — is concentrated here.
@@ -132,14 +129,10 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
 
         const reader = res.body.getReader();
         let carry: Buffer = Buffer.alloc(0); // trailing odd byte from the previous chunk
-        let wireBytes = 0; // DIAGNOSTIC: raw bytes off the wire (== what the server actually sent us)
-        let chunks = 0; //   and read() chunk count — cumulative/duplicated framing shows here
         try {
           for (;;) {
             const { value, done } = await reader.read();
             if (done) break;
-            wireBytes += value.byteLength;
-            chunks++;
             const buf = carry.length
               ? Buffer.concat([carry, Buffer.from(value)])
               : Buffer.from(value);
@@ -148,13 +141,6 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
             if (usable <= 0) continue;
             yield toSamples(buf.subarray(0, usable));
           }
-          // wireBytes/2/24000 = duration RECEIVED. Compare to the server's own emitted-audio log for this
-          // request: equal => server sent that much over the wire; server logs less => its send path
-          // duplicates/cumulates (chunks/avg-chunk reveal which). input chars pin it to a known request.
-          ttsLog.log(
-            `tts wire: chars=${text.length} chunks=${chunks} bytes=${wireBytes} ` +
-              `received=${(wireBytes / 2 / 24000).toFixed(2)}s`,
-          );
         } finally {
           reader.cancel().catch(() => {});
         }

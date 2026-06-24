@@ -82,35 +82,9 @@ export class DiscordBridge {
     const pcmOut = new Readable({ read() {} });
     this.outs.set(guildId, pcmOut);
 
-    // DIAGNOSTIC: per-reply playout rate vs what the TTS server sent. realFrames = audio the server
-    // produced (should match the agent's synth_audio); wall span of those frames = how long it actually
-    // took to play. stretch = wall/real (1.0 = plays at the server's rate; >1 = dragging). gapSilence =
-    // silence the pacer injected *between* real frames (mid-reply underruns) — the buffer's contribution
-    // to drag. Trailing idle silence after the reply is excluded. Logged per reply at clear()/teardown.
-    const FRAME_SEC = FRAME_SAMPLES / RATE; // 0.02s
-    let pReal = 0; // real frames played this reply
-    let pGapSilence = 0; // silence frames counted as mid-reply underruns
-    let pPendSilence = 0; // silence since the last real frame (becomes gap only if more real audio follows)
-    let pT0 = 0; // wall time of first real frame
-    let pTLast = 0; // wall time of last real frame
-    const logPlayout = () => {
-      if (pReal === 0) return;
-      const realSec = pReal * FRAME_SEC;
-      const wallSec = (pTLast - pT0) / 1000 + FRAME_SEC;
-      this.log.log(
-        `playout: server=${realSec.toFixed(2)}s played=${wallSec.toFixed(2)}s ` +
-          `stretch=${(wallSec / realSec).toFixed(2)} gap_silence=${(pGapSilence * FRAME_SEC).toFixed(2)}s`,
-      );
-      pReal = 0;
-      pGapSilence = 0;
-      pPendSilence = 0;
-      pT0 = 0;
-      pTLast = 0;
-    };
-
-    // Drain signal for slice 6 (barge-in playout tail). Owns its own state — deliberately NOT derived
-    // from the `logPlayout` diagnostic counters above, which a later cleanup slice removes. The pacer
-    // below calls drain.update() each tick; the agent gates setSuppressed(false) on whenDrained().
+    // Drain signal for slice 6 (barge-in playout tail). The pacer below calls drain.update() each tick;
+    // the agent gates setSuppressed(false) on whenDrained() so the detector stays suppressed through the
+    // tail. clear()/teardown release it so the gate is never left hanging.
     const drain = new PlayoutDrain();
 
     // The agent writes 24kHz mono reply chunks here; resample to Discord's 48kHz stereo and append. The
@@ -123,7 +97,6 @@ export class DiscordBridge {
         if (outBuf.length > MAX_OUT) outBuf = outBuf.subarray(outBuf.length - MAX_OUT);
       },
       clear: () => {
-        logPlayout(); // a new reply is starting (or a barge cut this one) — report the one that just played
         outBuf = Buffer.alloc(0);
         drain.clear(); // queued audio just dropped — playout is drained by definition; release the gate
       },
@@ -155,23 +128,16 @@ export class DiscordBridge {
     // CUSHION is the jitter <-> latency knob: raise it if replies underrun, lower it if onset feels
     // laggy. Go back to a deep lead (~12 frames) only if you return to sentence-streaming, where a
     // generation stall mid-reply is real again. A sub-frame remainder stays in outBuf for a later chunk.
-    const CUSHION = FRAME_BYTES * 6; // ~60ms real-audio lead — covers timer jitter, not a stream stall
+    const CUSHION = FRAME_BYTES * 3; // ~60ms real-audio lead (3 frames) — covers timer jitter, not a stall
     const FLOOR = FRAME_BYTES * 2; // ~40ms silence floor to keep the player from latching idle
     const paceTimer = setInterval(() => {
       if (closed) return;
       while (pcmOut.readableLength < CUSHION && outBuf.length >= FRAME_BYTES) {
         pcmOut.push(outBuf.subarray(0, FRAME_BYTES));
         outBuf = outBuf.subarray(FRAME_BYTES);
-        const now = Date.now();
-        if (pReal === 0) pT0 = now;
-        pGapSilence += pPendSilence; // silence that turned out to sit between real frames = a mid-reply gap
-        pPendSilence = 0;
-        pReal++;
-        pTLast = now;
       }
       while (pcmOut.readableLength < FLOOR) {
         pcmOut.push(SILENCE);
-        if (pReal > 0) pPendSilence++; // only after playout started; trailing idle silence is dropped at log
       }
       // Drain check (slice 6): real assistant audio is still pending iff outBuf holds at least one more
       // real frame, OR the player still has real frames queued above the silence floor. Once both are
@@ -184,6 +150,9 @@ export class DiscordBridge {
     const FRAME_LEN = FRAME_SAMPLES * CHANNELS; // int16s per 20ms frame (960 * 2)
     const mixer = new SpeakerMixer(FRAME_LEN);
     const subscribed = new Set<string>(); // opus-stream dedup (a transport concern)
+    // Track live decode streams so teardown can destroy them deterministically rather than relying on
+    // connection.destroy() cascading (a mid-stream prism decoder can otherwise linger).
+    const decoders = new Map<string, { opus: { destroy(): void }; decoder: { destroy(): void } }>();
 
     connection.receiver.speaking.on('start', (userId) => {
       if (subscribed.has(userId)) return;
@@ -197,6 +166,7 @@ export class DiscordBridge {
         frameSize: FRAME_SAMPLES,
       });
       opus.pipe(decoder);
+      decoders.set(userId, { opus, decoder });
       decoder.on('data', (pcm: Buffer) => {
         if (closed) return;
         const frame = new Int16Array(FRAME_LEN); // fresh offset-0 buffer (copy)
@@ -212,6 +182,7 @@ export class DiscordBridge {
       decoder.on('error', (e) => this.log.warn(`decoder: ${e.message}`));
       opus.on('end', () => {
         subscribed.delete(userId);
+        decoders.delete(userId); // ended naturally; nothing to destroy
         mixer.drop(userId); // stops after 1s silence; re-added on next 'start'
       });
     });
@@ -227,12 +198,18 @@ export class DiscordBridge {
     this.log.log(`bridge up: #${channel.name} <-> agent (guild ${guildId})`);
     this.sessions.set(guildId, () => {
       closed = true; // stop captures/forwarding before tearing down
-      logPlayout(); // report the final reply (no clear() follows it)
       drain.close(); // pacer is about to stop; resolve any pending/future drain gate so the detector
       //                isn't stranded suppressed (deaf) after teardown — fail-open
       clearInterval(mixTimer);
       clearInterval(paceTimer);
       this.agent.stop(guildId);
+      for (const { opus, decoder } of decoders.values()) {
+        try {
+          opus.destroy();
+          decoder.destroy();
+        } catch {}
+      }
+      decoders.clear();
       try {
         connection.destroy();
       } catch {}

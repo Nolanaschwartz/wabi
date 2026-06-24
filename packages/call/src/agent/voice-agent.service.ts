@@ -70,7 +70,10 @@ const TURN_OPTS: TurnDetectorOpts = {
   // clips speakers who pause mid-thought. Raise back toward 400 if mid-sentence pauses get cut off.
   hangoverMs: 300,
   minTurnMs: 400,
-  bargeMs: 250,
+  // Sustained speech (while the assistant talks) before a barge fires. Dominates perceived interrupt
+  // latency (~bargeMs detection + ~one cushion of queued audio). 180ms feels snappy; lower risks a cough
+  // or "mm-hm" backchannel cutting the assistant off. Tuned after slice 6 made tail-interruption correct.
+  bargeMs: 180,
   prerollMs: 300,
 };
 
