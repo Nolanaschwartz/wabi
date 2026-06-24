@@ -196,6 +196,31 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     expect(session.sink.write).toHaveBeenCalledTimes(1); // stopped after the barge
   });
 
+  it('approach B: retries a "server busy" stream and succeeds', async () => {
+    const sink = { write: jest.fn(), clear: jest.fn() };
+    const session = sessionWith(sink);
+    const pipeline = pipelineFor('x');
+    pipeline.responder.respondStream = streamOf('Hi ', 'there.');
+    let calls = 0;
+    pipeline.synthesizer.synthesizeSession = jest.fn((text: AsyncIterable<string>) => {
+      calls += 1;
+      if (calls === 1)
+        return (async function* (): AsyncIterable<Int16Array> {
+          throw new Error('tts session: server busy: one stream at a time');
+        })();
+      return (async function* () {
+        for await (const _ of text) yield new Int16Array(2).fill(1);
+      })();
+    });
+    const svc = make(pipeline);
+
+    await (svc as any).respondViaSession(session, new AbortController(), new TurnTimer());
+
+    expect(calls).toBe(2); // first stream was busy, retried once
+    expect(sink.write).toHaveBeenCalled(); // second attempt produced audio
+    expect(session.messages.at(-1)).toEqual({ role: 'assistant', content: 'Hi there.' });
+  }, 10000);
+
   it('warms STT/LLM/TTS connections, draining each, fail-open', async () => {
     const pipeline = pipelineFor('hi');
     // STT endpoint cold: warm-up must still resolve (fail-open).

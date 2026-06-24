@@ -50,6 +50,10 @@ const FADE_SAMPLES = 120;
 // — no seam, no tone jump. ON — the server WS endpoint (/v1/audio/stream) is live and validated. Replaces
 // the approach-C two-phase split (which slice 6 removes once B is confirmed on a live call).
 const STREAM_SESSION = true;
+// The TTS server serves one stream at a time; a barge's prior stream can still be tearing down when the
+// next turn connects -> "server busy". Retry the open a few times to ride out that transient overlap.
+const SESSION_BUSY_RETRIES = 3;
+const SESSION_BUSY_BACKOFF_MS = 400;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -69,10 +73,17 @@ async function* withIdleTimeout<T>(
   label: string,
 ): AsyncGenerator<T> {
   const iter = it[Symbol.asyncIterator]();
-  for (;;) {
-    const r = await withTimeout(Promise.resolve(iter.next()), ms, label);
-    if (r.done) return;
-    yield r.value;
+  try {
+    for (;;) {
+      const r = await withTimeout(Promise.resolve(iter.next()), ms, label);
+      if (r.done) return;
+      yield r.value;
+    }
+  } finally {
+    // Forward an early break/throw to the underlying iterator so it cleans up (streamSession closes its
+    // socket; respondStream cancels its reader). Fire-and-forget: a generator parked on a never-settling
+    // await must not hang this teardown — the turn's ctrl.abort() closes the resource regardless.
+    void iter.return?.();
   }
 }
 
@@ -252,45 +263,68 @@ export class VoiceAgentService {
     ctrl: AbortController,
     timer: TurnTimer,
   ): Promise<void> {
-    let full = '';
-    let firstDelta = true;
     const pipeline = this.pipeline!;
-    // Text source: the LLM deltas. Accumulates the full reply (for history) and marks llm/sentence. The
-    // session pulls this as it generates; `sentence` marks when the last token is in (text complete).
-    const textSource = async function* (): AsyncIterable<string> {
-      const stream = withIdleTimeout(
-        pipeline.responder.respondStream(session.messages, ctrl.signal),
-        LLM_TIMEOUT_MS,
-        'responder',
-      );
-      for await (const delta of stream) {
-        if (session.cancel || session.closed) return;
-        if (firstDelta) {
-          timer.mark('llm');
-          firstDelta = false;
+    let full = '';
+    let synthSamples = 0;
+
+    // One attempt: stream the LLM reply through a fresh TTS session. full/synthSamples reset per attempt.
+    const attempt = async (): Promise<void> => {
+      full = '';
+      synthSamples = 0;
+      let firstDelta = true;
+      let firstFrame = true;
+      // Text source: the LLM deltas. Accumulates the full reply (for history) and marks llm/sentence. The
+      // session pulls this as it generates; `sentence` marks when the last token is in (text complete).
+      const textSource = async function* (): AsyncIterable<string> {
+        const stream = withIdleTimeout(
+          pipeline.responder.respondStream(session.messages, ctrl.signal),
+          LLM_TIMEOUT_MS,
+          'responder',
+        );
+        for await (const delta of stream) {
+          if (session.cancel || session.closed) return;
+          if (firstDelta) {
+            timer.mark('llm');
+            firstDelta = false;
+          }
+          full += delta;
+          yield delta;
         }
-        full += delta;
-        yield delta;
+        timer.mark('sentence'); // reply text complete (the session will get its `end`)
+      };
+
+      session.sink.clear();
+      const frames = withIdleTimeout(
+        pipeline.synthesizer.synthesizeSession!(textSource(), ctrl.signal),
+        SESSION_TTS_TIMEOUT_MS, // spans LLM TTFT (no PCM until the LLM emits text)
+        'synthesize',
+      );
+      for await (const pcm of frames) {
+        if (session.cancel || session.closed) break;
+        if (firstFrame) {
+          firstFrame = false;
+          timer.mark('audio');
+        }
+        synthSamples += pcm.length;
+        session.sink.write(pcm);
       }
-      timer.mark('sentence'); // reply text complete (the session will get its `end`)
     };
 
-    session.sink.clear();
-    let firstFrame = true;
-    let synthSamples = 0;
-    const frames = withIdleTimeout(
-      pipeline.synthesizer.synthesizeSession!(textSource(), ctrl.signal),
-      SESSION_TTS_TIMEOUT_MS, // spans LLM TTFT (no PCM until the LLM emits text)
-      'synthesize',
-    );
-    for await (const pcm of frames) {
-      if (session.cancel || session.closed) break;
-      if (firstFrame) {
-        firstFrame = false;
-        timer.mark('audio');
+    // Ride out a transiently-busy single-stream server (see SESSION_BUSY_RETRIES). Re-runs the LLM on
+    // retry — cheap at ~140 tk/s and rare. Don't retry once a barge/teardown has cancelled the turn.
+    for (let i = 0; ; i++) {
+      try {
+        await attempt();
+        break;
+      } catch (e) {
+        const busy = /server busy/i.test((e as Error)?.message ?? '');
+        if (busy && i < SESSION_BUSY_RETRIES && !(session.cancel || session.closed)) {
+          this.log.warn(`tts session busy — retry ${i + 1}/${SESSION_BUSY_RETRIES}`);
+          await new Promise((r) => setTimeout(r, SESSION_BUSY_BACKOFF_MS));
+          continue;
+        }
+        throw e;
       }
-      synthSamples += pcm.length;
-      session.sink.write(pcm);
     }
 
     const reply = full.trim();
