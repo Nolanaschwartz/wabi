@@ -116,6 +116,24 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     expect(synth).toHaveBeenCalledTimes(2);
   });
 
+  it('fades in the remainder clip onset to mask the seam (chunk1 left unfaded)', async () => {
+    const pipeline = pipelineFor(LONG_REPLY);
+    pipeline.synthesizer.synthesizeStream = jest.fn(async function* () {
+      yield new Int16Array(240).fill(1000); // fresh array per call (chunk1, then remainder)
+    });
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const svc = make(pipeline);
+
+    await (svc as any).respond(sessionWith(sink), utt());
+    await drain();
+
+    const writes = sink.write.mock.calls.map((c) => c[0] as Int16Array);
+    expect(writes).toHaveLength(2);
+    expect(writes[0][0]).toBe(1000); // chunk1 onset NOT faded
+    expect(writes[1][0]).toBe(0); // remainder onset faded to silence
+    expect(writes[1][239]).toBe(1000); // ...and back to full past the 120-sample fade window
+  });
+
   it('skips the remainder synth if a barge fires during chunk1', async () => {
     const session = sessionWith({
       write: jest.fn().mockImplementation(() => {

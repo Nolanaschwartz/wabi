@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { loadAgentConfig } from './agent.config';
-import { buildWav, resampleToMono } from './audio.util';
+import { buildWav, resampleToMono, fadeIn } from './audio.util';
 import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
 import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
@@ -40,6 +40,9 @@ const TTS_TIMEOUT_MS = 15_000; // streaming: per-frame idle gap, not whole-clip 
 // Per-endpoint cap on the start-of-session connection warm-up. Generous but bounded so a cold/down
 // endpoint delays the call coming online by at most this, then we proceed (fail-open).
 const WARMUP_TIMEOUT_MS = 4_000;
+// ~5ms fade-in on the remainder clip's onset (24kHz synth rate) to mask the click at the chunk1->remainder
+// seam. The click-suppression knob: lengthen if the seam still pops, shorten if it softens word onsets.
+const FADE_SAMPLES = 120;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
@@ -210,9 +213,11 @@ export class VoiceAgentService {
     text: string,
     signal: AbortSignal,
     timer: TurnTimer,
+    fade = false, // fade the onset in — only the remainder clip, to mask the chunk1->remainder seam click
   ): Promise<number> {
     let first = true;
     let samples = 0;
+    let faded = 0;
     const frames = withIdleTimeout(
       this.pipeline!.synthesizer.synthesizeStream(text, signal),
       TTS_TIMEOUT_MS,
@@ -224,6 +229,7 @@ export class VoiceAgentService {
         first = false;
         timer.mark('audio');
       }
+      if (fade && faded < FADE_SAMPLES) faded = fadeIn(pcm, faded, FADE_SAMPLES);
       samples += pcm.length;
       session.sink.write(pcm);
     }
@@ -291,7 +297,7 @@ export class VoiceAgentService {
         // Two-phase: chunk1 already synthesized above; now the remainder as one request.
         const rest = full.slice(chunk1.length).trim();
         if (rest && !(session.cancel || session.closed)) {
-          synthSamples += await this.synthChunk(session, rest, ctrl.signal, timer);
+          synthSamples += await this.synthChunk(session, rest, ctrl.signal, timer, true); // fade the seam
         }
       } else if (reply && !(session.cancel || session.closed)) {
         // No split (short/run-on reply) — synthesize the whole reply as one request (the original path).

@@ -112,6 +112,16 @@ export function monoToStereo(mono: Int16Array): Int16Array {
   return out;
 }
 
+// Linear fade-in applied IN PLACE across the first `fadeLen` samples of a stream. `done` = samples
+// already faded across prior frames; returns the updated count. No-op once done >= fadeLen. Used to mask
+// the click where two separately-synthesized clips are concatenated (the chunk1->remainder seam).
+export function fadeIn(pcm: Int16Array, done: number, fadeLen: number): number {
+  for (let i = 0; i < pcm.length && done < fadeLen; i++, done++) {
+    pcm[i] = Math.round((pcm[i] * done) / fadeLen); // gain ramps 0 -> ~1 over fadeLen samples
+  }
+  return done;
+}
+
 export function rms(pcm: Int16Array): number {
   let sum = 0;
   for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
