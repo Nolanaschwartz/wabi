@@ -23,11 +23,13 @@ const MAX_OUT = FRAME_BYTES * 50 * 30; // ~30s backstop
 const CUSHION = FRAME_BYTES * 3; // ~60ms real-audio lead (3 frames) — covers timer jitter, not a stall
 const FLOOR = FRAME_BYTES * 2; // ~40ms silence floor to keep the player from latching idle
 // Startup prime for streaming synthesis (approach B): hold playout until this much real audio has
-// accumulated, so a producer that lags realtime early (the LLM ramping up, server pause-don't-pad) builds
-// a backlog instead of underrunning into gaps. The onset<->gap knob: raise if the start still gaps, lower
-// if onset feels laggy. ~400ms. Whole-reply synth (approach C) hits this instantly, so it's a no-op there;
-// flush() releases it for a reply shorter than the prime.
-export const STARTUP_PRIME_BYTES = FRAME_BYTES * 20;
+// accumulated, then play continuously. This backlog is effectively the jitter-buffer depth — it absorbs
+// the producer (LLM->server) dipping below realtime both at the ramp AND mid-stream; a dip deeper than the
+// backlog underruns into a gap. THE onset<->gap knob: raise for fewer gaps (more onset), lower for snappier
+// onset. ~800ms. Whole-reply synth (approach C) hits this instantly (no-op there); flush() releases it for
+// a reply shorter than the backlog. If mid-stream gaps persist even deep, the producer is sustained
+// below realtime and the fix is upstream throughput, not more buffer.
+export const STARTUP_PRIME_BYTES = FRAME_BYTES * 40;
 
 // The output port the pacer drives: the real pcmOut Readable, or a fake in tests. Exposes only what the
 // pacer touches — bytes currently queued for playback, and a push to enqueue one frame.
