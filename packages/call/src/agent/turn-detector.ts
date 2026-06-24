@@ -1,4 +1,5 @@
-import { rms, concatInt16 } from './audio.util';
+import { concatInt16 } from './audio.util';
+import { EnergyVad } from './vad';
 
 export interface Utterance {
   pcm: Int16Array;
@@ -7,7 +8,7 @@ export interface Utterance {
 }
 
 export interface TurnDetectorOpts {
-  vadRms: number; // RMS above this counts as speech
+  vadRms: number; // hard floor for the adaptive speech threshold (high-passed RMS)
   hangoverMs: number; // trailing silence that ends a turn
   minTurnMs: number; // ignore turns shorter than this
   bargeMs: number; // sustained speech (while suppressed) that triggers barge-in
@@ -27,8 +28,17 @@ export class TurnDetector {
   private preroll: Int16Array[] = [];
   private prerollMs = 0;
   private suppressed = false; // assistant is talking: watch for barge-in, don't capture turns
+  // DC/high-pass + adaptive-noise-floor VAD (see vad.ts). vadRms is the hard floor
+  // for the adaptive threshold, not a bare RMS cutoff — so quiet talkers above the
+  // tracked background still register and low-freq rumble/clipping don't false-fire.
+  private readonly vad: EnergyVad;
 
-  constructor(private readonly o: TurnDetectorOpts) {}
+  constructor(private readonly o: TurnDetectorOpts) {
+    // vadRms is no longer a raw cutoff; it scales the absolute silence guard. The
+    // adaptive floor + speech margin do the real work, so a quiet talker above the
+    // tracked background still registers even when below the legacy vadRms value.
+    this.vad = new EnergyVad({ silenceGuard: o.vadRms * 0.25 });
+  }
 
   // Caller flips this when the assistant starts/stops speaking.
   setSuppressed(v: boolean): void {
@@ -46,7 +56,7 @@ export class TurnDetector {
   // (the caller may reuse the underlying buffer after we return).
   push(frame: Int16Array, rate: number, channels: number): TurnEvent | null {
     const frameMs = (frame.length / channels / rate) * 1000;
-    const isSpeech = rms(frame) > this.o.vadRms;
+    const isSpeech = this.vad.isSpeech(frame);
 
     if (this.suppressed) {
       this.addPreroll(frame, frameMs, rate, channels);

@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { VoiceAgentService } from './voice-agent.service';
 import { SpeechPipeline } from './speech';
+import { parseWav } from './audio.util';
 
 // A responder.respondStream mock that yields the given text deltas in order.
 const streamOf = (...deltas: string[]) =>
@@ -67,6 +68,25 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     expect(synth.mock.calls.map((c) => c[0])).toEqual(['One. Two. Three.']);
     expect(sink.write).toHaveBeenCalledTimes(1);
     expect(rejections).toEqual([]);
+  });
+
+  it('downsamples the utterance to 16kHz mono before STT', async () => {
+    let sentWav: Buffer | undefined;
+    const pipeline = pipelineFor('hi');
+    (pipeline.transcriber.transcribe as jest.Mock).mockImplementation(async (wav: Buffer) => {
+      sentWav = wav;
+      return 'hey';
+    });
+    const svc = make(pipeline);
+    // 48kHz stereo capture (Discord native) — must reach STT as 16kHz mono.
+    const utt48 = { pcm: new Int16Array(4800).fill(1000), rate: 48000, channels: 2 } as any;
+
+    await (svc as any).respond(sessionWith({ write: jest.fn(), clear: jest.fn() }), utt48);
+
+    expect(sentWav).toBeDefined();
+    const parsed = parseWav(sentWav!);
+    expect(parsed.rate).toBe(16000);
+    expect(parsed.channels).toBe(1);
   });
 
   it('accumulates the full reply across multiple stream deltas', async () => {
@@ -254,5 +274,111 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+});
+
+// Slice 6: the detector stays suppressed through the playout tail (after synth receipt but while audio
+// is still queued in the bridge's outBuf), and un-suppresses only when playout actually DRAINS. Wired in
+// feed(): respond().finally() arms the drain gate; setSuppressed(false) waits on sink.whenDrained().
+describe('VoiceAgentService.feed — drain-gated un-suppress (barge-in playout tail)', () => {
+  // A fake detector that lets us drive one utterance through feed() and watch suppress/un-suppress.
+  const fakeDetector = () => ({ setSuppressed: jest.fn(), push: jest.fn() });
+
+  // Seat a session directly (bypassing start(), which needs config + real pipeline) and hand back the
+  // injected detector so the test can assert on the suppress calls feed() makes.
+  const seatSession = (svc: VoiceAgentService, sink: any) => {
+    const detector = fakeDetector();
+    (svc as any).sessions.set('g', {
+      sink,
+      detector,
+      messages: [{ role: 'system', content: '' }],
+      cancel: false,
+      closed: false,
+    });
+    return detector;
+  };
+
+  const drive = (svc: VoiceAgentService, detector: any) => {
+    detector.push.mockReturnValueOnce({ utterance: utt() });
+    detector.push.mockReturnValue(null);
+    (svc as any).feed('g', new Int16Array(160), 16000, 1);
+  };
+
+  const tick = async () => {
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  it('stays suppressed until playout drains, then un-suppresses', async () => {
+    let resolveDrain!: () => void;
+    const drained = new Promise<void>((r) => (resolveDrain = r));
+    const sink = {
+      write: jest.fn(),
+      clear: jest.fn(),
+      whenDrained: jest.fn().mockReturnValue(drained),
+    };
+    const svc = make(pipelineFor('One. Two. Three.'));
+    const detector = seatSession(svc, sink);
+
+    drive(svc, detector);
+    expect(detector.setSuppressed).toHaveBeenCalledWith(true);
+
+    await tick();
+    // respond() has finished (synth received) but playout has NOT drained: still suppressed.
+    expect(sink.whenDrained).toHaveBeenCalled();
+    expect(detector.setSuppressed).not.toHaveBeenCalledWith(false);
+
+    resolveDrain();
+    await tick();
+    // drained -> un-suppress
+    expect(detector.setSuppressed).toHaveBeenLastCalledWith(false);
+  });
+
+  it('never strands the detector suppressed if drain never signals (safety timeout)', async () => {
+    jest.useFakeTimers();
+    try {
+      const sink = {
+        write: jest.fn(),
+        clear: jest.fn(),
+        whenDrained: jest.fn().mockReturnValue(new Promise<void>(() => {})), // never resolves
+      };
+      const svc = make(pipelineFor('One. Two.'));
+      const detector = seatSession(svc, sink);
+
+      drive(svc, detector);
+      await jest.advanceTimersByTimeAsync(30_000); // past the drain safety timeout
+      expect(detector.setSuppressed).toHaveBeenLastCalledWith(false);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('un-suppresses immediately when the sink exposes no drain signal (test fakes)', async () => {
+    const sink = { write: jest.fn(), clear: jest.fn() }; // no whenDrained
+    const svc = make(pipelineFor('One.'));
+    const detector = seatSession(svc, sink);
+
+    drive(svc, detector);
+    await tick();
+    expect(detector.setSuppressed).toHaveBeenLastCalledWith(false);
+  });
+
+  it('a barge during the playout tail cuts the assistant (clears queued audio)', async () => {
+    // Drain stays pending: the assistant is mid-tail, still suppressed and watching for a barge.
+    const sink = {
+      write: jest.fn(),
+      clear: jest.fn(),
+      whenDrained: jest.fn().mockReturnValue(new Promise<void>(() => {})),
+    };
+    const svc = make(pipelineFor('One. Two. Three.'));
+    const detector = seatSession(svc, sink);
+
+    drive(svc, detector); // first feed -> utterance, arms the (still-pending) drain gate
+    await tick();
+    expect(detector.setSuppressed).not.toHaveBeenCalledWith(false); // still suppressed in the tail
+
+    // Now sustained tail speech trips a barge; feed() must cut the queued assistant audio.
+    detector.push.mockReturnValueOnce({ barge: true });
+    (svc as any).feed('g', new Int16Array(160), 16000, 1);
+    expect(sink.clear).toHaveBeenCalled(); // assistant audio dropped -> playout cut
   });
 });

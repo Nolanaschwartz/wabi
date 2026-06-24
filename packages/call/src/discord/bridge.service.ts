@@ -13,6 +13,7 @@ import * as prism from 'prism-media';
 import { VoiceAgentService, ReplySink } from '../agent/voice-agent.service';
 import { resampleToMono, monoToStereo } from '../agent/audio.util';
 import { SpeakerMixer } from './speaker-mixer';
+import { PlayoutDrain } from './playout-drain';
 
 // Discord voice is always 48kHz stereo s16le.
 const RATE = 48000;
@@ -107,6 +108,11 @@ export class DiscordBridge {
       pTLast = 0;
     };
 
+    // Drain signal for slice 6 (barge-in playout tail). Owns its own state — deliberately NOT derived
+    // from the `logPlayout` diagnostic counters above, which a later cleanup slice removes. The pacer
+    // below calls drain.update() each tick; the agent gates setSuppressed(false) on whenDrained().
+    const drain = new PlayoutDrain();
+
     // The agent writes 24kHz mono reply chunks here; resample to Discord's 48kHz stereo and append. The
     // pacer below re-slices outBuf into exact 20ms frames, so chunks need no framing of their own.
     const outSink: ReplySink = {
@@ -119,7 +125,11 @@ export class DiscordBridge {
       clear: () => {
         logPlayout(); // a new reply is starting (or a barge cut this one) — report the one that just played
         outBuf = Buffer.alloc(0);
+        drain.clear(); // queued audio just dropped — playout is drained by definition; release the gate
       },
+      // Resolves once the tail has actually played out (outBuf empty + no real frames left in the
+      // player), and on barge/teardown so the agent's drain gate is never left hanging.
+      whenDrained: () => drain.whenDrained(),
     };
     await this.agent.start(guildId, outSink, memoryBlock);
 
@@ -163,6 +173,10 @@ export class DiscordBridge {
         pcmOut.push(SILENCE);
         if (pReal > 0) pPendSilence++; // only after playout started; trailing idle silence is dropped at log
       }
+      // Drain check (slice 6): real assistant audio is still pending iff outBuf holds at least one more
+      // real frame, OR the player still has real frames queued above the silence floor. Once both are
+      // false, only the silence floor remains — the tail has played out, so release the detector.
+      drain.update(outBuf.length >= FRAME_BYTES || pcmOut.readableLength > FLOOR);
     }, 10);
 
     // --- Discord -> agent: decode each speaker separately and feed the mixer, which combines
@@ -214,6 +228,8 @@ export class DiscordBridge {
     this.sessions.set(guildId, () => {
       closed = true; // stop captures/forwarding before tearing down
       logPlayout(); // report the final reply (no clear() follows it)
+      drain.close(); // pacer is about to stop; resolve any pending/future drain gate so the detector
+      //                isn't stranded suppressed (deaf) after teardown — fail-open
       clearInterval(mixTimer);
       clearInterval(paceTimer);
       this.agent.stop(guildId);

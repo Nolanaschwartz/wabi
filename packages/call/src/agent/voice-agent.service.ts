@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { loadAgentConfig } from './agent.config';
-import { buildWav } from './audio.util';
+import { buildWav, resampleToMono } from './audio.util';
 import { TurnDetector, TurnDetectorOpts, Utterance } from './turn-detector';
 import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
@@ -12,7 +12,22 @@ import { TurnTimer } from './turn-timer';
 export interface ReplySink {
   write(pcm: Int16Array): void;
   clear(): void;
+  // Resolves when assistant audio has finished PLAYING OUT — not just been received from TTS. TTS runs
+  // faster than realtime, so respond() finishes receiving the reply while the bridge keeps playing the
+  // tail out of its buffer for up to a few seconds; the detector must stay suppressed for that whole
+  // tail (slice 6), or speech in the tail starts a new turn instead of barging. The bridge resolves
+  // this when its outBuf is empty and the pacer has no real frames left, and also on clear()/teardown
+  // so the gate is never left hanging. Optional: a sink without it (test fakes) means "no playout tail
+  // to wait for" — the caller un-suppresses immediately.
+  whenDrained?(): Promise<void>;
 }
+
+// Fail-open backstop for the drain gate. If the bridge's drain signal is missed (a frame-accounting
+// bug, a swallowed teardown), the detector must NOT stay suppressed (deaf) forever. After this long we
+// un-suppress regardless — a missed drain is worse than re-opening the mic a touch early. Generous:
+// real playout tails are 1-3s, so this only fires on a genuinely stuck signal. Mirrors the withTimeout
+// fail-soft philosophy below.
+const DRAIN_TIMEOUT_MS = 8_000;
 
 // STT/LLM/TTS calls hit self-hosted endpoints that can hang with no response. An unbounded await in
 // respond() strands it — its .finally never runs, so the detector stays suppressed and the agent goes
@@ -125,8 +140,23 @@ export class VoiceAgentService {
 
     session.detector.setSuppressed(true);
     this.respond(session, event.utterance).finally(() => {
-      session.detector.setSuppressed(false);
+      // respond() resolving means the reply has been RECEIVED from TTS, not that it has finished
+      // PLAYING. Keep the detector suppressed through the playout tail (the bridge drains outBuf faster
+      // than the reply was synthesized) so tail speech barges instead of starting a new turn. Gate
+      // un-suppress on the bridge's drain signal, behind a fail-open timeout so a missed signal can
+      // never leave the detector deaf. (clear() on barge and teardown resolve whenDrained() too.)
+      void this.afterDrained(session).then(() => {
+        session.detector.setSuppressed(false);
+      });
     });
+  }
+
+  // Resolve when the bridge reports playout drained, or after DRAIN_TIMEOUT_MS as a fail-open backstop,
+  // whichever comes first. A sink with no whenDrained() (test fakes) has no tail to wait for.
+  private afterDrained(session: Session): Promise<void> {
+    const drained = session.sink.whenDrained?.();
+    if (!drained) return Promise.resolve();
+    return withTimeout(drained, DRAIN_TIMEOUT_MS, 'drain').catch(() => undefined);
   }
 
   private async respond(session: Session, utt: Utterance): Promise<void> {
@@ -134,7 +164,10 @@ export class VoiceAgentService {
     session.abort = ctrl; // so a barge-in can abort the LLM stream mid-think
     const timer = new TurnTimer(); // t0 = utterance ready; marks each stage, logs one `latency` line
     try {
-      const wav = buildWav(utt.pcm, utt.rate, utt.channels);
+      // Downsample the capture (48kHz stereo from Discord) to 16kHz mono before STT: ~6x fewer bytes to
+      // upload/decode, and Whisper-class STT resamples to 16k mono internally anyway — no accuracy loss.
+      const sttPcm = resampleToMono(utt.pcm, utt.rate, utt.channels, 16000);
+      const wav = buildWav(sttPcm, 16000, 1);
       const text = (
         await withTimeout(this.pipeline!.transcriber.transcribe(wav), STT_TIMEOUT_MS, 'transcribe')
       ).trim();

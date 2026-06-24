@@ -49,6 +49,8 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
             model: cfg.llm.model,
             messages,
             temperature: 0.6,
+            max_tokens: cfg.llm.maxTokens, // cap reply length (kept generous; a reasoning model needs
+            // headroom or it emits empty text — the respond() loop handles an empty reply fail-open).
             stream: true,
           }),
           signal,
@@ -107,6 +109,7 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
             model: cfg.tts.model,
             voice: cfg.tts.voice,
             input: text,
+            speed: cfg.tts.speed, // pace the voice (PENDING: verify the server honors this field live)
             response_format: 'pcm', // raw 16-bit mono LE @ SYNTH_RATE, no header
             stream: STREAM_TTS,
           }),
