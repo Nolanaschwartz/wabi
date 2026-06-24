@@ -1,5 +1,6 @@
 import { AgentConfig, authHeader } from './agent.config';
 import { ChatMessage, SpeechPipeline } from './speech';
+import { streamSession, wsSocket } from './streaming-synth';
 
 // OpenAI-compatible adapters for the speech pipeline seam. All knowledge of the wire
 // format — multipart fields, /v1 paths, response shapes — is concentrated here.
@@ -86,6 +87,16 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
     },
 
     synthesizer: {
+      // Approach B: feed reply text in over a WebSocket session, read one continuous PCM stream back.
+      // The ws:// URL derives from cfg.tts.url + /v1/audio/stream (the slice-3 server endpoint).
+      synthesizeSession(text, signal) {
+        return streamSession(
+          () => wsSocket(cfg.tts.url),
+          { voice: cfg.tts.voice, language: 'Auto', sampleRate: 24000 },
+          text,
+          signal,
+        );
+      },
       // STREAM_TTS=true: stream raw PCM chunk-by-chunk (first frame ~0.2s in). But the server emits
       // STRETCHED, over-long audio for SHORT inputs in streaming mode (measured ~2–4x; long replies are
       // ~correct) — that's the dragging voice. false: buffered — render the whole clip server-side and
