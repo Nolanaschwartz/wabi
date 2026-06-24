@@ -1,6 +1,6 @@
 import { streamSession, splitSendable, SynthSocket, SessionInit } from './streaming-synth';
 
-const INIT: SessionInit = { voice: 'v', language: 'English', sampleRate: 24000 };
+const INIT: SessionInit = { voice: 'v', language: 'English', sampleRate: 24000, speed: 1.1 };
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // A fake server-side of the socket: captures what the client sent, lets the test push messages/close.
@@ -63,7 +63,7 @@ describe('streamSession', () => {
     await collect;
 
     const msgs = controls(fake.sent);
-    expect(msgs[0]).toMatchObject({ type: 'init', voice: 'v', sample_rate: 24000 });
+    expect(msgs[0]).toMatchObject({ type: 'init', voice: 'v', sample_rate: 24000, speed: 1.1 });
     const sentText = msgs.filter((m) => m.type === 'text').map((m) => m.text).join('');
     expect(sentText).toBe('Hello there. How are you?'); // reassembled losslessly, never mid-word
     expect(msgs.at(-1)).toEqual({ type: 'end' });

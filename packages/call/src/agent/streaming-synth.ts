@@ -24,6 +24,7 @@ export interface SessionInit {
   voice: string;
   language: string;
   sampleRate: number;
+  speed: number; // server reads this from init (defaults 1.0); honors TTS_SPEED
 }
 
 // Flush buffered text up to the last word/clause boundary, keeping the trailing partial token so we never
@@ -109,6 +110,7 @@ export async function* streamSession(
         language: init.language,
         format: 'pcm',
         sample_rate: init.sampleRate,
+        speed: init.speed,
       }),
     );
     let buf = '';

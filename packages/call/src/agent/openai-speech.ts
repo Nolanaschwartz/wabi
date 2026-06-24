@@ -92,7 +92,7 @@ export function createOpenAiPipeline(cfg: AgentConfig): SpeechPipeline {
       synthesizeSession(text, signal) {
         return streamSession(
           () => wsSocket(cfg.tts.url),
-          { voice: cfg.tts.voice, language: 'Auto', sampleRate: 24000 },
+          { voice: cfg.tts.voice, language: 'Auto', sampleRate: 24000, speed: cfg.tts.speed },
           text,
           signal,
         );

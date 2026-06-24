@@ -44,9 +44,9 @@ const WARMUP_TIMEOUT_MS = 4_000;
 // seam. The click-suppression knob: lengthen if the seam still pops, shorten if it softens word onsets.
 const FADE_SAMPLES = 120;
 // Approach B (streaming-text TTS over one WS session): stream LLM deltas into a single continuous synthesis
-// — no seam, no tone jump. Off until the server WS endpoint (slice 3) is live; flip on to replace the
-// approach-C two-phase split. See .scratch/streaming-tts-websocket.
-const STREAM_SESSION = false;
+// — no seam, no tone jump. ON — the server WS endpoint (/v1/audio/stream) is live and validated. Replaces
+// the approach-C two-phase split (which slice 6 removes once B is confirmed on a live call).
+const STREAM_SESSION = true;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
