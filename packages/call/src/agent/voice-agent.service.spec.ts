@@ -70,6 +70,68 @@ describe('VoiceAgentService.respond — streaming playback', () => {
     expect(rejections).toEqual([]);
   });
 
+  // A reply long enough that splitFirstChunk yields a chunk1 past the ~60-char floor + a remainder.
+  const LONG_REPLY =
+    'This first sentence is long enough to clear the sixty character floor cleanly. And the rest follows.';
+
+  it('streams a long reply as chunk1 then the remainder (two sequential synths)', async () => {
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const pipeline = pipelineFor(LONG_REPLY);
+    const svc = make(pipeline);
+
+    await (svc as any).respond(sessionWith(sink), utt());
+    await drain();
+
+    const synth = pipeline.synthesizer.synthesizeStream as jest.Mock;
+    expect(synth).toHaveBeenCalledTimes(2);
+    const [c1, c2] = synth.mock.calls.map((c) => c[0]);
+    expect(c1.length).toBeGreaterThanOrEqual(60); // chunk1 cleared the floor
+    expect(`${c1} ${c2}`).toBe(LONG_REPLY); // chunk1 + remainder is lossless
+    expect(sink.write).toHaveBeenCalledTimes(2);
+  });
+
+  it('never overlaps the remainder synth with chunk1 (single-stream)', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const pipeline = pipelineFor(LONG_REPLY);
+    const synth = jest
+      .fn()
+      .mockImplementationOnce(async function* () {
+        yield new Int16Array(240).fill(1);
+        await gate; // chunk1 stream stays open until released
+      })
+      .mockImplementationOnce(async function* () {
+        yield new Int16Array(240).fill(1);
+      });
+    pipeline.synthesizer.synthesizeStream = synth;
+    const sink = { write: jest.fn().mockResolvedValue(undefined), clear: jest.fn() };
+    const svc = make(pipeline);
+
+    const done = (svc as any).respond(sessionWith(sink), utt());
+    await drain();
+    expect(synth).toHaveBeenCalledTimes(1); // remainder blocked until chunk1 drains
+
+    release();
+    await done;
+    expect(synth).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the remainder synth if a barge fires during chunk1', async () => {
+    const session = sessionWith({
+      write: jest.fn().mockImplementation(() => {
+        session.cancel = true; // barge mid-chunk1
+      }),
+      clear: jest.fn(),
+    });
+    const pipeline = pipelineFor(LONG_REPLY);
+    const svc = make(pipeline);
+
+    await (svc as any).respond(session, utt());
+    await drain();
+
+    expect(pipeline.synthesizer.synthesizeStream).toHaveBeenCalledTimes(1); // only chunk1
+  });
+
   it('warms STT/LLM/TTS connections, draining each, fail-open', async () => {
     const pipeline = pipelineFor('hi');
     // STT endpoint cold: warm-up must still resolve (fail-open).

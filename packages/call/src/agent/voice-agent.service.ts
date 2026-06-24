@@ -6,6 +6,7 @@ import { ChatMessage, SpeechPipeline } from './speech';
 import { createOpenAiPipeline } from './openai-speech';
 import { composeSystemPrompt } from './memory-context';
 import { TurnTimer } from './turn-timer';
+import { splitFirstChunk } from './first-chunk';
 
 // Where synthesized reply audio goes. The agent writes 24kHz mono PCM chunks; the implementation (the
 // Discord bridge) resamples to its output format and paces playout. clear() drops queued audio on barge.
@@ -201,6 +202,34 @@ export class VoiceAgentService {
     return withTimeout(drained, DRAIN_TIMEOUT_MS, 'drain').catch(() => undefined);
   }
 
+  // Synthesize one text chunk to the sink. Marks 'audio' on the first frame of the reply (idempotent via
+  // the local guard, so chunk1's first frame wins the onset mark). Returns the PCM sample count for the
+  // synth_audio canary. Honors barge/teardown via cancel/closed.
+  private async synthChunk(
+    session: Session,
+    text: string,
+    signal: AbortSignal,
+    timer: TurnTimer,
+  ): Promise<number> {
+    let first = true;
+    let samples = 0;
+    const frames = withIdleTimeout(
+      this.pipeline!.synthesizer.synthesizeStream(text, signal),
+      TTS_TIMEOUT_MS,
+      'synthesize',
+    );
+    for await (const pcm of frames) {
+      if (session.cancel || session.closed) break;
+      if (first) {
+        first = false;
+        timer.mark('audio');
+      }
+      samples += pcm.length;
+      session.sink.write(pcm);
+    }
+    return samples;
+  }
+
   private async respond(session: Session, utt: Utterance): Promise<void> {
     const ctrl = new AbortController();
     session.abort = ctrl; // so a barge-in can abort the LLM stream mid-think
@@ -222,11 +251,15 @@ export class VoiceAgentService {
       // interrupt. From here, only a barge DURING playback (below) stops the reply.
       session.cancel = false;
 
-      // Stream the reply token-by-token, accumulating the full text, then chunk + synthesize below.
-      // Waiting for the LLM's last token before synth is fine here: sent1 (last-token time) measures in
-      // tens of ms — the latency is almost all TTFT, and the model emits the rest of the reply instantly.
+      // Stream the reply token-by-token. As soon as the splitter yields a sizeable first chunk (a sentence
+      // boundary past MIN_FIRST_CHARS), synthesize it WHILE the LLM keeps generating the rest — first audio
+      // starts after chunk1 instead of the last token. Single-stream-safe: chunk1 synth overlaps only the
+      // LLM token stream, and the remainder synth runs strictly AFTER chunk1 drains (never two at once).
       let full = '';
       let firstDelta = true;
+      let chunk1: string | null = null;
+      let synth1: Promise<number> | undefined;
+      let synthSamples = 0; // diagnostic: total PCM samples synthesized for this reply
       const stream = withIdleTimeout(
         this.pipeline!.responder.respondStream(session.messages, ctrl.signal),
         LLM_TIMEOUT_MS,
@@ -239,47 +272,45 @@ export class VoiceAgentService {
           firstDelta = false;
         }
         full += delta;
-      }
-      full = full.trim();
-      timer.mark('sentence'); // reply text ready for synth (sent1 = full-reply generation time)
-
-      if (full && !(session.cancel || session.closed)) {
-        // Drop any leftover from the previous reply before queueing this one. The TTS runs faster than
-        // realtime, so each reply leaves an un-drained tail in the bridge's outBuf; without this, replies
-        // append to that tail and playout falls further behind every turn (the voice drags over a session).
-        // Safe: by now STT+LLM (~seconds) have elapsed, so the prior reply has finished playing out.
-        session.sink.clear();
-        let firstChunk = true;
-        let synthSamples = 0; // diagnostic: total PCM samples synthesized for this reply
-        // Synthesize the WHOLE reply in one buffered request: one request end-to-end, no sentence seams,
-        // and the single-stream TTS server never sees overlapping requests (concurrent streams corrupt
-        // each other — that was the prefetcher garble). Buffered because streaming stretches audio here.
-        const frames = withIdleTimeout(
-          this.pipeline!.synthesizer.synthesizeStream(full, ctrl.signal),
-          TTS_TIMEOUT_MS,
-          'synthesize',
-        );
-        for await (const pcm of frames) {
-          if (session.cancel || session.closed) break;
-          if (firstChunk) {
-            firstChunk = false;
-            timer.mark('audio');
+        if (!chunk1) {
+          const split = splitFirstChunk(full);
+          if (split) {
+            chunk1 = split.chunk1;
+            timer.mark('sentence'); // first synthesizable chunk ready — drives onset
+            session.sink.clear(); // drop the prior reply's tail before this reply's first write
+            synth1 = this.synthChunk(session, chunk1, ctrl.signal, timer);
           }
-          synthSamples += pcm.length;
-          session.sink.write(pcm);
         }
-        // synth_audio ≫ the reply's natural spoken length = the server stretched it (a server-side bug,
-        // worst on short/first inputs). Keep this line to spot regressions; rtf in the server logs confirms.
+      }
+      // Settle the in-flight chunk1 synth before the remainder (single-stream: never two synths at once),
+      // and so a barge-aborted synth can't dangle as an unhandled rejection.
+      if (synth1) synthSamples += await synth1.catch(() => 0);
+
+      const reply = full.trim();
+      if (chunk1) {
+        // Two-phase: chunk1 already synthesized above; now the remainder as one request.
+        const rest = full.slice(chunk1.length).trim();
+        if (rest && !(session.cancel || session.closed)) {
+          synthSamples += await this.synthChunk(session, rest, ctrl.signal, timer);
+        }
+      } else if (reply && !(session.cancel || session.closed)) {
+        // No split (short/run-on reply) — synthesize the whole reply as one request (the original path).
+        timer.mark('sentence');
+        session.sink.clear();
+        synthSamples += await this.synthChunk(session, reply, ctrl.signal, timer);
+      }
+      if ((chunk1 || reply) && !(session.cancel || session.closed)) {
+        // synth_audio ≫ the reply's natural spoken length = the server stretched it; canary for regressions.
         this.log.log(`synth_audio=${(synthSamples / 24000).toFixed(2)}s (24kHz mono)`);
       }
 
-      if (full) {
-        session.messages.push({ role: 'assistant', content: full });
+      if (reply) {
+        session.messages.push({ role: 'assistant', content: reply });
         if (session.messages.length > 11) {
           session.messages.splice(1, session.messages.length - 11); // keep system + last 10
         }
       }
-      this.log.log(`reply: ${full}`);
+      this.log.log(`reply: ${reply}`);
       if (!(session.cancel || session.closed)) {
         timer.mark('done');
         this.log.log(timer.render()); // one structured per-turn latency line on the clean path
