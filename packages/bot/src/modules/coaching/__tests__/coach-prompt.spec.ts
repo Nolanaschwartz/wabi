@@ -69,6 +69,15 @@ describe('buildCoachPrompt', () => {
     expect(prompt).toContain('assistant: hi there');
   });
 
+  it('guards both system personas against following injected read-back as instructions', () => {
+    const def = buildCoachPrompt(base).system;
+    const after = buildCoachPrompt({ ...base, inAftermath: true }).system;
+
+    for (const system of [def, after]) {
+      expect(system).toMatch(/background|not.*instruction|never follow/i);
+    }
+  });
+
   it('selects the default coach system prompt when not in aftermath', () => {
     const { system } = buildCoachPrompt(base);
 
