@@ -1,12 +1,20 @@
-import { discordAuth, lucia } from "@/lib/auth";
+import { discordAuth } from "@/lib/auth";
+import { establishSession } from "@/lib/session";
+import { resolveOrPend, type OnboardingWriter } from "@/lib/onboarding";
 import {
 	PENDING_CONSENT_COOKIE,
 	PENDING_CONSENT_COOKIE_OPTIONS,
-	createPendingConsentToken,
 } from "@/lib/pending-consent";
 import { OAuth2RequestError } from "arctic";
 import { NextRequest, NextResponse } from "next/server";
 
+/**
+ * Thin adapter over the onboarding module. This route owns only the OAuth transport —
+ * the state check, the code exchange, and the Discord `/@me` fetch — then hands a
+ * verified identity to `resolveOrPend`. The module decides existing-vs-new and never
+ * touches Discord HTTP, so its tests need no `global.fetch`. Session cookies go through
+ * `establishSession`; the pending-consent path persists nothing (ADR-0002/0015).
+ */
 export async function GET(request: NextRequest): Promise<Response> {
 	const url = new URL(request.url);
 	const code = url.searchParams.get("code");
@@ -27,32 +35,22 @@ export async function GET(request: NextRequest): Promise<Response> {
 		const discordUser = await discordUserRes.json();
 
 		const { prisma } = await import("@wabi/shared");
+		const resolution = await resolveOrPend(
+			prisma as unknown as OnboardingWriter,
+			{ discordId: discordUser.id, email: discordUser.email ?? null },
+			new Date(),
+		);
 
-		const existingUser = await prisma.user.findUnique({
-			where: { discordId: discordUser.id },
-		});
-
-		if (existingUser) {
-			const session = await lucia.createSession(existingUser.id, {});
-			const sessionCookie = lucia.createSessionCookie(session.id);
+		if (resolution.kind === "existing") {
 			const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/dashboard`);
-			response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+			await establishSession(resolution.userId, response);
 			return response;
 		}
 
-		// New identity: do NOT create a User row or a session yet. Privacy-by-construction
-		// (ADR-0002) requires explicit consent before we persist an identifiable User, and Lucia can't
-		// mint a session without one. Hold the authenticated identity in a signed, httpOnly
-		// pending-consent cookie; the first-ever user.create happens on the consent POST.
-		// (Issue #29.)
-		const pendingToken = createPendingConsentToken(
-			discordUser.id,
-			discordUser.email ?? null,
-			Date.now(),
-		);
+		// New identity: nothing persisted yet. Hold the signed pending-consent token in an
+		// httpOnly cookie; the first-ever User.create happens on the consent POST.
 		const response = NextResponse.redirect(`${process.env.NEXT_PUBLIC_BASE_URL}/consent`);
-		response.cookies.set(PENDING_CONSENT_COOKIE, pendingToken, PENDING_CONSENT_COOKIE_OPTIONS);
-
+		response.cookies.set(PENDING_CONSENT_COOKIE, resolution.token, PENDING_CONSENT_COOKIE_OPTIONS);
 		return response;
 	} catch (e) {
 		console.error("[oauth:callback] error:", e);

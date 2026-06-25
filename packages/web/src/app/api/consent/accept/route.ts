@@ -1,47 +1,31 @@
-import { prisma, trialGrant } from '@wabi/shared';
-import { lucia } from '@/lib/auth';
+import { prisma } from '@wabi/shared';
+import { establishSession } from '@/lib/session';
+import { provisionConsentedUser, type OnboardingWriter } from '@/lib/onboarding';
 import {
   PENDING_CONSENT_COOKIE,
   PENDING_CONSENT_COOKIE_OPTIONS,
-  verifyPendingConsentToken,
 } from '@/lib/pending-consent';
 import { NextRequest, NextResponse } from 'next/server';
 
+/**
+ * Thin adapter over the onboarding module. The affirmative consent POST is the first
+ * write for a new identity: `provisionConsentedUser` verifies the signed pending-consent
+ * token, creates the User, and stamps the Trial (ADR-0011) — returning null (→ 401) and
+ * writing nothing if the token is missing/forged/expired. On success we establish the
+ * session and consume the pending cookie.
+ */
 export async function POST(request: NextRequest): Promise<Response> {
-  // Only a valid, signed pending-consent cookie authorizes account creation. There is no
-  // pre-existing User/session at this point — this POST is the first write for the identity.
-  const pending = verifyPendingConsentToken(
+  const result = await provisionConsentedUser(
+    prisma as unknown as OnboardingWriter,
     request.cookies.get(PENDING_CONSENT_COOKIE)?.value,
-    Date.now(),
+    new Date(),
   );
-  if (!pending) {
+  if (!result) {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  const now = new Date();
-  // The Trial grant (window + initial status) is computed by the shared access module (`trialGrant`) so the
-  // web writer and the bot's read agree on what a Trial is (ADR-0011).
-  const { trialEndsAt, subscriptionStatus } = trialGrant(now);
-
-  // First-ever persistence for this identity, stamped with consent at the moment of the
-  // affirmative action. upsert keeps a retried consent POST (cookie still valid) idempotent.
-  const user = await prisma.user.upsert({
-    where: { discordId: pending.discordId },
-    update: { consentAcceptedAt: now, trialEndsAt, subscriptionStatus },
-    create: {
-      discordId: pending.discordId,
-      email: pending.email,
-      consentAcceptedAt: now,
-      trialEndsAt,
-      subscriptionStatus,
-    },
-  });
-
-  const session = await lucia.createSession(user.id, {});
-  const sessionCookie = lucia.createSessionCookie(session.id);
-
   const response = NextResponse.json({ ok: true });
-  response.cookies.set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+  await establishSession(result.userId, response);
   // Consume the pending cookie now that the real session exists.
   response.cookies.set(PENDING_CONSENT_COOKIE, '', {
     ...PENDING_CONSENT_COOKIE_OPTIONS,
