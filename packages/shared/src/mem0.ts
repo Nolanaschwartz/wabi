@@ -68,10 +68,11 @@ export function mem0Key(userId: string): string {
 }
 
 /**
- * Fetch a URL, parse JSON on success. On a non-OK response calls `onError` with the status and the body
- * truncated to 200 chars and returns null. Network errors propagate (callers decide whether to swallow).
+ * The one request mechanism. Fetch a URL, parse JSON on success. On a non-OK response calls `onError`
+ * with the status and the body truncated to 200 chars and returns null. Network errors propagate
+ * (callers decide whether to swallow — `recall` does, the rest surface null).
  */
-async function mem0Fetch<T>(
+async function mem0Request<T>(
   url: string,
   options?: RequestInit,
   onError?: ErrorHandler,
@@ -85,18 +86,40 @@ async function mem0Fetch<T>(
   return res.json() as Promise<T>;
 }
 
-/** mem0 returns ISO timestamps; convert to epoch ms preferring updated_at, undefined if neither parses. */
-function parseRecency(updatedAt?: string, createdAt?: string): number | undefined {
-  const iso = updatedAt ?? createdAt;
-  if (!iso) return undefined;
-  const ms = Date.parse(iso);
-  return Number.isNaN(ms) ? undefined : ms;
+/**
+ * The single recency rule for a mem0 fact, shared by `search` (per-hit `updatedAt`) and `recall`
+ * (newest-first sort). Converts ISO timestamps to epoch ms, preferring a *parseable* updated_at over
+ * created_at; returns undefined only when neither parses. A present-but-unparseable updated_at falls
+ * through to created_at — so a fact with a malformed updated_at but a valid created_at sorts by its
+ * real recency instead of dropping to epoch 0 and being cut from `recall`'s newest-first slice.
+ * `recall` supplies the sort `0`-fallback at its call site via `?? 0`.
+ */
+export function recencyMs(updatedAt?: string, createdAt?: string): number | undefined {
+  for (const iso of [updatedAt, createdAt]) {
+    if (!iso) continue;
+    const ms = Date.parse(iso);
+    if (!Number.isNaN(ms)) return ms;
+  }
+  return undefined;
 }
 
-/** Epoch ms for a fact, preferring updated_at then created_at; 0 (oldest) when neither parses. */
-function recencyOf(r: { updated_at?: string; created_at?: string }): number {
-  const ms = Date.parse(r.updated_at ?? r.created_at ?? '');
-  return Number.isNaN(ms) ? 0 : ms;
+/**
+ * The one GET-by-user core: raw passthrough of mem0's `results[]` for `mem0_<userId>`, or null on a
+ * non-OK response. Both `recall` (recency-bounded, fail-open) and `getAllForUser` (full enumeration,
+ * null on error) read this one endpoint and apply their own view + fail policy. Exported for unit
+ * tests; deliberately NOT re-exported from the barrel (`index.ts`) — not part of the public interface.
+ */
+export async function listMemories(
+  userId: string,
+  onError?: ErrorHandler,
+): Promise<NonNullable<Mem0SearchResponse['results']> | null> {
+  const json = await mem0Request<Mem0SearchResponse>(
+    `${process.env.MEM0_URL}/memories?user_id=${encodeURIComponent(mem0Key(userId))}`,
+    undefined,
+    onError,
+  );
+  if (!json) return null;
+  return json.results ?? [];
 }
 
 // mem0's create response shape varies: the id may be top-level, in events[].id, or memories[].id.
@@ -117,7 +140,7 @@ export async function deriveAndStore(
   sessionText: string,
   onError?: ErrorHandler,
 ): Promise<DeriveResult | null> {
-  const json = await mem0Fetch<Mem0CreateResponse>(
+  const json = await mem0Request<Mem0CreateResponse>(
     `${process.env.MEM0_URL}/memories`,
     {
       method: 'POST',
@@ -142,7 +165,7 @@ export async function search(
   query: string,
   onError?: ErrorHandler,
 ): Promise<MemorySearchHit[] | null> {
-  const json = await mem0Fetch<Mem0SearchResponse>(
+  const json = await mem0Request<Mem0SearchResponse>(
     `${process.env.MEM0_URL}/search`,
     {
       method: 'POST',
@@ -160,7 +183,7 @@ export async function search(
     id: r.id ?? '',
     content: r.memory ?? '',
     similarity: r.score ?? 0,
-    updatedAt: parseRecency(r.updated_at, r.created_at),
+    updatedAt: recencyMs(r.updated_at, r.created_at),
   }));
 }
 
@@ -169,13 +192,9 @@ export async function getAllForUser(
   userId: string,
   onError?: ErrorHandler,
 ): Promise<MemoryEntry[] | null> {
-  const json = await mem0Fetch<Mem0SearchResponse>(
-    `${process.env.MEM0_URL}/memories?user_id=${encodeURIComponent(mem0Key(userId))}`,
-    undefined,
-    onError,
-  );
-  if (!json) return null;
-  return (json.results ?? []).map((r) => ({ id: r.id ?? '', content: r.memory ?? '' }));
+  const results = await listMemories(userId, onError);
+  if (!results) return null;
+  return results.map((r) => ({ id: r.id ?? '', content: r.memory ?? '' }));
 }
 
 /**
@@ -186,7 +205,7 @@ export async function deleteAllForUser(
   userId: string,
   onError?: ErrorHandler,
 ): Promise<boolean> {
-  const res = await mem0Fetch(
+  const res = await mem0Request(
     `${process.env.MEM0_URL}/memories?user_id=${encodeURIComponent(mem0Key(userId))}`,
     { method: 'DELETE' },
     onError,
@@ -200,20 +219,17 @@ export async function deleteAllForUser(
  * mem0 yields a plain assistant rather than a broken call.
  */
 export async function recall(userId: string): Promise<string[]> {
-  const baseUrl = process.env.MEM0_URL;
-  if (!baseUrl) return [];
-  try {
-    const res = await fetch(
-      `${baseUrl}/memories?user_id=${encodeURIComponent(mem0Key(userId))}`,
-    );
-    if (!res.ok) return [];
-    const json = (await res.json()) as Mem0SearchResponse;
-    return (json.results ?? [])
-      .filter((r) => !!r.memory)
-      .sort((a, b) => recencyOf(b) - recencyOf(a)) // newest first
-      .slice(0, RECALL_LIMIT)
-      .map((r) => r.memory as string);
-  } catch {
-    return [];
-  }
+  // Explicit guard kept for clarity (and to avoid a doomed fetch on an undefined URL).
+  if (!process.env.MEM0_URL) return [];
+  // Fail fully open: listMemories returns null on non-OK; a propagated network error is caught here.
+  const results = await listMemories(userId).catch(() => null);
+  return (results ?? [])
+    .filter((r) => !!r.memory)
+    .sort(
+      (a, b) =>
+        (recencyMs(b.updated_at, b.created_at) ?? 0) -
+        (recencyMs(a.updated_at, a.created_at) ?? 0),
+    ) // newest first
+    .slice(0, RECALL_LIMIT)
+    .map((r) => r.memory as string);
 }

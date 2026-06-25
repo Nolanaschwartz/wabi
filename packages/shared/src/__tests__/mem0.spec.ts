@@ -1,4 +1,12 @@
-import { mem0Key, recall, RECALL_LIMIT, search, SEARCH_CANDIDATE_LIMIT } from '../mem0';
+import {
+  listMemories,
+  mem0Key,
+  recall,
+  recencyMs,
+  RECALL_LIMIT,
+  search,
+  SEARCH_CANDIDATE_LIMIT,
+} from '../mem0';
 
 const okJson = (body: unknown) =>
   ({ ok: true, json: async () => body }) as unknown as Response;
@@ -134,5 +142,57 @@ describe('search (coach surface: semantic, scored)', () => {
       ({ ok: false, status: 503, text: async () => 'neo4j down' }) as Response,
     ) as jest.Mock;
     await expect(search('u1', 'ranked')).resolves.toBeNull();
+  });
+});
+
+describe('recencyMs (the single recency rule)', () => {
+  it('prefers updated_at over created_at', () => {
+    const updated = '2022-01-01T00:00:00Z';
+    const created = '2020-01-01T00:00:00Z';
+    expect(recencyMs(updated, created)).toBe(Date.parse(updated));
+  });
+
+  it('falls back to created_at when updated_at is absent', () => {
+    const created = '2020-01-01T00:00:00Z';
+    expect(recencyMs(undefined, created)).toBe(Date.parse(created));
+  });
+
+  it('falls through to created_at when updated_at is present but unparseable', () => {
+    // A malformed updated_at must not sink a fact to epoch 0 and drop it from recall's slice.
+    const created = '2026-06-20T00:00:00Z';
+    expect(recencyMs('garbage', created)).toBe(Date.parse(created));
+  });
+
+  it('returns undefined when neither parses', () => {
+    expect(recencyMs(undefined, undefined)).toBeUndefined();
+    expect(recencyMs('not-a-date', undefined)).toBeUndefined();
+  });
+});
+
+describe('listMemories (the shared GET-by-user core)', () => {
+  const realFetch = global.fetch;
+  const realUrl = process.env.MEM0_URL;
+
+  beforeEach(() => {
+    process.env.MEM0_URL = 'http://mem0.test';
+  });
+  afterEach(() => {
+    global.fetch = realFetch;
+    if (realUrl === undefined) delete process.env.MEM0_URL;
+    else process.env.MEM0_URL = realUrl;
+    jest.restoreAllMocks();
+  });
+
+  it('returns null on a non-OK response', async () => {
+    global.fetch = jest.fn(async () =>
+      ({ ok: false, status: 503, text: async () => 'down' }) as Response,
+    ) as jest.Mock;
+    await expect(listMemories('u1')).resolves.toBeNull();
+  });
+
+  it('passes mem0 results[] through raw (no normalisation)', async () => {
+    const results = [{ id: 'm1', memory: 'a', updated_at: '2024-01-01T00:00:00Z' }];
+    global.fetch = jest.fn(async () => okJson({ results })) as jest.Mock;
+    await expect(listMemories('u1')).resolves.toEqual(results);
   });
 });
