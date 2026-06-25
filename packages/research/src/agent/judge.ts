@@ -50,7 +50,10 @@ async function judgeOne(
     `(0..1 overall quality: grounded, actionable, audience-neutral, non-trivial).\n` +
     `You MAY sharpen the title/technique wording, but do NOT invent claims and do NOT change meaning.\n` +
     `If you rewrite the title, keep it short, plain, and action-oriented (what the person does) — not an academic label.\n` +
-    `Return JSON: {"faithful": boolean, "scopeOk": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n\n` +
+    `Return JSON: {"faithful": boolean, "scopeOk": boolean, "score": number, "title": string, "technique": string, "rationale": string}\n` +
+    // JSON only: parse is a strict JSON.parse (after fence-strip); chatty prose would fail it and the
+    // candidate fails open at a neutral 0.5 (an un-judged drop-through). Make output exclusivity explicit.
+    `Output only the JSON object — no prose, no markdown, no other text.\n\n` +
     `Title: ${c.title}\nTechnique: ${c.technique}\nSourceText: ${c.sourceText}`;
 
   let out;

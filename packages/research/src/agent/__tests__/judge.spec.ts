@@ -55,6 +55,13 @@ it('prompts with the shared scope fragment, via span "judge" + role "research"',
   expect(gen.mock.calls[0][2].prompt).toContain(require('../scope-policy').SCOPE_FRAGMENT);
 });
 
+it('tells the model to emit JSON only, so a chatty reasoning model does not break the parse', async () => {
+  const gen = genFn();
+  gen.mockResolvedValue(verdict({ faithful: true, scopeOk: true, score: 0.8, rationale: 'r' }));
+  await judgeCandidates(gen, [mk('A')], 'rct');
+  expect(gen.mock.calls[0][2].prompt).toMatch(/only the JSON|no other text|no prose/i);
+});
+
 it('holds preprints to a stricter floor than peer-reviewed work', async () => {
   const gen = genFn();
   gen.mockResolvedValue(verdict({ faithful: true, score: 0.6, rationale: 'ok' }));

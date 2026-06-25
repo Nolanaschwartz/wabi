@@ -53,6 +53,12 @@ it('prompts with the shared scope fragment', async () => {
   expect(gen.mock.calls[0][2].prompt).toContain(SCOPE_FRAGMENT);
 });
 
+it('tells the model to emit JSON only, so a chatty reasoning model does not break the parse', async () => {
+  const gen = genReturning(reply('[]'));
+  await extractWithLenses(gen, paper, paper.abstract, ['behavioral']);
+  expect(gen.mock.calls[0][2].prompt).toMatch(/only the JSON|no other text|no prose/i);
+});
+
 it('drops a candidate whose sourceText is not a verbatim substring (hallucination guard)', async () => {
   const gen = genReturning(reply(JSON.stringify([
     { title: 'Real', technique: 'r', sourceText: 'box breathing lowered arousal', lens: 'behavioral' },
