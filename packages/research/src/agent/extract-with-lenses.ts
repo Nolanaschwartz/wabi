@@ -39,7 +39,10 @@ export async function extractWithLenses(gen: ResearchGenerate, paper: Paper, bod
         `tilt, or any specific population — describe the general mechanism only.\n` +
         `- Each "sourceText" MUST be a verbatim quote copied exactly from the source (a real substring).\n` +
         `- "lens" MUST be exactly one of: ${lenses.join(', ')}.\n` +
-        `Return JSON array: [{"title": string, "technique": string, "sourceText": string, "lens": string}] (or []).\n\n` +
+        `Return JSON array: [{"title": string, "technique": string, "sourceText": string, "lens": string}] (or []).\n` +
+        // JSON only: parse is a strict JSON.parse (after fence-strip), so leading/trailing prose from a
+        // chatty reasoning model would drop the whole extraction. Make the output exclusivity explicit.
+        `Output only the JSON array — no prose, no markdown, no other text.\n\n` +
         `Source:\n${body}`,
     });
   } catch {

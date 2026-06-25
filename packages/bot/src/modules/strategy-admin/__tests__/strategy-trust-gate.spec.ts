@@ -148,6 +148,32 @@ describe('StrategyTrustGate', () => {
     expect(faithfulnessCall.prompt).toContain('CBT is effective');
   });
 
+  it('gives the safety check explicit unsafe criteria, not a bare "is it safe" ask', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText.mockResolvedValueOnce({ text: 'safe' }).mockResolvedValueOnce({ text: 'faithful' });
+
+    await gate.evaluate({
+      id: '1', title: 'X', technique: 'Y', source: 'APA', evidence: 'E',
+      sourceUrl: 'https://apa.org/test', trustLevel: 'allowlisted', status: 'draft',
+    });
+
+    const safetyPrompt = generateText.mock.calls[0][0].prompt as string;
+    expect(safetyPrompt).toMatch(/self-harm|suicide|substance|medical|supplement|drug/i);
+  });
+
+  it('gives the faithfulness check an explicit "present in the source" criterion', async () => {
+    const { generateText } = require('ai') as { generateText: jest.Mock };
+    generateText.mockResolvedValueOnce({ text: 'safe' }).mockResolvedValueOnce({ text: 'faithful' });
+
+    await gate.evaluate({
+      id: '1', title: 'X', technique: 'Y', source: 'APA', evidence: 'E',
+      sourceUrl: 'https://apa.org/test', trustLevel: 'allowlisted', status: 'draft',
+    });
+
+    const faithPrompt = generateText.mock.calls[1][0].prompt as string;
+    expect(faithPrompt).toMatch(/not invented|genuinely present|actually describe/i);
+  });
+
   it('shouldQuarantine returns true at threshold', () => {
     expect(gate.shouldQuarantine(3)).toBe(true);
     expect(gate.shouldQuarantine(2)).toBe(false);
