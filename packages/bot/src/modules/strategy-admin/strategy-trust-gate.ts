@@ -135,8 +135,12 @@ export class StrategyTrustGate {
   }
 
   private async safetyFilter(draft: StrategyDraft): Promise<boolean> {
+    // Explicit criteria, not a bare "is it safe": the model otherwise invents its own bar on an
+    // auto-publish path. Mirrors the research judge's scopeOk language so both gates reject the same
+    // out-of-scope advice (supplement/drug/clinical/procedure) plus anything that could harm unsupervised.
     return this.llmBooleanCheck(
-      `Evaluate if this strategy is safe. Return only "safe" or "unsafe":
+      `Is this self-help wellbeing strategy SAFE to show a non-clinical user unsupervised? Mark "unsafe" if it encourages self-harm, suicide, or substance misuse; gives medical, psychiatric, or dosing advice; recommends a drug, supplement, dosed nutrient, or clinical procedure; or could cause harm if followed without a professional. Otherwise "safe". Reply with only "safe" or "unsafe".
+Example: "Take 400mg magnesium before bed" -> unsafe (dosed supplement).
 Title: ${draft.title}
 Technique: ${draft.technique}
 Source: ${draft.source}`,
@@ -148,8 +152,11 @@ Source: ${draft.source}`,
     const sourceTextSection = draft.sourceText
       ? `\nSource Text: ${draft.sourceText}`
       : '';
+    // "Faithful" defined: the technique is genuinely present in the source, not invented, exaggerated,
+    // or a different claim — so a plausible-but-unsupported technique can't auto-publish.
     return this.llmBooleanCheck(
-      `Does this technique actually appear in the cited source? Return only "faithful" or "unfaithful":
+      `Does the cited source actually describe or support this technique? Mark "faithful" only if the technique is genuinely present in the source — not invented, exaggerated, or a different claim. Otherwise "unfaithful". Reply with only "faithful" or "unfaithful".
+Example: source says "gratitude journaling reduced stress"; technique "write three things you're grateful for" -> faithful.
 Technique: ${draft.technique}
 Source: ${draft.source}
 Evidence: ${draft.evidence}${sourceTextSection}`,
