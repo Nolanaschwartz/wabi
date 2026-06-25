@@ -20,14 +20,11 @@ export interface Responder {
 }
 
 export interface Synthesizer {
-  // Streams 16-bit mono PCM (at SYNTH_RATE) as it's synthesized — first frame in ~0.6s — so playback
-  // starts before the whole utterance renders. `signal` aborts on barge-in/hangup.
-  synthesizeStream(text: string, signal?: AbortSignal): AsyncIterable<Int16Array>;
-
-  // Approach B (streaming-text): feed reply text in incrementally as the LLM produces it and read ONE
-  // continuous PCM stream back over a single session — no per-request seam. `text` completing ends the
-  // utterance; `signal` aborts/closes the session. Optional: providers without a streaming session omit it.
-  synthesizeSession?(
+  // Streaming-text TTS over ONE continuous session: feed reply text in incrementally as the LLM produces
+  // it and read one continuous 16-bit mono PCM stream (at 24kHz) back — no per-request seam, one synthesis
+  // take. `text` completing ends the utterance; `signal` aborts/closes the session. The server is
+  // single-stream (one session at a time); a transient "server busy" on open is the caller's to retry.
+  synthesizeSession(
     text: AsyncIterable<string>,
     signal?: AbortSignal,
   ): AsyncIterable<Int16Array>;

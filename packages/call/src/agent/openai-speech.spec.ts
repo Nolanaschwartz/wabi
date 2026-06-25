@@ -1,8 +1,15 @@
-import { createOpenAiPipeline } from './openai-speech';
 import type { AgentConfig } from './agent.config';
 
-// Slices 05/09: the streaming request bodies must carry the config-driven max_tokens (reply-length cap)
-// and speed (voice pacing). Mock fetch to capture the body and return an immediately-closed stream.
+// synthesizeSession is thin glue over streamSession (the wire protocol lives in streaming-synth.ts, tested
+// there). Mock it so we can assert the adapter wires the config-driven init (voice/speed/sampleRate).
+jest.mock('./streaming-synth', () => ({
+  streamSession: jest.fn(() => (async function* () {})()),
+  wsSocket: jest.fn(() => ({}) as any),
+}));
+
+import { createOpenAiPipeline } from './openai-speech';
+import { streamSession } from './streaming-synth';
+
 const cfg: AgentConfig = {
   stt: { url: 'http://stt', model: 'whisper' },
   llm: { url: 'http://llm', model: 'm', maxTokens: 160 },
@@ -17,12 +24,18 @@ const closedStream = () =>
     },
   });
 
-describe('openai-speech streaming request bodies', () => {
+const once = (s: string) =>
+  (async function* () {
+    yield s;
+  })();
+
+describe('openai-speech', () => {
   const origFetch = global.fetch;
   let bodies: any[];
 
   beforeEach(() => {
     bodies = [];
+    (streamSession as jest.Mock).mockClear();
     global.fetch = jest.fn(async (_url: any, init: any) => {
       bodies.push(JSON.parse(init.body));
       return { ok: true, body: closedStream() } as any;
@@ -40,11 +53,13 @@ describe('openai-speech streaming request bodies', () => {
     expect(bodies[0].max_tokens).toBe(160);
   });
 
-  it('TTS request carries speed from config', async () => {
+  it('synthesizeSession wires the config-driven init (voice/speed/sampleRate)', async () => {
     const p = createOpenAiPipeline(cfg);
-    for await (const _ of p.synthesizer.synthesizeStream('hi')) {
+    for await (const _ of p.synthesizer.synthesizeSession(once('hi'))) {
       /* drain */
     }
-    expect(bodies[0].speed).toBe(1.1);
+    expect(streamSession).toHaveBeenCalledTimes(1);
+    const init = (streamSession as jest.Mock).mock.calls[0][1];
+    expect(init).toMatchObject({ voice: 'v', speed: 1.1, sampleRate: 24000, language: 'Auto' });
   });
 });

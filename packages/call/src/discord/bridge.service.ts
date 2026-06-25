@@ -24,8 +24,18 @@ export class DiscordBridge {
   private readonly log = new Logger(DiscordBridge.name);
   private readonly sessions = new Map<string, () => void>(); // guildId -> cleanup
   private readonly outs = new Map<string, Readable>(); // guildId -> Discord PCM sink
+  // guildId -> the live channel + whether this call loaded private memory. Read by the late-joiner guard
+  // to re-evaluate the single-human privacy precondition on a VoiceStateUpdate. Set/cleared in lockstep
+  // with the bridge, so a present entry means an active call.
+  private readonly calls = new Map<string, { channel: VoiceBasedChannel; memoryLoaded: boolean }>();
 
   constructor(private readonly agent: VoiceAgentService) {}
+
+  // The active call for a guild (live channel + whether it loaded memory), or undefined if none. The
+  // channel's `.members` collection stays live, so the guard recounts current membership through it.
+  activeCall(guildId: string): { channel: VoiceBasedChannel; memoryLoaded: boolean } | undefined {
+    return this.calls.get(guildId);
+  }
 
   // Diagnostic: push 1s of 440Hz tone straight into the Discord player, bypassing the agent/TTS.
   // If you hear this but not the assistant, the Discord transmit path is fine and the issue is upstream.
@@ -48,6 +58,9 @@ export class DiscordBridge {
   async start(channel: VoiceBasedChannel, memoryBlock = ''): Promise<void> {
     const guildId = channel.guild.id;
     this.stop(guildId); // ponytail: one bridge per guild; restart replaces it
+    // Record the call for the late-joiner guard: whether private memory was loaded gates whether a second
+    // human arriving must end the call (ADR-0043).
+    this.calls.set(guildId, { channel, memoryLoaded: !!memoryBlock });
 
     // --- Discord: join the voice channel ---
     const connection = joinVoiceChannel({
@@ -176,6 +189,7 @@ export class DiscordBridge {
       } catch {}
       pcmOut.push(null);
       this.outs.delete(guildId);
+      this.calls.delete(guildId);
     });
   }
 

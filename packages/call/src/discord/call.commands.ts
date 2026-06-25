@@ -1,15 +1,53 @@
-import { Injectable } from '@nestjs/common';
-import { Context, SlashCommand, SlashCommandContext } from 'necord';
+import { Injectable, Logger } from '@nestjs/common';
+import { Context, On, SlashCommand, SlashCommandContext, ContextOf } from 'necord';
 import { GuildMember } from 'discord.js';
 import { DiscordBridge } from './bridge.service';
 import { VoiceMemoryService } from '../agent/voice-memory.service';
+import { isLateJoiner } from './late-joiner';
 
 @Injectable()
 export class CallCommands {
+  private readonly log = new Logger(CallCommands.name);
+
   constructor(
     private readonly bridge: DiscordBridge,
     private readonly memory: VoiceMemoryService,
   ) {}
+
+  // Late-joiner privacy circuit-breaker (ADR-0043): the recall gate is a /call-time snapshot, so it can't
+  // see a second human arriving mid-call. When one does while private memory is loaded, end the call
+  // rather than mutate the live prompt. Memory-less calls carry no private facts and are left alone.
+  @On('voiceStateUpdate')
+  onVoiceStateUpdate(@Context() [oldState, newState]: ContextOf<'voiceStateUpdate'>) {
+    const guildId = newState.guild?.id ?? oldState.guild?.id;
+    if (!guildId) return;
+    const call = this.bridge.activeCall(guildId);
+    if (!call || !call.memoryLoaded) return; // no active call, or no private memory to protect
+
+    // Decide off the member's own channel TRANSITION carried by the event — not a recount of
+    // call.channel.members, whose cache can lag the join and undercount the joiner (the call would
+    // wrongly stay up). The transition also self-filters mute/deafen churn (from === to), so this
+    // handler does no per-event member scan.
+    const member = newState.member ?? oldState.member;
+    const botId = newState.client.user?.id;
+    if (
+      !isLateJoiner({
+        memoryLoaded: call.memoryLoaded,
+        joinerIsBot: member?.user.bot ?? true,
+        joinerIsSelf: !!botId && member?.id === botId,
+        fromChannelId: oldState.channelId,
+        toChannelId: newState.channelId,
+        bridgedChannelId: call.channel.id,
+      })
+    )
+      return;
+
+    this.log.warn(`late joiner in guild ${guildId} — ending the call to protect private memory`);
+    this.bridge.stop(guildId); // cascades to agent.stop + audio teardown
+    void call.channel
+      .send('📞 Call ended — what Wabi remembers here is private to one person, and someone else joined.')
+      .catch(() => {});
+  }
 
   @SlashCommand({
     name: 'call',

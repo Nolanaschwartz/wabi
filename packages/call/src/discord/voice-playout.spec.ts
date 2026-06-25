@@ -1,6 +1,6 @@
 import { VoicePlayout } from './voice-playout';
 
-// settle: let a resolved/queued microtask-or-macrotask promise win (mirrors playout-drain.spec).
+// settle: let a resolved/queued microtask-or-macrotask promise win.
 const settled = (p: Promise<void>) =>
   Promise.race([
     p.then(() => true),
@@ -130,6 +130,23 @@ describe('VoicePlayout', () => {
     port.consume(port.readableLength);
     p.pump(port);
     expect(await settled(gate)).toBe(true);
+  });
+
+  it('re-arms after a drain: a fresh reply gets its own gate', async () => {
+    const p = new VoicePlayout();
+    // First gate: nothing queued → a pump only refills the silence floor → drained.
+    const first = p.whenDrained();
+    p.pump(new FakePort());
+    expect(await settled(first)).toBe(true);
+
+    // Next reply queues audio; its gate must wait again (not inherit the prior resolution).
+    writeFrames(p, 5);
+    const second = p.whenDrained();
+    p.pump(new FakePort()); // real audio still pending → suppressed
+    expect(await settled(second)).toBe(false);
+
+    p.clear(); // barge/drop releases it
+    expect(await settled(second)).toBe(true);
   });
 
   it('close() resolves any pending and future drain gates (teardown fail-open)', async () => {

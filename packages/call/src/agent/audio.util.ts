@@ -25,51 +25,6 @@ export function buildWav(
   return buf;
 }
 
-export function parseWav(buf: Buffer): {
-  data: Int16Array;
-  rate: number;
-  channels: number;
-} {
-  let off = 12; // skip RIFF + WAVE
-  let rate = 24000;
-  let channels = 1;
-  let bits = 16;
-  let dataOff = 44;
-  let dataLen = buf.length - 44;
-  while (off + 8 <= buf.length) {
-    const id = buf.toString('ascii', off, off + 4);
-    const size = buf.readUInt32LE(off + 4);
-    if (id === 'fmt ') {
-      channels = buf.readUInt16LE(off + 10);
-      rate = buf.readUInt32LE(off + 12);
-      bits = buf.readUInt16LE(off + 22);
-    } else if (id === 'data') {
-      dataOff = off + 8;
-      dataLen = size;
-      break;
-    }
-    off += 8 + size + (size % 2); // chunks are word-aligned
-  }
-  if (bits !== 16)
-    throw new Error(`TTS returned ${bits}-bit WAV; expected 16-bit PCM`);
-  // A non-speakable chunk (lone emoji/punctuation) makes the TTS return a 0-byte WAV, so dataLen goes
-  // negative. Bail out with empty audio before the copy below — an unclamped count threw "Invalid typed
-  // array length", and a count of 0 with dataOff past the end would throw in buf.copy.
-  const count = Math.max(0, Math.floor(dataLen / 2));
-  if (count === 0) return { data: new Int16Array(0), rate, channels };
-  const data = new Int16Array(count);
-  // ponytail: copy the data bytes straight into the fresh (aligned) Int16Array backing store;
-  // host is little-endian, so the int16 interpretation matches the WAV bytes 1:1. Copying into
-  // `data` (rather than viewing `buf`) dodges Buffer-pool byteOffset misalignment.
-  buf.copy(
-    Buffer.from(data.buffer, data.byteOffset, data.byteLength),
-    0,
-    dataOff,
-    dataOff + count * 2,
-  );
-  return { data, rate, channels };
-}
-
 function toMono(pcm: Int16Array, channels: number): Int16Array {
   if (channels === 1) return pcm;
   const out = new Int16Array(Math.floor(pcm.length / channels));
@@ -110,22 +65,6 @@ export function monoToStereo(mono: Int16Array): Int16Array {
     out[2 * i + 1] = mono[i];
   }
   return out;
-}
-
-// Linear fade-in applied IN PLACE across the first `fadeLen` samples of a stream. `done` = samples
-// already faded across prior frames; returns the updated count. No-op once done >= fadeLen. Used to mask
-// the click where two separately-synthesized clips are concatenated (the chunk1->remainder seam).
-export function fadeIn(pcm: Int16Array, done: number, fadeLen: number): number {
-  for (let i = 0; i < pcm.length && done < fadeLen; i++, done++) {
-    pcm[i] = Math.round((pcm[i] * done) / fadeLen); // gain ramps 0 -> ~1 over fadeLen samples
-  }
-  return done;
-}
-
-export function rms(pcm: Int16Array): number {
-  let sum = 0;
-  for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
-  return Math.sqrt(sum / pcm.length);
 }
 
 export function concatInt16(chunks: Int16Array[]): Int16Array {

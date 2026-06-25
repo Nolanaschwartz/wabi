@@ -3,8 +3,8 @@ import * as path from 'node:path';
 import { loadAgentConfig } from '../src/agent/agent.config';
 import { createOpenAiPipeline } from '../src/agent/openai-speech';
 
-// End-to-end against the REAL TTS server (the configured TTS_URL). Validates the streaming synth path
-// produces correct-length audio — i.e. the server-side over-generation that dragged short replies
+// End-to-end against the REAL TTS server (the configured TTS_URL). Validates the streaming-session synth
+// path produces correct-length audio — i.e. the server-side over-generation that dragged short replies
 // (synth_audio 2–5x the natural length, traced to a missing repetition penalty in stream_generate_pcm)
 // is fixed. Run: `pnpm -F call test:e2e` with the root .env present (or TTS_URL exported).
 
@@ -34,6 +34,12 @@ loadRootEnv();
 // Skip (don't fail) when there's no TTS endpoint configured — keeps CI green without the server.
 const describeIfTts = process.env.TTS_URL ? describe : describe.skip;
 
+// One-shot text source for the streaming session: yields the whole phrase, then ends the utterance.
+const once = (text: string) =>
+  (async function* () {
+    yield text;
+  })();
+
 describeIfTts('TTS server (e2e) — streaming synth produces correct-length audio', () => {
   const synth = createOpenAiPipeline(loadAgentConfig()).synthesizer;
 
@@ -48,7 +54,7 @@ describeIfTts('TTS server (e2e) — streaming synth produces correct-length audi
     'synthesizes %j at a natural rate (no over-generation)',
     async (text) => {
       let samples = 0;
-      for await (const pcm of synth.synthesizeStream(text)) {
+      for await (const pcm of synth.synthesizeSession(once(text))) {
         samples += pcm.length;
       }
       const audioSec = samples / SYNTH_RATE;
