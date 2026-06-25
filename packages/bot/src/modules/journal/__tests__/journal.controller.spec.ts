@@ -66,9 +66,11 @@ describe('JournalController', () => {
       await controller.write([mockInteraction()], { content: 'I had a good day today' });
 
       const write = logger.log.mock.calls[0][0];
-      const value = await write.persist();
+      // The recorder hands the writer the Screened proof; forge the minable arm so persist can narrow it.
+      const proof = { freeText: 'I had a good day today', derivePrefix: 'Journal' } as any;
+      const value = await write.persist(proof);
 
-      expect(journalService.write).toHaveBeenCalledWith('user_1', 'I had a good day today');
+      expect(journalService.write).toHaveBeenCalledWith('user_1', proof);
       expect(value).toEqual({ reflection: 'Nice.', xpAwarded: 10 });
     });
 

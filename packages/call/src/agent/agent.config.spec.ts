@@ -31,8 +31,8 @@ describe('loadAgentConfig — output cap + pacing knobs', () => {
     expect(loadAgentConfig().llm.maxTokens).toBe(256);
   });
 
-  it('defaults tts.speed to a brisk 1.1', () => {
-    expect(loadAgentConfig().tts.speed).toBe(1.1);
+  it('defaults tts.speed to 1', () => {
+    expect(loadAgentConfig().tts.speed).toBe(1);
   });
 
   it('reads TTS_SPEED as a number when set', () => {

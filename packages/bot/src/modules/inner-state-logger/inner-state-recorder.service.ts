@@ -9,7 +9,12 @@ import { InnerStateConsentService, ConsentSurface } from '../memory/inner-state-
  * read, an XP award) lives inside `persist` and is threaded through `T`.
  */
 export interface RecordWrite<T> {
-  persist: () => Promise<T>;
+  /**
+   * Writes the record. Receives the same `Screened` proof the recorder holds, so a writer that stores
+   * free text can demand a {@link ScreenedText} (narrow with `screened.freeText !== null`) instead of a
+   * bare string — the "this text was screened" fact rides the type all the way to the writer (ADR-0031).
+   */
+  persist: (screened: Screened) => Promise<T>;
   confirm: (value: T) => string;
 }
 
@@ -47,7 +52,7 @@ export class InnerStateRecorderService {
     screened: Screened,
     write: RecordWrite<T>,
   ): Promise<Outcome<T>> {
-    const value = await write.persist();
+    const value = await write.persist(screened);
 
     // The proof's `freeText` is the exact screened string (or null for no minable text). When present,
     // derive it under its prefix — screened text ≡ derived text minus the prefix (ADR-0028/0031).

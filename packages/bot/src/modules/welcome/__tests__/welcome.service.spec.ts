@@ -1,19 +1,15 @@
+// AccountReads transitively imports @wabi/shared at load; the spec injects a plain mock, so stub it.
 jest.mock('@wabi/shared', () => ({}));
 
 import { WelcomeService } from '../welcome.service';
 
-const mockFindByDiscordId = jest.fn();
-jest.mock('../../user/user.service', () => ({
-  UserService: jest.fn().mockImplementation(() => ({
-    findByDiscordId: mockFindByDiscordId,
-  })),
-}));
+const mockConsentState = jest.fn();
 
 function makeService() {
   const send = jest.fn().mockResolvedValue({});
   const client = { users: { send } } as any;
-  const userService = { findByDiscordId: mockFindByDiscordId } as any;
-  return { service: new WelcomeService(client, userService), send };
+  const accountReads = { consentState: mockConsentState } as any;
+  return { service: new WelcomeService(client, accountReads), send };
 }
 
 describe('WelcomeService', () => {
@@ -23,10 +19,7 @@ describe('WelcomeService', () => {
   });
 
   it('sends the welcome opener to a consented user', async () => {
-    mockFindByDiscordId.mockResolvedValue({
-      discordId: 'd1',
-      consentAcceptedAt: new Date('2026-01-01'),
-    });
+    mockConsentState.mockResolvedValue({ consented: true });
     const { service, send } = makeService();
 
     await service.welcome('d1');
@@ -38,7 +31,7 @@ describe('WelcomeService', () => {
   });
 
   it('sends the setup-link message (not the opener) to an unknown user', async () => {
-    mockFindByDiscordId.mockResolvedValue(null);
+    mockConsentState.mockResolvedValue({ consented: false });
     const { service, send } = makeService();
 
     await service.welcome('stranger');
@@ -50,10 +43,7 @@ describe('WelcomeService', () => {
   });
 
   it('sends the setup-link message to a user who has not consented', async () => {
-    mockFindByDiscordId.mockResolvedValue({
-      discordId: 'd2',
-      consentAcceptedAt: null,
-    });
+    mockConsentState.mockResolvedValue({ consented: false });
     const { service, send } = makeService();
 
     await service.welcome('d2');
@@ -64,28 +54,22 @@ describe('WelcomeService', () => {
   });
 
   it('swallows DM delivery errors (closed DMs) without throwing', async () => {
-    mockFindByDiscordId.mockResolvedValue({
-      discordId: 'd3',
-      consentAcceptedAt: new Date('2026-01-01'),
-    });
+    mockConsentState.mockResolvedValue({ consented: true });
     const send = jest.fn().mockRejectedValue(new Error('Cannot send messages to this user'));
     const service = new WelcomeService(
       { users: { send } } as any,
-      { findByDiscordId: mockFindByDiscordId } as any,
+      { consentState: mockConsentState } as any,
     );
 
     await expect(service.welcome('d3')).resolves.toBeUndefined();
   });
 
   it('does not enroll the consented user into recurring check-ins (ADR-0008)', async () => {
-    mockFindByDiscordId.mockResolvedValue({
-      discordId: 'd1',
-      consentAcceptedAt: new Date('2026-01-01'),
-    });
+    mockConsentState.mockResolvedValue({ consented: true });
     const { service } = makeService();
 
     await service.welcome('d1');
 
-    expect(mockFindByDiscordId).toHaveBeenCalled();
+    expect(mockConsentState).toHaveBeenCalled();
   });
 });

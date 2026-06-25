@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
+import { ScreenedText } from '../crisis/screened';
 import { CoachService } from '../coaching/coach.service';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 
@@ -40,10 +41,11 @@ export class JournalService {
   }
 
   // Plain persist: reflect → save the entry → log the Engagement (XP + streak) through the single
-  // writer (ADR-0027). Crisis screening of the entry content and consent-gated derivation are owned by
-  // InnerStateLogger (ADR-0028/0029), so this only ever runs from inside that logger's safe-path
-  // closure — crisis text never reaches it.
-  async write(discordId: string, content: string): Promise<JournalWriteResult> {
+  // writer (ADR-0027). The entry is taken as a `ScreenedText` proof, not a bare string, so the entry
+  // content structurally cannot reach this writer unscreened (ADR-0028/0031); `entry.freeText` is the
+  // exact crisis-safe text the upstream screen cleared. Derivation + consent stay in the recorder.
+  async write(discordId: string, entry: ScreenedText): Promise<JournalWriteResult> {
+    const content = entry.freeText;
     const reflection = await this.generateReflection(content);
 
     await prisma.journalEntry.create({

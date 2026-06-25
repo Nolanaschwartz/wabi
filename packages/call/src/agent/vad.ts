@@ -1,6 +1,6 @@
-// Energy VAD front-end for the turn detector. Self-contained on purpose: the
-// shared audio.util.rms() stays a plain RMS, and all the robustness logic lives
-// here so a noisy gaming room doesn't false-barge and a quiet talker isn't clipped.
+// Energy VAD front-end for the turn detector. Self-contained on purpose: all the
+// robustness logic lives here (high-passed RMS, not a bare RMS) so a noisy gaming
+// room doesn't false-barge and a quiet talker isn't clipped.
 //
 // Two pieces, both cheap enough to run per 20ms frame:
 //   1. DC / high-pass pre-filter — a one-pole DC blocker strips low-frequency

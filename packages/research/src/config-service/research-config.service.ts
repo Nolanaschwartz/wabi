@@ -1,37 +1,12 @@
 import { BadRequestException, ConflictException, Injectable, OnModuleInit } from '@nestjs/common';
 import { prisma } from '@wabi/shared';
 import { SEED_TOPICS } from '../seed-topics';
+import { Bounds } from '../types';
+import { RANGES, fromConfigRow, type ResearchBounds } from '../run-bounds';
 
-/** The eight tunable research-run bounds (columns on the ResearchConfig singleton). */
-export interface ResearchBounds {
-  maxTopicsPerRun: number;
-  maxPapersPerTopic: number;
-  maxDiscoverySteps: number;
-  maxDraftsPerTopic: number;
-  maxDraftsPerRun: number;
-  agentTimeoutMs: number;
-  runTimeoutMs: number;
-  tokenBudget: number;
-}
-
-/**
- * Inclusive valid ranges for each bound. All must be positive integers. Chosen so the schema
- * defaults (5/8/2/3/10, 90_000ms, 600_000ms, 200_000 tokens) sit comfortably inside, while a zero
- * budget or a degenerate timeout is rejected before it can silently produce nothing (issue 03).
- * - counts: 1..100 (small positives — a run searching >100 topics/papers per step is a config error)
- * - *_Ms timeouts: 1_000..3_600_000 (1s floor avoids instant cut-offs; 1h ceiling caps a runaway run)
- * - tokenBudget: 1_000..10_000_000 (1k floor guarantees a run can do real work; 10M caps spend)
- */
-const BOUND_RANGES: Record<keyof ResearchBounds, { min: number; max: number }> = {
-  maxTopicsPerRun: { min: 1, max: 100 },
-  maxPapersPerTopic: { min: 1, max: 100 },
-  maxDiscoverySteps: { min: 1, max: 100 },
-  maxDraftsPerTopic: { min: 1, max: 100 },
-  maxDraftsPerRun: { min: 1, max: 100 },
-  agentTimeoutMs: { min: 1_000, max: 3_600_000 },
-  runTimeoutMs: { min: 1_000, max: 3_600_000 },
-  tokenBudget: { min: 1_000, max: 10_000_000 },
-};
+// The Run Bounds (shape, defaults, ranges, row→Bounds mapping) have ONE owner: run-bounds.ts.
+// Re-exported here so the admin controller's existing import keeps resolving.
+export type { ResearchBounds } from '../run-bounds';
 
 /** True for the Prisma unique-constraint violation we translate into a 409. */
 function isUniqueViolation(err: unknown): boolean {
@@ -43,7 +18,8 @@ const SINGLETON_ID = 'singleton';
 /**
  * Owns the ResearchConfig singleton + ResearchTopic list (ADR-0034). Reuses the shared `prisma`
  * singleton (the codebase pattern); never constructs its own client. DB is the source of truth
- * after first boot — `loadBounds()`/`SEED_TOPICS`/`RESEARCH_MAX_*` demote to bootstrap seeds only.
+ * after first boot — `SEED_TOPICS`/`RESEARCH_MAX_*` demote to bootstrap seeds only. This service is
+ * the sole reader of `ResearchConfig`; `loadRunBounds()` is the run's typed view of the singleton.
  *
  * Isolation: this service touches ONLY ResearchConfig/ResearchTopic — never User or StrategyDraft.
  */
@@ -100,6 +76,27 @@ export class ResearchConfigService implements OnModuleInit {
   }
 
   /**
+   * The run's bounds, read from the `ResearchConfig` singleton (the source of truth after boot) and
+   * mapped into the full {@link Bounds} the core expects. This service is the **sole reader** of
+   * `ResearchConfig` (ADR-0034) — the runner calls this instead of touching Prisma directly.
+   *
+   * Always returns a fully-populated `Bounds` and **never throws**: a degraded read logs and falls
+   * back to the schema-mirroring defaults, so a run still proceeds with sane bounds (research is
+   * non-critical). Env (`RESEARCH_SEARCH_LIMIT`) is resolved lazily per call — never frozen at import.
+   */
+  async loadRunBounds(): Promise<Bounds> {
+    let row: Partial<Record<keyof Bounds, unknown>> | null = null;
+    try {
+      row = (await prisma.researchConfig.findUnique({
+        where: { id: SINGLETON_ID },
+      })) as Partial<Record<keyof Bounds, unknown>> | null;
+    } catch (err) {
+      console.error('[research] reading run bounds failed; using defaults', err);
+    }
+    return fromConfigRow(row, process.env);
+  }
+
+  /**
    * Adds a topic. The model's `text @unique` is the integrity boundary; we catch the resulting
    * P2002 and translate to a ConflictException so the admin surface returns 409 (mirrors the bot's
    * strategy-admin dedupe) instead of leaking a raw Prisma error.
@@ -132,7 +129,7 @@ export class ResearchConfigService implements OnModuleInit {
 
   /**
    * Tunes the eight run bounds on the singleton. Server-side range validation is the gate: every
-   * field must be a positive integer inside its BOUND_RANGES band, so an operator can never silently
+   * field must be a positive integer inside its RANGES band, so an operator can never silently
    * save a zero budget (or a degenerate timeout/count) that produces nothing (issue 03, ADR-0034).
    * Validates ALL fields and reports every offender; rejects with BadRequestException before any write.
    */
@@ -140,8 +137,8 @@ export class ResearchConfigService implements OnModuleInit {
     const offenders: string[] = [];
     const data: Partial<ResearchBounds> = {};
 
-    for (const key of Object.keys(BOUND_RANGES) as (keyof ResearchBounds)[]) {
-      const { min, max } = BOUND_RANGES[key];
+    for (const key of Object.keys(RANGES) as (keyof ResearchBounds)[]) {
+      const { min, max } = RANGES[key];
       const value = bounds[key];
       if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
         offenders.push(`${key} must be an integer in [${min}, ${max}] (got ${String(value)})`);

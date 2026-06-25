@@ -25,7 +25,7 @@ describe('Job registry completeness', () => {
   beforeAll(() => {
     new SessionSweeper(stub, stub, stub, registry).onModuleInit();
     new TiltService(stub, registry).init();
-    new StrategyAdminService(stub, stub, stub, registry).init();
+    new StrategyAdminService(stub, stub, stub, registry, stub).init();
     new CrisisAftermathService(stub, stub, stub, stub, stub, registry).init();
     new CheckInService(stub, stub, stub, registry).init();
   });

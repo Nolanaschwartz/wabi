@@ -1,5 +1,4 @@
 import { resampleToMono, monoToStereo } from '../agent/audio.util';
-import { PlayoutDrain } from './playout-drain';
 
 // Discord voice is always 48kHz stereo s16le.
 const RATE = 48000;
@@ -37,7 +36,13 @@ export interface PlayoutPort {
 // injected port — no Discord I/O — so the interface is the test surface (modeled on SpeakerMixer).
 export class VoicePlayout {
   private outBuf = Buffer.alloc(0); // assistant PCM awaiting playout
-  private readonly drain = new PlayoutDrain();
+  // Drain signal for barge-in during the playout tail (slice 6): TTS runs faster than realtime, so the
+  // agent finishes RECEIVING a reply while we keep PLAYING its tail out of outBuf. The detector must stay
+  // suppressed for that whole tail, gating un-suppress on whenDrained(). FAIL-OPEN is the point — a missed
+  // signal that leaves the detector deaf is worse than re-opening early — so whenDrained() always resolves:
+  // on real drain, and immediately once torn down. The agent layers a safety timeout on top.
+  private waiters: Array<() => void> = []; // gates awaiting drain
+  private closed = false; // true once torn down: every future whenDrained() resolves at once
 
   // The agent writes 24kHz mono reply chunks here; resample to Discord's 48kHz stereo and append. pump()
   // re-slices outBuf into exact 20ms frames, so chunks need no framing of their own.
@@ -51,22 +56,34 @@ export class VoicePlayout {
   }
 
   // Barge/teardown: drop queued audio. Playout is drained by definition once the queue is empty, so
-  // release the drain gate (a cut reply must never strand the detector suppressed).
+  // release the drain gate (a cut reply must never strand the detector suppressed). Future whenDrained()
+  // calls (a fresh reply's gate) start waiting again.
   clear(): void {
     this.outBuf = Buffer.alloc(0);
-    this.drain.clear();
+    this.flushWaiters();
   }
 
   // Resolves once the tail has actually played out (outBuf empty + no real frames left in the player),
-  // and on clear()/close() so the agent's drain gate is never left hanging.
+  // and on clear()/close() so the agent's drain gate is never left hanging. If already torn down, resolves
+  // immediately. Never rejects — fail-open.
   whenDrained(): Promise<void> {
-    return this.drain.whenDrained();
+    if (this.closed) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+    });
   }
 
-  // Session teardown: the pacer is about to stop; resolve any pending/future drain gate so the detector
-  // isn't stranded suppressed (deaf) after teardown — fail-open.
+  // Session teardown: the pacer is about to stop; from here every whenDrained() resolves immediately so a
+  // gate armed during shutdown can never strand the detector suppressed (deaf) — fail-open.
   close(): void {
-    this.drain.close();
+    this.closed = true;
+    this.flushWaiters();
+  }
+
+  private flushWaiters(): void {
+    const w = this.waiters;
+    this.waiters = [];
+    for (const resolve of w) resolve();
   }
 
   // Bytes of assistant PCM still queued (test/diagnostic surface; not a frame count).
@@ -86,6 +103,10 @@ export class VoicePlayout {
     while (out.readableLength < FLOOR) {
       out.push(SILENCE);
     }
-    this.drain.update(this.outBuf.length >= FRAME_BYTES || out.readableLength > FLOOR);
+    // Real assistant audio is still pending iff outBuf holds at least one more real frame, OR the player
+    // still has real frames queued above the silence floor. Once both are false, only the silence floor
+    // remains — the tail has played out, so release any waiting drain gate.
+    const pendingReal = this.outBuf.length >= FRAME_BYTES || out.readableLength > FLOOR;
+    if (!pendingReal) this.flushWaiters();
   }
 }

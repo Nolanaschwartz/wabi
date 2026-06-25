@@ -1,14 +1,9 @@
 import { redirect } from 'next/navigation';
 import { validateRequest } from '@/lib/session';
 import { prisma, decideAccess } from '@wabi/shared';
-import { buildMoodSeries, buildMonthGrid, localDateString } from '@/lib/mood-series';
+import { localDateString } from '@/lib/mood-series';
+import { dashboardMood, type MoodReader } from '@/lib/mood-read';
 import DashboardView from './dashboard-view';
-
-// The chart shows the last 30 *local* days; we fetch 31 so timezone bucketing at
-// the window edge can never drop a valid day.
-const CHART_WINDOW_DAYS = 30;
-const FETCH_WINDOW_DAYS = CHART_WINDOW_DAYS + 1;
-const DAY_MS = 86_400_000;
 
 export default async function DashboardPage() {
   const { user } = await validateRequest();
@@ -18,20 +13,21 @@ export default async function DashboardPage() {
   }
 
   const now = new Date();
-  const windowStart = new Date(now.getTime() - FETCH_WINDOW_DAYS * DAY_MS);
+  const timezone = user.timezone ?? 'UTC';
+  const acct = { discordId: user.discordId, timezone };
 
-  // The User row was already loaded by validateRequest() above — billing + timezone come off `user`
-  // (surfaced via lucia getUserAttributes), so this no longer re-fetches the same row.
-  const [moods, moodWindow, playtimes, streak] = await Promise.all([
+  // The calendar's default month is today's local month.
+  const today = localDateString(now, timezone);
+  const [calendarYear, calendarMonth] = today.split('-').map(Number);
+
+  // Reads only — always available regardless of access tier (ADR-0011). The mood series +
+  // current-month grid come from ONE windowed fetch via the mood-read module (padded window,
+  // timezone, and Mood key decided there); the recent-list, playtime, and xp reads stay local.
+  const [moods, playtimes, streak, mood] = await Promise.all([
     prisma.mood.findMany({
       where: { userId: user.discordId },
       orderBy: { createdAt: 'desc' },
       take: 30,
-    }),
-    prisma.mood.findMany({
-      where: { userId: user.discordId, createdAt: { gte: windowStart } },
-      orderBy: { createdAt: 'asc' },
-      select: { rating: true, createdAt: true },
     }),
     prisma.playtimeLog.findMany({
       where: { userId: user.discordId },
@@ -41,18 +37,9 @@ export default async function DashboardPage() {
     prisma.xpEntry.count({
       where: { userId: user.discordId },
     }),
+    dashboardMood(prisma as unknown as MoodReader, acct, now),
   ]);
-
-  const timezone = user.timezone ?? 'UTC';
-
-  // Daily-average mood over the last 30 local days, bucketed in the user's timezone.
-  const moodSeries = buildMoodSeries(moodWindow, timezone, CHART_WINDOW_DAYS, now);
-
-  // Seed the calendar's current month from the same 31-day window (it fully covers
-  // this month up to today), so the default view paints with no extra query.
-  const today = localDateString(now, timezone);
-  const [calendarYear, calendarMonth] = today.split('-').map(Number);
-  const moodGrid = buildMonthGrid(moodWindow, timezone, calendarYear, calendarMonth);
+  const { series: moodSeries, monthGrid: moodGrid } = mood;
 
   // Derive billing display from the SAME shared decision the bot gates on (decideAccess), so the
   // dashboard and the coaching gate can never disagree — e.g. a lapsed trial reads "Not subscribed"

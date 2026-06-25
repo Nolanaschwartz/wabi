@@ -61,12 +61,19 @@ export class MoodController {
       freeText: { value: note, derivePrefix: 'Mood note' },
       // The 7-day trend is awaited here (inside the safe-path closure) and threaded through T, so the
       // synchronous confirm can render it without an await of its own.
-      persist: async () => {
-        await this.moodService.create(interaction.user.id, {
-          rating: clamped,
-          emoji,
-          note,
-        });
+      persist: async (screened) => {
+        // A note present ⇒ the proof is the minable arm: persist it through the proof-typed writer so
+        // the screened note structurally cannot be persisted unscreened. A rating-only log carries no
+        // free text, so it takes the structured-only writer (ADR-0031).
+        if (screened.freeText !== null) {
+          await this.moodService.createNote(
+            interaction.user.id,
+            { rating: clamped, emoji },
+            screened,
+          );
+        } else {
+          await this.moodService.create(interaction.user.id, { rating: clamped, emoji });
+        }
         return { trend: await this.moodService.trend(interaction.user.id) };
       },
       confirm: ({ trend }) => {

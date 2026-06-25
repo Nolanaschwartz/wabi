@@ -39,7 +39,7 @@ own README.
 | [`@wabi/web`](packages/web) | Next.js 15 App Router. Landing, Discord OAuth + consent + trial + `User` creation, Stripe checkout, dashboard, `/admin/strategies` review. |
 | [`@wabi/shared`](packages/shared) | Plain TypeScript: Prisma client + generated types, constants, swappable-provider + access resolvers. Imported by the others. |
 | [`@wabi/research`](packages/research) | Always-on NestJS service (:3002, ADR-0034). Mines PubMed/Europe PMC/PsyArXiv for evidence-based techniques and submits `StrategyDraft`s to the bot for human review. |
-| [`@wabi/call`](packages/call) | NestJS voice-call agent (:3003). Bridges a Discord voice channel to a LiveKit room and runs a turn-detection → STT → LLM → TTS loop with Mem0 recall. |
+| [`@wabi/call`](packages/call) | NestJS voice-call agent (:3003). Bridges a Discord voice channel straight to the agent (no LiveKit) and runs a turn-detection → STT → LLM → TTS loop with Mem0 recall. |
 
 ## Quick start
 

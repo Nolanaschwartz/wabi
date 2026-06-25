@@ -97,6 +97,42 @@ describe('AccessResolver', () => {
     });
   });
 
+  describe('resolveAccount (one read → access + consent + timezone)', () => {
+    it('derives all three facts from a SINGLE findByDiscordId', async () => {
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
+        discordId: '123',
+        consentAcceptedAt: new Date('2026-01-01T00:00:00Z'),
+        timezone: 'America/New_York',
+        trialEndsAt: new Date(Date.now() + 86400000),
+        subscriptionStatus: 'trialing',
+      });
+
+      const result = await resolver.resolveAccount('123');
+
+      expect(userService.findByDiscordId).toHaveBeenCalledTimes(1); // not a second projected consent read
+      expect(result.consented).toBe(true);
+      expect(result.timezone).toBe('America/New_York');
+      expect(result.access.hasActiveAccess).toBe(true);
+    });
+
+    it('is fail-safe — an unknown user is not consented, UTC, no access', async () => {
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue(null);
+      const result = await resolver.resolveAccount('999');
+      expect(result).toEqual({
+        access: { hasActiveAccess: false, subscriptionStatus: 'canceled' },
+        consented: false,
+        timezone: 'UTC',
+      });
+    });
+
+    it('never throws on a read failure — degrades to not-consented', async () => {
+      (userService.findByDiscordId as jest.Mock).mockRejectedValue(new Error('db down'));
+      const result = await resolver.resolveAccount('123');
+      expect(result.consented).toBe(false);
+      expect(result.access.hasActiveAccess).toBe(false);
+    });
+  });
+
   it('records lastStripeEventAt when an event timestamp is supplied', async () => {
     (prisma.user.update as jest.Mock).mockResolvedValue({});
     const eventAt = new Date('2026-06-06T00:00:00Z');

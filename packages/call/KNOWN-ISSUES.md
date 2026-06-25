@@ -13,13 +13,14 @@ The single-human gate (ADR-0002/0017: inner-state data must never reach a
 shared/social surface) is enforced only as a **snapshot at `/call` time**.
 The temporal and consent dimensions are missing:
 
-1. **[HIGH] Late joiner hears the first user's memory** — `src/discord/call.commands.ts`
-   The gate runs once. User calls alone → their facts are baked into the
-   system prompt → a second human joins the channel → the assistant can speak
-   those facts onto a now-shared surface. There is no `VoiceStateUpdate`
-   handler to re-gate, strip memory, or hang up on join.
-   *Fix:* on a 2nd human joining, drop the memory from the live session (or
-   end the call). Re-evaluate the gate for the call's duration, not just start.
+1. **[RESOLVED] Late joiner hears the first user's memory** — `src/discord/call.commands.ts`
+   Closed by the late-joiner privacy circuit-breaker (issue 11, ADR-0043). A
+   `voiceStateUpdate` handler watches for a human moving INTO the bridged channel
+   (`isLateJoiner`, decided off the member's channel transition carried by the event —
+   not a member-cache recount that can lag the join) and, when a call that loaded
+   memory gains a second human, ends the call via `bridge.stop` rather than mutating
+   the live prompt. Memory-less calls are left running. The recall gate stays a
+   start-time snapshot + this teardown guard.
 
 2. **[HIGH] Recall ignores consent / access tier (ADR-0011)** — `src/agent/voice-memory.service.ts`
    `resolveUserId` checks only that a `User` row exists by `discordId` — not
@@ -38,49 +39,41 @@ The temporal and consent dimensions are missing:
    *Fix:* refresh the session's system prompt on re-`start()`, or tear down
    and rebuild the agent session like the bridge does.
 
-4. **[MED] Recall dumps the entire Mem0 corpus** — `src/agent/mem0.ts`
-   `recall()` mirrors the bot's `getAllForUser` (`GET /memories`), the endpoint
-   the bot reserves for **data-rights export/delete**. Coaching recall uses
-   `POST /search` with a candidate limit. So every call seeds the prompt with
-   all derived facts ever (stale/sensitive included) — larger disclosure blast
-   radius + prompt bloat, no limit or timeout.
-   *Fix:* switch to `POST /search` with a query and a candidate limit, as
-   `MemoryStoreService.search` does.
+4. **[MED] Recall reads the whole corpus (GET /memories)** — `@wabi/shared` `recall` (imported directly by the voice surface)
+   `recall()` reads `GET /memories` (newest-first, capped at `RECALL_LIMIT`), the
+   same endpoint the bot reserves for **data-rights export/delete**; coaching recall
+   uses `POST /search` with a query + candidate limit. So a call seeds the prompt
+   from all derived facts (stale/sensitive included) rather than ones relevant to
+   the conversation — a wider disclosure surface than a query-scoped search.
+   *Fix:* switch the voice path to `POST /search`, as `MemoryStoreService.search` does.
 
 ## Inherited wabi-call code, landed as-is (real, pre-existing)
 
-5. **[MED] `LivekitService` caches env in field initializers** — `src/livekit/livekit.service.ts:6`
-   Reads `LIVEKIT_API_KEY/SECRET/URL` and builds the client at field-init —
-   the exact lazy-config anti-pattern this repo forbids (see the comment in
-   `src/app.module.ts`). If `LIVEKIT_*` isn't populated when Nest builds the
-   singleton, `req()` throws in the initializer and the **whole app fails to
-   boot** instead of degrading to "only `/call` fails."
-   *Fix:* resolve env lazily inside `createToken()`, not in fields.
+5. **[RESOLVED] `LivekitService` caches env in field initializers** — the
+   `src/livekit/` module was removed; the bridge wires Discord audio straight to
+   the agent with no LiveKit room, so no eager `LIVEKIT_*` field read remains.
 
 6. **[MED] Pipeline cached from the first call's env** — `src/agent/voice-agent.service.ts:60`
    `this.pipeline ??= createOpenAiPipeline(cfg)` freezes the first `/call`'s
    STT/LLM/TTS config for the process lifetime; later env changes are ignored.
 
-7. **[MED] `parseWav` unbounded read** — `src/agent/audio.util.ts:56`
-   Trusts the WAV header's `data` chunk size; a truncated/streamed TTS WAV
-   reads past the buffer → `RangeError` → caught → the agent silently goes
-   mute with only a "pipeline failed" log.
-   *Fix:* bound the read to the actual buffer length.
+7. **[RESOLVED] `parseWav` unbounded read** — TTS now streams raw PCM over the
+   single WebSocket session (`synthesizeSession`), so the agent no longer parses
+   TTS WAVs at all. `parseWav` was deleted with the dual-reply-path collapse
+   (issue 09). No remaining caller.
 
-8. **[MED] Bridge forwards all LiveKit participants unmixed** — `src/discord/bridge.service.ts:158`
-   No allowlist restricting forwarding to the `assistant` identity; any
-   participant joining `discord-<guildId>` is forwarded into the Discord
-   channel, and two remote tracks garble playback.
+8. **[RESOLVED] Bridge forwards all LiveKit participants unmixed** — moot with the
+   `src/livekit/` removal: there is no LiveKit room or remote participants; the
+   bridge connects a single agent session to the Discord channel.
 
-9. **[LOW] `openai-speech` reimplements `generate()`** — `src/agent/openai-speech.ts:30`
-   Bespoke chat-completions call returns `''` on empty output with no retry or
-   log. `@wabi/shared`'s `generate()` already handles the reasoning-model
-   blank-output failure mode (see `reasoning-model-output-caps`).
+9. **[RESOLVED] `openai-speech` reimplements `generate()`** — the per-request
+   `synthesizeStream` path (`/v1/audio/speech`) was deleted with the dual-reply
+   collapse (issue 09); the synth seam is now a single streaming session. The
+   `respondStream` LLM call remains a deliberate streaming adapter (it needs SSE
+   deltas the shared `generate()` doesn't expose); empty replies fail open in the
+   turn loop.
 
-10. **[LOW] Dead `RoomServiceClient`** — `src/livekit/livekit.service.ts:9`
-    `rooms` field constructed at init, never referenced (only `createToken` is
-    used, and it builds its own `AccessToken`). Delete it — also removes part
-    of #5's eager env reads.
+10. **[RESOLVED] Dead `RoomServiceClient`** — gone with the `src/livekit/` module removal.
 
 ---
 

@@ -1,29 +1,16 @@
 import { POST as acceptPost } from '../accept/route';
 import { POST as declinePost } from '../decline/route';
-import {
-  createPendingConsentToken,
-  PENDING_CONSENT_COOKIE,
-} from '@/lib/pending-consent';
+import { PENDING_CONSENT_COOKIE } from '@/lib/pending-consent';
 
-jest.mock('@/lib/auth', () => ({
-  lucia: {
-    createSession: jest.fn(async () => ({ id: 'sess1' })),
-    createSessionCookie: jest.fn(() => ({ name: 'session', value: 'sval', attributes: { path: '/' } })),
-  },
-}));
+// Thin adapters: accept delegates the (sole) User-creating write to the onboarding
+// module; decline is a pure cookie drop. The provisioning invariants (no write before a
+// valid token, idempotency, trial window) are tested at onboarding.test.ts.
+jest.mock('@wabi/shared', () => ({ prisma: {} }));
+jest.mock('@/lib/onboarding', () => ({ provisionConsentedUser: jest.fn() }));
+jest.mock('@/lib/session', () => ({ establishSession: jest.fn() }));
 
-// Keep the real shared trialGrant (the Trial window/status) while mocking only prisma's I/O.
-jest.mock('@wabi/shared', () => ({
-  ...jest.requireActual('@wabi/shared'),
-  prisma: {
-    user: {
-      upsert: jest.fn(),
-    },
-  },
-}));
-
-const { lucia } = require('@/lib/auth');
-const { prisma } = require('@wabi/shared');
+const { provisionConsentedUser } = require('@/lib/onboarding');
+const { establishSession } = require('@/lib/session');
 
 function reqWith(cookieValue?: string): any {
   return {
@@ -34,53 +21,30 @@ function reqWith(cookieValue?: string): any {
   };
 }
 
-describe('Consent routes (deferred user creation — issue #29)', () => {
+describe('Consent routes (thin adapters)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
-    process.env.TRIAL_DAYS = '7';
-    process.env.LUCIA_SECRET = 'test-secret-for-signing';
   });
 
   describe('accept', () => {
-    it('returns 401 and persists nothing without a pending-consent cookie', async () => {
+    it('returns 401 and establishes no session when provisioning rejects the token', async () => {
+      provisionConsentedUser.mockResolvedValue(null);
+
       const res = await acceptPost(reqWith(undefined));
+
       expect(res.status).toBe(401);
-      expect(prisma.user.upsert).not.toHaveBeenCalled();
-      expect(lucia.createSession).not.toHaveBeenCalled();
+      expect(establishSession).not.toHaveBeenCalled();
     });
 
-    it('returns 401 and persists nothing for a tampered token', async () => {
-      const res = await acceptPost(reqWith('forged-payload.forged-signature'));
-      expect(res.status).toBe(401);
-      expect(prisma.user.upsert).not.toHaveBeenCalled();
-    });
+    it('establishes a session and consumes the pending cookie on success', async () => {
+      provisionConsentedUser.mockResolvedValue({ userId: 'u1' });
 
-    it('creates the User + Trial and a session only on valid affirmative consent', async () => {
-      prisma.user.upsert.mockResolvedValue({ id: 'u1' });
-      const token = createPendingConsentToken('discord-123', 'gamer@example.com', Date.now());
-
-      const res = await acceptPost(reqWith(token));
+      const res = await acceptPost(reqWith('valid-token'));
 
       expect(res.status).toBe(200);
-      expect(prisma.user.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { discordId: 'discord-123' },
-          create: expect.objectContaining({
-            discordId: 'discord-123',
-            email: 'gamer@example.com',
-            consentAcceptedAt: expect.any(Date),
-            trialEndsAt: expect.any(Date),
-            subscriptionStatus: 'trialing',
-          }),
-        }),
-      );
-      expect(lucia.createSession).toHaveBeenCalledWith('u1', {});
-
-      const setCookie = res.headers.get('set-cookie') ?? '';
-      expect(setCookie).toContain('session=');
-      // The pending cookie is consumed (cleared) once the real session exists.
-      expect(setCookie).toContain(`${PENDING_CONSENT_COOKIE}=;`);
+      expect(establishSession).toHaveBeenCalledWith('u1', expect.anything());
+      expect(res.headers.get('set-cookie') ?? '').toContain(`${PENDING_CONSENT_COOKIE}=;`);
     });
   });
 
@@ -89,9 +53,8 @@ describe('Consent routes (deferred user creation — issue #29)', () => {
       const res = await declinePost();
 
       expect(res.status).toBe(200);
-      expect(prisma.user.upsert).not.toHaveBeenCalled();
-      const setCookie = res.headers.get('set-cookie') ?? '';
-      expect(setCookie).toContain(`${PENDING_CONSENT_COOKIE}=;`);
+      expect(provisionConsentedUser).not.toHaveBeenCalled();
+      expect(res.headers.get('set-cookie') ?? '').toContain(`${PENDING_CONSENT_COOKIE}=;`);
     });
   });
 });

@@ -128,7 +128,12 @@ describe('Journal DM two-turn capture integration', () => {
     );
     const strategyRetrieval = { search: jest.fn().mockResolvedValue([]) } as any;
     const burstCoalescer = new BurstCoalescer();
-    const accessResolver = { resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }) } as any;
+    const accessResolver = {
+      resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }),
+      resolveAccount: jest
+        .fn()
+        .mockResolvedValue({ access: { hasActiveAccess: true }, consented: true, timezone: 'UTC' }),
+    } as any;
     const crisisAftermath = { isQuarantined: jest.fn().mockResolvedValue(false), onEscalation: jest.fn() } as any;
     const escalation = { escalate: jest.fn().mockResolvedValue('You matter. Here are some resources.') } as any;
     const tilt = {
@@ -136,10 +141,6 @@ describe('Journal DM two-turn capture integration', () => {
       maybeOffer: jest.fn().mockReturnValue(null),
       hasActiveSession: jest.fn().mockResolvedValue(false),
     } as any;
-    const userService = {
-      findByDiscordId: jest.fn(async (id: string) => ({ discordId: id, consentAcceptedAt: new Date(), timezone: 'UTC' })),
-    } as any;
-
     coaching = new CoachingService(
       classifier,
       sessionBuffer,
@@ -151,7 +152,6 @@ describe('Journal DM two-turn capture integration', () => {
       crisisAftermath,
       escalation,
       tilt,
-      userService,
       dmRouter,
       new ClassifierContextAssembler(tilt),
       screening,

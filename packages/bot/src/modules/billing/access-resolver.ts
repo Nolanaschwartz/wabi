@@ -15,6 +15,24 @@ export class AccessResolver {
   }
 
   /**
+   * The DM entry point's one read: the full User row already carries consent + timezone, so the coaching
+   * turn derives the consent gate, the coach-prompt timezone, AND the Active Access decision from a SINGLE
+   * findByDiscordId instead of a separate projected consent read plus this one. Fail-safe like the prior
+   * consent read: a failed/absent row resolves to not-consented, UTC, and no access — never throws — so a
+   * degraded DB shows the setup link rather than crashing the turn (ADR-0011/0021).
+   */
+  async resolveAccount(
+    discordId: string,
+  ): Promise<{ access: AccessState; consented: boolean; timezone: string }> {
+    const user = await this.userService.findByDiscordId(discordId).catch(() => null);
+    return {
+      access: decideAccess(user, new Date()),
+      consented: !!user?.consentAcceptedAt,
+      timezone: user?.timezone ?? 'UTC',
+    };
+  }
+
+  /**
    * Persist the resolved state. When `eventAt` is supplied (from a Stripe webhook), it is
    * recorded as the latest applied event time so the out-of-order guard (#27) can drop any
    * subsequently-delivered, older event.

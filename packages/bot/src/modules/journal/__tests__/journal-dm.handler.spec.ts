@@ -49,9 +49,11 @@ describe('JournalDmHandler', () => {
       screenForRecord: jest.fn(),
     };
     recorder = {
-      record: jest.fn(async (_id, _screened, write: any) => ({
+      record: jest.fn(async (_id, screened, write: any) => ({
         kind: 'logged',
-        value: await write.persist(),
+        // The real recorder hands the writer the Screened proof; mirror that so the persist closure can
+        // narrow it to ScreenedText and pass it to JournalService.write (ADR-0031).
+        value: await write.persist(screened),
         confirmation: write.confirm({ reflection: 'That sounds heavy — glad you wrote it down.', xpAwarded: 10 }),
         consentPrompt: CONSENT_PROMPT,
       })),
@@ -73,7 +75,7 @@ describe('JournalDmHandler', () => {
 
     expect(journalService.write).toHaveBeenCalledWith(
       '123',
-      'had a rough ranked night, feel worthless at the game',
+      expect.objectContaining({ freeText: 'had a rough ranked night, feel worthless at the game' }),
     );
   });
 
@@ -187,7 +189,10 @@ describe('JournalDmHandler', () => {
 
       const result = await handler.invoke('save_entry', c);
 
-      expect(journalService.write).toHaveBeenCalledWith('123', 'had a rough ranked night');
+      expect(journalService.write).toHaveBeenCalledWith(
+        '123',
+        expect.objectContaining({ freeText: 'had a rough ranked night' }),
+      );
       expect(result).toEqual({ kind: 'handled' });
     });
 
@@ -222,7 +227,10 @@ describe('JournalDmHandler', () => {
       const result = await handler.resume(c);
 
       expect(spokeSession.consume).toHaveBeenCalledWith('123');
-      expect(journalService.write).toHaveBeenCalledWith('123', 'today i felt ok for once');
+      expect(journalService.write).toHaveBeenCalledWith(
+        '123',
+        expect.objectContaining({ freeText: 'today i felt ok for once' }),
+      );
       expect(result).toEqual({ kind: 'handled' });
     });
 

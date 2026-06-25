@@ -54,7 +54,9 @@ describe('TiltController', () => {
       await controller.start([mockInteraction()], { trigger: 'lost ranked again', severity: 99 });
 
       const write = logger.log.mock.calls[0][0];
-      const technique = await write.persist();
+      // persist now receives the Screened proof; tilt's writer ignores it (its trigger is a bounded
+      // stored value, not the minable arm — see ADR-0031 scope), so any proof shape is fine here.
+      const technique = await write.persist({ freeText: 'lost ranked again', derivePrefix: 'Tilt trigger' } as any);
 
       expect(tiltService.acceptOffer).toHaveBeenCalledWith('user_1', {
         trigger: 'lost ranked again',
@@ -82,7 +84,7 @@ describe('TiltController', () => {
       // logger treats it as structured-only — no screen, no derive, no prompt.
       expect(write.freeText).toEqual({ value: undefined, derivePrefix: 'Tilt trigger' });
 
-      await write.persist();
+      await write.persist({ freeText: null, derivePrefix: null } as any);
       expect(tiltService.acceptOffer).toHaveBeenCalledWith('user_1', {
         trigger: 'unknown',
         severity: 8,

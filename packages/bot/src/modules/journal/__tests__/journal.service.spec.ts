@@ -24,6 +24,10 @@ jest.mock('../../habit-engagement/habit-engagement.service', () => ({
   })),
 }));
 
+// `write` now takes a ScreenedText proof, not a bare string (ADR-0031). Forge one for the spec — the
+// brand is erased at runtime and the mint is covered in crisis-screening.spec.
+const entry = (s: string) => ({ freeText: s, derivePrefix: 'Journal' }) as any;
+
 // JournalService is now a plain persist service: crisis screening of the entry and consent-gated
 // derivation moved to InnerStateLogger (ADR-0028/0029). `write` returns the reflection + XP directly
 // (no ScreenedRecord), so the controller reads the value without a cast.
@@ -48,7 +52,7 @@ describe('JournalService', () => {
     (coach.generate as jest.Mock).mockResolvedValue('Thanks for sharing that.');
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
-    const result = await service.write('123', 'I had a good day today');
+    const result = await service.write('123', entry('I had a good day today'));
 
     expect(result.reflection).toBe('Thanks for sharing that.');
     expect(coach.generate).toHaveBeenCalled();
@@ -59,7 +63,7 @@ describe('JournalService', () => {
     (coach.generate as jest.Mock).mockResolvedValue('Nice.');
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
-    const result = await service.write('123', 'I had a good day today');
+    const result = await service.write('123', entry('I had a good day today'));
 
     expect(habitEngagement.record).toHaveBeenCalledWith('123', 'journal');
     expect(result.xpAwarded).toBe(10);
@@ -90,7 +94,7 @@ describe('JournalService', () => {
     (coach.generate as jest.Mock).mockRejectedValue(new Error('API down'));
     (prisma.journalEntry.create as jest.Mock).mockResolvedValue({});
 
-    const result = await service.write('123', 'I had a good day today');
+    const result = await service.write('123', entry('I had a good day today'));
 
     expect(result.reflection).toBeTruthy();
     expect(prisma.journalEntry.create).toHaveBeenCalled();

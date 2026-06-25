@@ -3,7 +3,6 @@ import { prisma } from '@wabi/shared';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { ResearchConfigService } from '../config-service/research-config.service';
 import { ResearchRunnerService } from './research-runner.service';
-import { Bounds } from '../types';
 
 /** The pg-boss queue the worker schedules (slice 04) AND consumes (this slice). */
 export const RESEARCH_RUN_QUEUE = 'research-run';
@@ -22,35 +21,6 @@ interface RunJobPayload {
 /** Default and ceiling for the recent-runs list size. */
 const DEFAULT_RUNS_LIMIT = 20;
 const MAX_RUNS_LIMIT = 100;
-
-/** The ResearchConfig singleton row id (matches ResearchConfigService). */
-const CONFIG_SINGLETON_ID = 'singleton';
-
-/**
- * Fallback staleness threshold (the schema default for `ResearchConfig.runTimeoutMs`). Used when the
- * config row can't be read — the guard must never throw, so it degrades to this sane default.
- */
-const DEFAULT_RUN_TIMEOUT_MS = 1_200_000;
-
-/**
- * Schema-default bounds (mirrors `ResearchConfig`'s `@default`s). Used when the config singleton
- * can't be read — the run must still proceed with sane bounds rather than crash, since the row read
- * is the worker's source of truth but the run is non-critical and degrades, never throws.
- */
-const DEFAULT_BOUNDS: Bounds = {
-  maxTopicsPerRun: 5,
-  maxPapersPerTopic: 24,
-  searchLimit: 40,
-  maxDiscoverySteps: 2,
-  maxDraftsPerTopic: 3,
-  maxDraftsPerRun: 10,
-  agentTimeoutMs: 240_000,
-  runTimeoutMs: 1_200_000,
-  tokenBudget: 200_000,
-};
-
-/** The eight bounds columns on the ResearchConfig singleton. */
-type ConfigBounds = Partial<Record<keyof Bounds, number>>;
 
 /**
  * Owns the `research-run` queue's consumer and the ResearchRun lifecycle (issue 05, ADR-0034).
@@ -128,9 +98,9 @@ export class ResearchRunService implements OnModuleInit {
     }
 
     try {
-      // The DB is the source of truth: enabled topics + the eight bounds drive the run (NOT env,
-      // NOT SEED_TOPICS, NOT loadBounds()).
-      const [topics, bounds] = await Promise.all([this.loadTopics(), this.loadBounds()]);
+      // The DB is the source of truth: enabled topics + the run bounds drive the run (NOT env,
+      // NOT SEED_TOPICS). ResearchConfigService owns the ResearchConfig read (ADR-0034 seam).
+      const [topics, bounds] = await Promise.all([this.loadTopics(), this.config.loadRunBounds()]);
 
       const result = await this.runner.execute({ topics, bounds });
 
@@ -169,44 +139,6 @@ export class ResearchRunService implements OnModuleInit {
   private async loadTopics(): Promise<string[]> {
     const rows = (await this.config.getEnabledTopics()) as Array<{ text?: string }>;
     return rows.map((r) => r.text).filter((t): t is string => typeof t === 'string' && t.length > 0);
-  }
-
-  /**
-   * The eight run bounds from the ResearchConfig singleton, mapped into the {@link Bounds} shape the
-   * core expects. Falls back to the schema defaults when the singleton can't be read — the run must
-   * degrade, never throw.
-   */
-  private async loadBounds(): Promise<Bounds> {
-    let config: ConfigBounds | null = null;
-    try {
-      config = (await prisma.researchConfig.findUnique({
-        where: { id: CONFIG_SINGLETON_ID },
-      })) as ConfigBounds | null;
-    } catch (err) {
-      console.error('[research] reading bounds failed; using schema defaults', err);
-    }
-    if (!config) return DEFAULT_BOUNDS;
-
-    const pick = (key: keyof Bounds): number => {
-      const value = config?.[key];
-      return typeof value === 'number' && Number.isFinite(value) && value > 0
-        ? value
-        : DEFAULT_BOUNDS[key];
-    };
-    // searchLimit is a search-breadth constant, not a DB-governed run bound (ADR-0034 governs the eight
-    // columns) — source it from env, falling back to the default.
-    const envSearchLimit = Number(process.env.RESEARCH_SEARCH_LIMIT);
-    return {
-      maxTopicsPerRun: pick('maxTopicsPerRun'),
-      maxPapersPerTopic: pick('maxPapersPerTopic'),
-      searchLimit: Number.isFinite(envSearchLimit) && envSearchLimit > 0 ? envSearchLimit : DEFAULT_BOUNDS.searchLimit,
-      maxDiscoverySteps: pick('maxDiscoverySteps'),
-      maxDraftsPerTopic: pick('maxDraftsPerTopic'),
-      maxDraftsPerRun: pick('maxDraftsPerRun'),
-      agentTimeoutMs: pick('agentTimeoutMs'),
-      runTimeoutMs: pick('runTimeoutMs'),
-      tokenBudget: pick('tokenBudget'),
-    };
   }
 
   /**
@@ -275,8 +207,8 @@ export class ResearchRunService implements OnModuleInit {
    * leave a permanent `running` row that wedges single-flight. So a `running` row whose `startedAt`
    * predates `now - runTimeoutMs` is treated as stale/abandoned and does NOT count as active — it is
    * reaped (best-effort finalized to `failed`) and a new run is allowed to proceed. The staleness
-   * threshold is read lazily from the ResearchConfig singleton per call (never cached); if that read
-   * fails we fall back to the schema default so the guard never throws.
+   * threshold comes from {@link ResearchConfigService.loadRunBounds} (the same DB-sourced
+   * `runTimeoutMs` the run obeys), which never throws — it degrades to the default so the guard can't.
    */
   private async findActiveRun(): Promise<unknown | null> {
     const active = await prisma.researchRun.findFirst({ where: { status: 'running' } });
@@ -286,7 +218,7 @@ export class ResearchRunService implements OnModuleInit {
     const startedMs = startedAt ? new Date(startedAt).getTime() : NaN;
     if (Number.isNaN(startedMs)) return active; // no usable timestamp → treat as active (safe).
 
-    const timeoutMs = await this.resolveRunTimeoutMs();
+    const { runTimeoutMs: timeoutMs } = await this.config.loadRunBounds();
     const isStale = startedMs < Date.now() - timeoutMs;
     if (!isStale) return active;
 
@@ -298,24 +230,6 @@ export class ResearchRunService implements OnModuleInit {
       })
       .catch((err) => console.error('[research] failed to reap stale running row', err));
     return null;
-  }
-
-  /**
-   * Read the staleness threshold (`runTimeoutMs`) from the ResearchConfig singleton, lazily, per
-   * call. Falls back to the schema default on any failure — this is a guard helper and must never
-   * throw.
-   */
-  private async resolveRunTimeoutMs(): Promise<number> {
-    try {
-      const config = await prisma.researchConfig.findUnique({ where: { id: CONFIG_SINGLETON_ID } });
-      const value = (config as { runTimeoutMs?: number } | null)?.runTimeoutMs;
-      return typeof value === 'number' && Number.isFinite(value) && value > 0
-        ? value
-        : DEFAULT_RUN_TIMEOUT_MS;
-    } catch (err) {
-      console.error('[research] reading runTimeoutMs failed; using default threshold', err);
-      return DEFAULT_RUN_TIMEOUT_MS;
-    }
   }
 
   /** Clamp the requested limit to [1, MAX]; a missing/non-positive value falls back to the default. */

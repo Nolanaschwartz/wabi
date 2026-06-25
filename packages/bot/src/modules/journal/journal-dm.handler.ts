@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { JournalService } from './journal.service';
 import { SpokeSessionService } from '../spoke-session/spoke-session.service';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
+import { requireScreenedText } from '../crisis/screened';
 import { InnerStateRecorderService } from '../inner-state-logger/inner-state-recorder.service';
 import type { DmTurnContext } from '../coaching/coach-handler';
 import type { Spoke, SpokeResult, ToolSpec } from '../coaching/spoke';
@@ -102,7 +103,9 @@ export class JournalDmHandler implements Spoke {
       screened = rescreen.screened;
     }
     const outcome = await this.recorder.record(ctx.userId, screened, {
-      persist: () => this.journal.write(ctx.userId, content),
+      // The entry minted a minable proof above (blank entries returned early), so narrow and hand the
+      // `ScreenedText` to the writer (ADR-0031).
+      persist: (proof) => this.journal.write(ctx.userId, requireScreenedText(proof)),
       // Identical confirmation copy to JournalController.write, so both surfaces read the same.
       confirm: ({ reflection, xpAwarded }) => `Entry saved. ${reflection} (+${xpAwarded} XP)`,
     });
