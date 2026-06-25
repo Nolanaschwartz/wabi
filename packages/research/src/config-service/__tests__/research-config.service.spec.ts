@@ -24,6 +24,7 @@ jest.mock('@wabi/shared', () => ({
 }));
 
 import { ResearchConfigService } from '../research-config.service';
+import { DEFAULTS } from '../../run-bounds';
 
 describe('ResearchConfigService', () => {
   let service: ResearchConfigService;
@@ -247,6 +248,45 @@ describe('ResearchConfigService', () => {
       await expect(service.updateBounds({ ...validBounds, tokenBudget: 0 })).rejects.toThrow(
         /tokenBudget/,
       );
+    });
+  });
+
+  describe('loadRunBounds', () => {
+    const KEY = 'RESEARCH_SEARCH_LIMIT';
+    const savedSearchLimit = process.env[KEY];
+    afterEach(() => {
+      if (savedSearchLimit === undefined) delete process.env[KEY];
+      else process.env[KEY] = savedSearchLimit;
+    });
+
+    it('reads the singleton once and maps it to a full Bounds (searchLimit from env)', async () => {
+      delete process.env[KEY];
+      const row = {
+        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
+        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
+      };
+      prismaMock.researchConfig.findUnique.mockResolvedValue(row);
+
+      const bounds = await service.loadRunBounds();
+
+      expect(prismaMock.researchConfig.findUnique).toHaveBeenCalledWith({ where: { id: 'singleton' } });
+      expect(bounds).toEqual({ ...row, searchLimit: DEFAULTS.searchLimit });
+    });
+
+    it('fails soft to defaults when the singleton read throws (never throws)', async () => {
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      delete process.env[KEY];
+      prismaMock.researchConfig.findUnique.mockRejectedValue(new Error('db down'));
+
+      await expect(service.loadRunBounds()).resolves.toEqual(DEFAULTS);
+      errSpy.mockRestore();
+    });
+
+    it('falls back to defaults when the singleton row is missing', async () => {
+      delete process.env[KEY];
+      prismaMock.researchConfig.findUnique.mockResolvedValue(null);
+
+      await expect(service.loadRunBounds()).resolves.toEqual(DEFAULTS);
     });
   });
 

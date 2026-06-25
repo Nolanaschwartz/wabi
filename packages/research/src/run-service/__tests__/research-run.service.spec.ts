@@ -3,6 +3,8 @@
 jest.mock('pg-boss', () => ({ PgBoss: jest.fn() }));
 
 // Mock the shared prisma singleton — the service uses it directly (codebase pattern).
+// run-service touches ONLY researchRun now — bounds/threshold come from ResearchConfigService.loadRunBounds()
+// (the ADR-0034 seam: config-service is the sole reader of ResearchConfig).
 const prismaMock = {
   researchRun: {
     create: jest.fn(),
@@ -10,9 +12,6 @@ const prismaMock = {
     updateMany: jest.fn(),
     findFirst: jest.fn(),
     findMany: jest.fn(),
-  },
-  researchConfig: {
-    findUnique: jest.fn(),
   },
 };
 
@@ -40,11 +39,20 @@ const ZERO_RESULT: RunnerResult = {
   stopReason: 'exhausted', tokensUsed: 0, topicsRun: 0,
 };
 
-function makeConfig(): jest.Mocked<Pick<ResearchConfigService, 'getEnabledTopics' | 'getConfig'>> & ResearchConfigService {
+/** Bounds the config service would yield (schema defaults) — the runTimeoutMs (600000) also drives
+ * the stale-run reap threshold via loadRunBounds(). */
+const TEST_BOUNDS = {
+  maxTopicsPerRun: 5, maxPapersPerTopic: 8, searchLimit: 40, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
+  maxDraftsPerRun: 10, agentTimeoutMs: 90_000, runTimeoutMs: 600_000, tokenBudget: 200_000,
+};
+
+type ConfigSlice = Pick<ResearchConfigService, 'getEnabledTopics' | 'getConfig' | 'loadRunBounds'>;
+function makeConfig(): jest.Mocked<ConfigSlice> & ResearchConfigService {
   return {
     getEnabledTopics: jest.fn().mockResolvedValue([]),
     getConfig: jest.fn().mockResolvedValue({ config: null, topics: [] }),
-  } as unknown as jest.Mocked<Pick<ResearchConfigService, 'getEnabledTopics' | 'getConfig'>> & ResearchConfigService;
+    loadRunBounds: jest.fn().mockResolvedValue({ ...TEST_BOUNDS }),
+  } as unknown as jest.Mocked<ConfigSlice> & ResearchConfigService;
 }
 
 function makeRunner(result: RunnerResult = ZERO_RESULT): jest.Mocked<Pick<ResearchRunnerService, 'execute'>> & ResearchRunnerService {
@@ -52,12 +60,6 @@ function makeRunner(result: RunnerResult = ZERO_RESULT): jest.Mocked<Pick<Resear
     execute: jest.fn().mockResolvedValue(result),
   } as unknown as jest.Mocked<Pick<ResearchRunnerService, 'execute'>> & ResearchRunnerService;
 }
-
-/** Default bounds the config singleton would yield (schema defaults). */
-const DEFAULT_BOUNDS = {
-  maxTopicsPerRun: 5, maxPapersPerTopic: 24, searchLimit: 40, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
-  maxDraftsPerRun: 10, agentTimeoutMs: 240_000, runTimeoutMs: 1_200_000, tokenBudget: 200_000,
-};
 
 /** Build the 3-arg service the new slice expects (scheduler, config, runner). */
 function makeService(
@@ -80,8 +82,6 @@ describe('ResearchRunService', () => {
       Promise.resolve({ id: where.id, ...data }),
     );
     prismaMock.researchRun.updateMany.mockResolvedValue({ count: 0 });
-    // Config singleton with the default run timeout (staleness threshold).
-    prismaMock.researchConfig.findUnique.mockResolvedValue({ runTimeoutMs: 600000 });
   });
 
   describe('onModuleInit — consumer registration', () => {
@@ -131,41 +131,25 @@ describe('ResearchRunService', () => {
       expect(updateArg.data.stopReason).toBe('maxDraftsPerRun');
     });
 
-    it('loads enabled topics + bounds from the DATABASE and drives the runner with them (not env/SEED_TOPICS)', async () => {
+    it('loads enabled topics from the DB and the bounds from loadRunBounds(), driving the runner with both', async () => {
       const scheduler = makeScheduler();
       const config = makeConfig();
       config.getEnabledTopics.mockResolvedValue([{ text: 'stress' }, { text: 'sleep' }]);
-      // Config singleton carries the eight bounds columns (non-default values to prove they drive the run).
-      prismaMock.researchConfig.findUnique.mockResolvedValue({
-        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
-        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
-      });
+      // The mapping itself is tested in run-bounds.spec; here we only prove run-service threads
+      // whatever loadRunBounds() returns through to the runner (the ADR-0034 seam).
+      const bounds = { ...TEST_BOUNDS, maxPapersPerTopic: 9, tokenBudget: 150_000 };
+      config.loadRunBounds.mockResolvedValue(bounds);
       const runner = makeRunner();
       const svc = makeService(scheduler, config, runner);
 
       await svc.handleJob({ trigger: 'scheduled' });
 
       expect(config.getEnabledTopics).toHaveBeenCalled();
+      expect(config.loadRunBounds).toHaveBeenCalled();
       expect(runner.execute).toHaveBeenCalledTimes(1);
       const arg = runner.execute.mock.calls[0][0];
       expect(arg.topics).toEqual(['stress', 'sleep']);
-      expect(arg.bounds).toEqual({
-        maxTopicsPerRun: 7, maxPapersPerTopic: 9, searchLimit: 40, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
-        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
-      });
-    });
-
-    it('falls back to the schema-default bounds when the config singleton is missing (degraded read)', async () => {
-      const scheduler = makeScheduler();
-      const config = makeConfig();
-      prismaMock.researchConfig.findUnique.mockResolvedValue(null);
-      const runner = makeRunner();
-      const svc = makeService(scheduler, config, runner);
-
-      await svc.handleJob({ trigger: 'scheduled' });
-
-      const arg = runner.execute.mock.calls[0][0];
-      expect(arg.bounds).toEqual(DEFAULT_BOUNDS);
+      expect(arg.bounds).toEqual(bounds);
     });
 
     it('running-row lifecycle: the row is created running BEFORE the runner executes', async () => {
@@ -399,27 +383,23 @@ describe('ResearchRunService', () => {
       });
     });
 
-    it('falls back to the default threshold (does not throw) when reading runTimeoutMs fails', async () => {
-      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    it('uses loadRunBounds().runTimeoutMs as the staleness threshold', async () => {
       const scheduler = makeScheduler();
-      const svc = makeService(scheduler);
-      prismaMock.researchConfig.findUnique.mockRejectedValue(new Error('config read failed'));
-      // A row old enough to be stale under the default 1200000ms fallback.
+      const config = makeConfig();
+      // A short configured timeout makes a recent row count as stale.
+      config.loadRunBounds.mockResolvedValue({ ...TEST_BOUNDS, runTimeoutMs: 1_000 });
       prismaMock.researchRun.findFirst.mockResolvedValue({
         id: 'run-stale',
         status: 'running',
-        startedAt: new Date(Date.now() - 1200000 - 60000),
+        startedAt: new Date(Date.now() - 5_000), // older than the 1_000ms configured threshold
       });
-      prismaMock.researchRun.create.mockResolvedValue({
-        id: 'run-fresh',
-        trigger: 'manual',
-        status: 'running',
-      });
+      prismaMock.researchRun.create.mockResolvedValue({ id: 'run-fresh', trigger: 'manual', status: 'running' });
+      const svc = makeService(scheduler, config);
 
       const result = await svc.triggerManualRun();
 
+      expect(config.loadRunBounds).toHaveBeenCalled();
       expect(result).toEqual({ runId: 'run-fresh' });
-      errSpy.mockRestore();
     });
   });
 
