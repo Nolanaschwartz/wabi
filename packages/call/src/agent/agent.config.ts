@@ -48,7 +48,7 @@ export function loadAgentConfig(): AgentConfig {
       voice: process.env.TTS_VOICE ?? 'alloy',
       key: process.env.TTS_API_KEY,
       // Slightly brisk by default; tune with TTS_SPEED. Server is single-stream.
-      speed: numEnv('TTS_SPEED', 1.1),
+      speed: numEnv('TTS_SPEED', 1),
     },
     systemPrompt:
       process.env.AGENT_SYSTEM_PROMPT ??
