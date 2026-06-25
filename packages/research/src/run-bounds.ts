@@ -11,8 +11,8 @@ import { Bounds } from './types';
  * read, so a drift between them silently changes how much a degraded run mines (which is exactly the
  * bug this module fixes: the old fallback ran 3× the papers and reaped stale runs at 2× the wait).
  *
- * ponytail: kept in sync by this comment, NOT an enforcing test — accepted ceiling. Upgrade path if it
- * drifts again: a test that parses schema.prisma and asserts each @default equals DEFAULTS[key].
+ * The drift is guarded: `run-bounds.drift.spec.ts` parses schema.prisma and asserts each @default equals
+ * DEFAULTS[key] for the eight DB columns, so a schema edit that forgets this table (or vice versa) fails CI.
  */
 export const DEFAULTS: Bounds = {
   maxTopicsPerRun: 5,

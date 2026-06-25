@@ -194,4 +194,10 @@ crosses crisis screening · **0029** free-text inner-state feeds derived memory 
 the screening gate · **0030** coaching safety floor stays in one service · **0031**
 screened-record write is transport-agnostic · **0032** spokes are uniform modules
 exposing tools · **0033** research strategy ingestion always queues · **0034** research
-worker topology · **0035** scheduled jobs declared in one registry
+worker topology · **0035** scheduled jobs declared in one registry · **0036** evidence
+sources are uniform Source adapters · **0037** LLM calls + Langfuse ingestion are shared
+kernels (policy per context) · **0038** production tracing on the Langfuse OTEL SDK
+(crisis-safe synchronous gate) · **0039** preprint sources use server-side topical search ·
+**0040** research prompts evaluated by per-step offline experiments · **0041** research
+scope is one shared policy at three stages · **0042** classifier-context assembly stays a
+named module · **0043** voice late-joiner privacy hangs up

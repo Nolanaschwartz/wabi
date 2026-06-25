@@ -13,10 +13,11 @@ export class AccountReads {
   constructor(private readonly users: UserService) {}
 
   /**
-   * The facts a DM entry point needs in one read: whether the person has consented (the coaching DM
-   * gate and the welcome opener gate) and their timezone (the coach prompt). An unknown user, or one
-   * who has not accepted consent, is `{ consented: false }` — the DM path then surfaces the setup link
-   * and never coaches (ADR-0011/0015). `timezone` owns the `UTC` default so no caller re-defaults it.
+   * Whether the person has consented (+ their timezone, UTC-defaulted in one place). The welcome opener
+   * gates on `consented`: an unknown user, or one who has not accepted consent, is `{ consented: false }`,
+   * so the opener surfaces the setup link instead (ADR-0011/0015). Coaching reads consent (and the access
+   * decision, and the coach-prompt timezone) from a single `AccessResolver.resolveAccount` instead — so
+   * this is the welcome path's read.
    */
   async consentState(
     discordId: string,

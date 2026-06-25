@@ -8,7 +8,7 @@ A **DM-first, non-clinical wellness companion for gamers on Discord** (ADR-0001/
 
 Read these before non-trivial work — they are the source of truth, and **ADRs win where docs disagree**:
 - `docs/ARCHITECTURE.md` — the consolidated system design, key flows, personal-data map.
-- `docs/adr/` — the *why* behind every structural decision (0001–0035). The hot path, gating rules, and store choices all trace to a numbered ADR.
+- `docs/adr/` — the *why* behind every structural decision (0001–0043). The hot path, gating rules, and store choices all trace to a numbered ADR.
 - `CONTEXT-MAP.md` → `docs/contexts/<context>/CONTEXT.md` — the domain vocabulary. Contexts (Wellbeing / Accounts & Billing / Community) are **language boundaries, not packages**.
 
 ## Commands
