@@ -69,6 +69,7 @@ describe('strategy ingest integration', () => {
     jest.resetModules();
 
     const { StrategyAdminService } = await import('../modules/strategy-admin/strategy-admin.service');
+    const { StrategyDraftStateMachine } = await import('../modules/strategy-admin/strategy-draft-state-machine.service');
     const { StrategyRetrievalService } = await import(
       '../modules/strategy-retrieval/strategy-retrieval.service'
     );
@@ -95,7 +96,7 @@ describe('strategy ingest integration', () => {
 
     svc = new StrategyAdminService(trustGateAutoPass as any, retrieval, scheduler as any, {
       declare: jest.fn(),
-    } as any);
+    } as any, new StrategyDraftStateMachine());
   }, 90000);
 
   afterAll(async () => {

@@ -12,7 +12,6 @@ import { AccessResolver } from '../billing/access-resolver';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
 import { EscalationService } from '../crisis/escalation.service';
 import { TiltService } from '../tilt/tilt.service';
-import { UserService } from '../user/user.service';
 import { DmRouterService } from './dm-router.service';
 import { setupLinkMessage } from '../../lib/setup-link';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
@@ -42,7 +41,6 @@ export class CoachingService {
     private readonly crisisAftermath: CrisisAftermathService,
     private readonly escalation: EscalationService,
     private readonly tilt: TiltService,
-    private readonly userService: UserService,
     private readonly dmRouter: DmRouterService,
     private readonly classifierContextAssembler: ClassifierContextAssembler,
     private readonly screening: CrisisScreeningService,
@@ -64,23 +62,24 @@ export class CoachingService {
 
     this.logger.log('message received', { userId, traceId });
 
-    const user = await this.userService.findByDiscordId(userId);
+    // One read of the User row feeds all three facts the turn needs: the consent gate, the coach-prompt
+    // timezone, and the Active Access decision. (The full row already carries consent + timezone, so a
+    // separate projected consent read would just double the round-trip.) Access is resolved here but NOT
+    // gated yet: the crisis classifier is the safety floor and must run for every consented user — active
+    // OR lapsed (ADR-0011/0021): a paraphrased crisis with no tripwire keyword is only caught by the LLM,
+    // and a lapsed at-risk user is exactly who must not be missed. Coaching itself is gated AFTER
+    // classification, below.
+    const { access, consented, timezone } = await this.accessResolver.resolveAccount(userId);
 
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
 
-    if (!user || !user.consentAcceptedAt) {
+    if (!consented) {
       this.logger.log('user no consent', { userId });
       await message.reply({
         content: setupLinkMessage(baseUrl),
       });
       return;
     }
-
-    // Resolve access now, but do NOT gate on it yet. The crisis classifier is the safety floor and
-    // must run for every consented user — active OR lapsed (ADR-0011/0021): a paraphrased crisis
-    // with no tripwire keyword is only caught by the LLM, and a lapsed at-risk user is exactly who
-    // must not be missed. Coaching itself is gated AFTER classification, below.
-    const access = await this.accessResolver.resolve(userId);
 
     // Tilt offer response: if we previously offered a Tilt Session, this turn may be the user's
     // accept/decline. The whole state machine lives in TiltService now; here we just route its
@@ -275,7 +274,7 @@ export class CoachingService {
           session,
           strategies,
           inAftermath,
-          timezone: user.timezone ?? 'UTC',
+          timezone,
           traceId,
         },
         decision.plan,

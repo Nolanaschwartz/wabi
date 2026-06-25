@@ -56,7 +56,6 @@ describe('DM dispatch integration', () => {
     const { DmRouterService } = await import('../modules/coaching/dm-router.service');
     const { ClassifierContextAssembler } = await import('../modules/coaching/classifier-context-assembler');
     const { EchoController } = await import('../modules/echo/echo.controller');
-    const { UserService } = await import('../modules/user/user.service');
     const shared = await import('@wabi/shared');
     prisma = shared.prisma;
 
@@ -76,7 +75,12 @@ describe('DM dispatch integration', () => {
     const strategyRetrieval = { search: jest.fn().mockResolvedValue([]) } as any;
     const burstCoalescer = new BurstCoalescer();
     const langfuseTracer = { span: jest.fn(), score: jest.fn(), traceObservation: jest.fn(), latchCrisis: jest.fn() } as any;
-    const accessResolver = { resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }) } as any;
+    const accessResolver = {
+      resolve: jest.fn().mockResolvedValue({ hasActiveAccess: true }),
+      resolveAccount: jest
+        .fn()
+        .mockResolvedValue({ access: { hasActiveAccess: true }, consented: true, timezone: 'UTC' }),
+    } as any;
     const memoryStore = {
       deriveAndStore: jest.fn().mockResolvedValue(undefined),
       search: jest.fn().mockResolvedValue([]),
@@ -160,7 +164,6 @@ describe('DM dispatch integration', () => {
       crisisAftermath,
       escalation,
       tilt,
-      new UserService(),
       dmRouter,
       new ClassifierContextAssembler(tilt),
       { screenedBatch: (t: string) => ({ text: t }) } as any,

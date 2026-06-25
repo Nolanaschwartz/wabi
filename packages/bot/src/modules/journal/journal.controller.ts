@@ -9,6 +9,7 @@ import {
 } from 'necord';
 import { CommandInteraction, MessageFlags } from 'discord.js';
 import { JournalService } from './journal.service';
+import { requireScreenedText } from '../crisis/screened';
 import { InnerStateLoggerService } from '../inner-state-logger/inner-state-logger.service';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
@@ -56,7 +57,10 @@ export class JournalController {
         content.length < 10
           ? "That's a bit short. Try writing a few sentences about how you're feeling."
           : null,
-      persist: () => this.journalService.write(interaction.user.id, content),
+      // A journal entry is always free text (the <10 reject guarantees it), so the proof is the minable
+      // arm — narrow and hand the `ScreenedText` straight to the writer (ADR-0031).
+      persist: (screened) =>
+        this.journalService.write(interaction.user.id, requireScreenedText(screened)),
       confirm: ({ reflection, xpAwarded }) => `Entry saved. ${reflection} (+${xpAwarded} XP)`,
     });
   }

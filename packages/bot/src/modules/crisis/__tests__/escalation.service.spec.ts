@@ -21,14 +21,14 @@ jest.mock('@wabi/shared', () => ({
 
 describe('EscalationService', () => {
   let service: EscalationService;
-  let userService: { findByDiscordId: jest.Mock };
+  let accountReads: { localeFor: jest.Mock };
   let crisisResources: { resourcesFor: jest.Mock };
   let crisisAftermath: { onEscalation: jest.Mock };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    userService = {
-      findByDiscordId: jest.fn().mockResolvedValue({ locale: 'en-US' }),
+    accountReads = {
+      localeFor: jest.fn().mockResolvedValue('en-US'),
     };
     crisisResources = {
       resourcesFor: jest.fn().mockReturnValue({
@@ -37,7 +37,7 @@ describe('EscalationService', () => {
     };
     crisisAftermath = { onEscalation: jest.fn().mockResolvedValue(undefined) };
     service = new EscalationService(
-      userService as any,
+      accountReads as any,
       crisisResources as any,
       crisisAftermath as any,
     );
@@ -59,7 +59,7 @@ describe('EscalationService', () => {
   it('resolves the locale from the userId, not a Message', async () => {
     await service.escalate('123', 'tripwire', 'conversation');
 
-    expect(userService.findByDiscordId).toHaveBeenCalledWith('123');
+    expect(accountReads.localeFor).toHaveBeenCalledWith('123');
   });
 
   it('records exactly ONE Escalation Event, tagged with the layer that fired', async () => {

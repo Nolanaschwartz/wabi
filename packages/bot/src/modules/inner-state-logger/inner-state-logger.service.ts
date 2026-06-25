@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { CommandInteraction, MessageFlags } from 'discord.js';
+import { Screened } from '../crisis/screened';
 import { CrisisScreeningService } from '../crisis/crisis-screening.service';
 import { InnerStateRecorderService } from './inner-state-recorder.service';
 
@@ -25,8 +26,11 @@ export interface InnerStateWrite<T> {
   };
   /** Optional synchronous pre-screen gate; return a reason string to reject the write before anything runs. */
   validate?: () => string | null;
-  /** Writes the record. Runs only on the safe path, inside the recorder. */
-  persist: () => Promise<T>;
+  /**
+   * Writes the record. Runs only on the safe path, inside the recorder, and receives the `Screened`
+   * proof so a free-text writer can demand a {@link ScreenedText} rather than a bare string (ADR-0031).
+   */
+  persist: (screened: Screened) => Promise<T>;
   /** Builds the confirmation copy from the persist result — synchronous, so any async work lives in persist. */
   confirm: (value: T) => string;
 }

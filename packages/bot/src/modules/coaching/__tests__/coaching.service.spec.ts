@@ -83,9 +83,18 @@ jest.mock('../../langfuse/langfuse-tracer.service', () => ({
 }));
 
 jest.mock('../../billing/access-resolver', () => ({
-  AccessResolver: jest.fn().mockImplementation(() => ({
-    resolve: jest.fn(),
-  })),
+  AccessResolver: jest.fn().mockImplementation(() => {
+    // resolveAccount wraps the same `resolve` mock the tests stub for access, and defaults a consented
+    // user (UTC) — so the existing `accessResolver.resolve.mockResolvedValue(...)` cases still drive the
+    // access decision, and only the unconsented case overrides resolveAccount directly.
+    const resolve = jest.fn();
+    const resolveAccount = jest.fn(async (id: string) => ({
+      access: await resolve(id),
+      consented: true,
+      timezone: 'UTC',
+    }));
+    return { resolve, resolveAccount };
+  }),
 }));
 
 jest.mock('../../user/user.service', () => ({
@@ -268,7 +277,6 @@ describe('CoachingService', () => {
       crisisAftermath,
       escalation as any,
       tilt,
-      userService,
       dmRouter,
       classifierContextAssembler,
       screening as any,
@@ -277,9 +285,9 @@ describe('CoachingService', () => {
 
   it('shows setup link pointing at the real onboarding route for unconsented user', async () => {
     process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
-    (userService.findByDiscordId as jest.Mock).mockResolvedValue({
-      discordId: '123',
-      consentAcceptedAt: null,
+    (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
+      access: { hasActiveAccess: false, subscriptionStatus: 'inactive' },
+      consented: false,
       timezone: 'UTC',
     });
 

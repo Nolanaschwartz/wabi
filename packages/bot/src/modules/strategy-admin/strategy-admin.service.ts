@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { prisma } from '@wabi/shared';
 import { StrategyTrustGate, StrategyDraft, EvaluationDecision } from './strategy-trust-gate';
+import { StrategyDraftStateMachine } from './strategy-draft-state-machine.service';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { JobRegistry } from '../scheduler/job-registry';
@@ -50,6 +51,7 @@ export class StrategyAdminService {
     private readonly retrieval: StrategyRetrievalService,
     private readonly scheduler: SchedulerService,
     private readonly jobs: JobRegistry,
+    private readonly stateMachine: StrategyDraftStateMachine,
   ) {}
 
   init(): void {
@@ -227,36 +229,21 @@ export class StrategyAdminService {
   }
 
   async approveDraft(id: string): Promise<StrategyDraft | null> {
-    // Only a pending-review draft may be published (ADR-0012 lifecycle). The guard lives here, in
-    // the service — not just in the admin UI — so an already-published or quarantined draft can't be
-    // flipped back through a stale/replayed request.
-    const existing = await prisma.strategyDraft.findUnique({ where: { id } });
-    if (!existing || existing.status !== 'pending-review') return null;
-
-    // Index FIRST: a Draft only becomes 'published' once it is actually in the Qdrant index, so the
-    // index can never silently lag Postgres (ADR-0012). A failed upsert leaves it pending-review for
-    // a later retry (admin or the reconcile sweep), never published-but-unretrievable.
-    const indexed = await this.publishToQdrant(this.toDraft(existing));
-    if (!indexed) return null;
-
-    const updated = await prisma.strategyDraft.update({
-      where: { id },
-      data: { status: 'published' },
-    }).catch(() => null);
+    // pending-review → published, but ONLY once the Draft is actually in the Qdrant index: the state
+    // machine gates the status write on the index upsert (precommit), so the index can never silently
+    // lag Postgres and a failed upsert leaves the Draft pending-review for a later retry (admin or the
+    // reconcile sweep), never published-but-unretrievable. The legal-transition guard lives in the
+    // state machine, so a stale/replayed request can't flip a non-pending-review Draft (ADR-0012).
+    const updated = await this.stateMachine.transition(id, 'approve', {
+      precommit: (draft) => this.publishToQdrant(this.toDraft(draft)),
+    });
 
     return updated ? this.toDraft(updated) : null;
   }
 
   async rejectDraft(id: string): Promise<StrategyDraft | null> {
-    // Same lifecycle guard: only a pending-review draft may be quarantined from review.
-    const existing = await prisma.strategyDraft.findUnique({ where: { id } });
-    if (!existing || existing.status !== 'pending-review') return null;
-
-    const updated = await prisma.strategyDraft.update({
-      where: { id },
-      data: { status: 'quarantined' },
-    }).catch(() => null);
-
+    // pending-review → quarantined (guard in the state machine), then drop it from the index.
+    const updated = await this.stateMachine.transition(id, 'reject');
     if (!updated) return null;
 
     await this.retrieval.delete(id);
@@ -271,14 +258,7 @@ export class StrategyAdminService {
    * action is auditable and the hourly reconcile sweep keeps it out of the index.
    */
   async removePublished(id: string): Promise<StrategyDraft | null> {
-    const existing = await prisma.strategyDraft.findUnique({ where: { id } });
-    if (!existing || existing.status !== 'published') return null;
-
-    const updated = await prisma.strategyDraft.update({
-      where: { id },
-      data: { status: 'quarantined' },
-    }).catch(() => null);
-
+    const updated = await this.stateMachine.transition(id, 'demote');
     if (!updated) return null;
 
     await this.retrieval.delete(id);

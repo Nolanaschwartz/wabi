@@ -25,9 +25,35 @@ interface ScreenedBrand {
  * - structured-only: no minable free text (a rating-only record, or blank/whitespace input) — no screen
  *   ran, nothing derives, no consent prompt.
  */
+/**
+ * The minable arm of {@link Screened}: a proof carrying the exact crisis-safe free text a write
+ * persists. A writer that *stores* free text (a Journal entry, a Mood note) takes this — not the union
+ * and not a bare `string` — so persisting unscreened text, or a structured-only proof, is a compile
+ * error at the call site (ADR-0031). Narrow to it from a `Screened` with `screened.freeText !== null`.
+ */
+export type ScreenedText = ScreenedBrand & {
+  readonly freeText: string;
+  readonly derivePrefix: string;
+};
+
 export type Screened =
-  | (ScreenedBrand & { readonly freeText: string; readonly derivePrefix: string })
+  | ScreenedText
   | (ScreenedBrand & { readonly freeText: null; readonly derivePrefix: null });
+
+/**
+ * Narrow a {@link Screened} to its minable {@link ScreenedText} arm, throwing if the proof carries no
+ * free text. The single chokepoint a free-text writer (a Journal entry) uses instead of hand-rolling the
+ * `freeText === null` guard, so the screened-record invariant (ADR-0031) lives in one place next to the
+ * brand it guards rather than copied at each persist site. Defensive: callers reject blank input upstream,
+ * so a structured-only proof never reaches here in practice — but if one ever does, this fails loud rather
+ * than silently persisting a null free-text field.
+ */
+export function requireScreenedText(screened: Screened): ScreenedText {
+  if (screened.freeText === null) {
+    throw new Error('a free-text write requires screened free text');
+  }
+  return screened;
+}
 
 /**
  * A branded proof that this turn's coalesced batch was screened crisis-safe by the upstream DM

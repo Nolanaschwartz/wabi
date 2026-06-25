@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Client } from 'discord.js';
 import { setupLinkMessage } from '../../lib/setup-link';
-import { UserService } from '../user/user.service';
+import { AccountReads } from '../user/account-reads.service';
 
 // One-time greeting that INVITES the first conversation. It must not enroll the user into
 // the recurring opt-in check-in cadence (ADR-0008) — the actual coaching happens when the
@@ -13,7 +13,7 @@ const WELCOME_OPENER =
 export class WelcomeService {
   constructor(
     private readonly client: Client,
-    private readonly userService: UserService,
+    private readonly accountReads: AccountReads,
   ) {}
 
   /**
@@ -23,12 +23,11 @@ export class WelcomeService {
    * Closed-DM and other delivery failures are swallowed; this never throws.
    */
   async welcome(discordId: string): Promise<void> {
-    const user = await this.userService.findByDiscordId(discordId);
+    const { consented } = await this.accountReads.consentState(discordId);
 
-    const content =
-      user && user.consentAcceptedAt
-        ? WELCOME_OPENER
-        : setupLinkMessage(process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg');
+    const content = consented
+      ? WELCOME_OPENER
+      : setupLinkMessage(process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg');
 
     try {
       await this.client.users.send(discordId, { content });

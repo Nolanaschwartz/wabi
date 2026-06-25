@@ -1,4 +1,5 @@
 import { StrategyAdminService } from '../strategy-admin.service';
+import { StrategyDraftStateMachine } from '../strategy-draft-state-machine.service';
 import { StrategyTrustGate } from '../strategy-trust-gate';
 import { StrategyRetrievalService } from '../../strategy-retrieval/strategy-retrieval.service';
 import { prisma } from '@wabi/shared';
@@ -54,9 +55,16 @@ describe('StrategyAdminService', () => {
       send: jest.fn().mockResolvedValue('job_1'),
       available: true,
     };
-    service = new StrategyAdminService(trustGate, retrieval, scheduler as any, {
-      declare: jest.fn(),
-    } as any);
+    // A real state machine: it reads prisma.strategyDraft directly (mocked above), so the lifecycle
+    // guards stay exercised end-to-end through approve/reject/removePublished. Its own unit behaviour is
+    // covered in strategy-draft-state-machine.service.spec.
+    service = new StrategyAdminService(
+      trustGate,
+      retrieval,
+      scheduler as any,
+      { declare: jest.fn() } as any,
+      new StrategyDraftStateMachine(),
+    );
   });
 
   it('publishes draft when decision is publish', async () => {
@@ -559,7 +567,7 @@ describe('StrategyAdminService.isDuplicate', () => {
     jest.clearAllMocks();
     process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
     retrieval = { search: jest.fn() };
-    svc = new StrategyAdminService({} as any, retrieval as any, {} as any, {} as any);
+    svc = new StrategyAdminService({} as any, retrieval as any, {} as any, {} as any, {} as any);
   });
 
   it('is a duplicate when a match scores at/above threshold, querying the raw-cosine path', async () => {
@@ -589,7 +597,7 @@ describe('StrategyAdminService.isDuplicate', () => {
 });
 
 describe('StrategyAdminService ledger', () => {
-  const svc = new StrategyAdminService({} as any, { search: jest.fn() } as any, {} as any, {} as any);
+  const svc = new StrategyAdminService({} as any, { search: jest.fn() } as any, {} as any, {} as any, {} as any);
   beforeEach(() => jest.clearAllMocks());
 
   it('hasSeen returns true when a row exists', async () => {
@@ -630,7 +638,7 @@ describe('StrategyAdminService.ingestBatch', () => {
     process.env.RESEARCH_DEDUP_THRESHOLD = '0.95';
     trustGate = { evaluate: jest.fn() };
     retrieval = { search: jest.fn() };
-    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any, {} as any);
+    svc = new StrategyAdminService(trustGate as any, retrieval as any, {} as any, {} as any, {} as any);
     jest.spyOn(svc, 'markProcessed').mockResolvedValue();
     (prisma.processedSource.findUnique as jest.Mock).mockResolvedValue(null);
   });

@@ -3,7 +3,7 @@ import type { APIEmbed } from 'discord.js';
 import { prisma } from '@wabi/shared';
 import { CrisisResourcesService } from './crisis-resources.service';
 import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.service';
-import { UserService } from '../user/user.service';
+import { AccountReads } from '../user/account-reads.service';
 
 export type EscalationLayer = 'tripwire' | 'classifier';
 
@@ -31,7 +31,7 @@ export interface CrisisResponse {
 @Injectable()
 export class EscalationService {
   constructor(
-    private readonly userService: UserService,
+    private readonly accountReads: AccountReads,
     private readonly crisisResources: CrisisResourcesService,
     private readonly crisisAftermath: CrisisAftermathService,
   ) {}
@@ -57,8 +57,7 @@ export class EscalationService {
   }
 
   private async buildResponse(userId: string): Promise<CrisisResponse> {
-    const user = await this.userService.findByDiscordId(userId);
-    const locale = user?.locale ?? 'en-US';
+    const locale = await this.accountReads.localeFor(userId);
     const resources = this.crisisResources.resourcesFor(locale);
 
     const resourceLines = resources.resources.map((r) => {

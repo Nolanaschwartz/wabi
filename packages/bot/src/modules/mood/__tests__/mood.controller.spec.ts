@@ -40,6 +40,7 @@ describe('MoodController — routes through the inner-state logger', () => {
   beforeEach(() => {
     moodService = {
       create: jest.fn().mockResolvedValue(undefined),
+      createNote: jest.fn().mockResolvedValue(undefined),
       trend: jest.fn().mockResolvedValue(0),
     } as any;
     logger = { log: jest.fn().mockResolvedValue({ kind: 'logged' }) } as any;
@@ -58,14 +59,17 @@ describe('MoodController — routes through the inner-state logger', () => {
     await controller.log([mockInteraction()], { rating: 9, note: 'great run' });
 
     const write = logger.log.mock.calls[0][0];
-    const value = await write.persist();
+    // A note is present ⇒ the recorder hands a minable proof; persist routes to the proof-typed writer.
+    const note = { freeText: 'great run', derivePrefix: 'Mood note' } as any;
+    const value = await write.persist(note);
 
-    // rating clamped to 1..5, emoji from the static, note passed through.
-    expect(moodService.create).toHaveBeenCalledWith('user_1', {
-      rating: 5,
-      emoji: '🙂',
-      note: 'great run',
-    });
+    // rating clamped to 1..5, emoji from the static, note carried as the Screened proof.
+    expect(moodService.createNote).toHaveBeenCalledWith(
+      'user_1',
+      { rating: 5, emoji: '🙂' },
+      note,
+    );
+    expect(moodService.create).not.toHaveBeenCalled();
     expect(value).toEqual({ trend: 3.2 });
   });
 
@@ -96,7 +100,7 @@ describe('FeelingController — rating-only, but never bypasses the logger', () 
     const write = logger.log.mock.calls[0][0];
     expect(write.freeText).toBeUndefined();
 
-    await write.persist();
+    await write.persist({ freeText: null, derivePrefix: null } as any);
     expect(moodService.create).toHaveBeenCalledWith('user_1', { rating: 4, emoji: '🙂' });
     expect(write.confirm(undefined)).toContain('Logged your mood');
   });
@@ -108,7 +112,7 @@ describe('FeelingController — rating-only, but never bypasses the logger', () 
     await controller.execute([mockInteraction()], { rating: 3.7 });
 
     const write = logger.log.mock.calls[0][0];
-    await write.persist();
+    await write.persist({ freeText: null, derivePrefix: null } as any);
     expect(moodService.create).toHaveBeenCalledWith('user_1', { rating: 4, emoji: '🙂' });
   });
 
@@ -116,7 +120,7 @@ describe('FeelingController — rating-only, but never bypasses the logger', () 
     await controller.execute([mockInteraction()], { rating: 100 });
 
     const write = logger.log.mock.calls[0][0];
-    await write.persist();
+    await write.persist({ freeText: null, derivePrefix: null } as any);
     expect(moodService.create).toHaveBeenCalledWith('user_1', { rating: 5, emoji: '🙂' });
   });
 });

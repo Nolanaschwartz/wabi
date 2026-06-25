@@ -1,29 +1,45 @@
 import { Injectable } from '@nestjs/common';
 import { prisma, ratingToEmoji } from '@wabi/shared';
+import { ScreenedText } from '../crisis/screened';
 
-export interface MoodLog {
+export interface MoodRecord {
   rating: number;
   emoji: string;
-  note?: string;
-  context?: string;
 }
 
 @Injectable()
 export class MoodService {
-  // Plain persist: writes the mood record. The screened-record invariant (ADR-0028/0029) is that any
-  // minable free-text `note` reaches this method ONLY through InnerStateLogger's safe-path closure, which
-  // crisis-screens and consent-derives it. Two callers satisfy that: the slash log commands (via the
-  // logger, may carry a note), and the DM mood spoke's capture turn — which is structured-only (rating,
-  // never a note) and is itself crisis-screened upstream by the coaching classifier before dispatch.
-  // So this method just touches Postgres; it must never be handed a note from an unscreened surface.
-  async create(discordId: string, mood: MoodLog): Promise<void> {
+  // Structured-only write: a rating + emoji, NEVER free text. The DM mood spoke calls this directly
+  // (it captures no note); a future surface that wants to persist a note has no `ScreenedText` to hand
+  // `create`, so it is structurally barred from doing so and must route through `createNote` instead
+  // (ADR-0028/0031). This method just touches Postgres.
+  async create(discordId: string, mood: MoodRecord): Promise<void> {
     await prisma.mood.create({
       data: {
         userId: discordId,
         rating: mood.rating,
         emoji: mood.emoji,
-        note: mood.note ?? null,
-        context: mood.context ?? null,
+        note: null,
+        context: null,
+      },
+    });
+  }
+
+  // A mood with a free-text note. The note is a `ScreenedText` proof, not a bare string, so the note
+  // structurally cannot reach Postgres unscreened (ADR-0028/0031): `note.freeText` is the exact
+  // crisis-safe text the upstream screen cleared, byte-identical to what was derived to Memory.
+  async createNote(
+    discordId: string,
+    base: MoodRecord,
+    note: ScreenedText,
+  ): Promise<void> {
+    await prisma.mood.create({
+      data: {
+        userId: discordId,
+        rating: base.rating,
+        emoji: base.emoji,
+        note: note.freeText,
+        context: null,
       },
     });
   }

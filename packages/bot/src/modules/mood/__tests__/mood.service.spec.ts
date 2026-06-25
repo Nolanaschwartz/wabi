@@ -37,9 +37,11 @@ describe('MoodService', () => {
     });
   });
 
-  it('persists the free-text note verbatim when present', async () => {
+  it('persists the free-text note verbatim from the Screened proof (createNote)', async () => {
     (prisma.mood.create as jest.Mock).mockResolvedValue({});
-    await service.create('123', { rating: 3, emoji: '😐', note: 'feeling okay' });
+    // createNote takes a ScreenedText proof, not a bare string — its freeText is the persisted note.
+    const note = { freeText: 'feeling okay', derivePrefix: 'Mood note' } as any;
+    await service.createNote('123', { rating: 3, emoji: '😐' }, note);
 
     expect(prisma.mood.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ note: 'feeling okay' }),
