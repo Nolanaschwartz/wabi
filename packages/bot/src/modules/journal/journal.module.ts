@@ -8,6 +8,7 @@ import { HabitEngagementModule } from '../habit-engagement/habit-engagement.modu
 import { InnerStateLoggerModule } from '../inner-state-logger/inner-state-logger.module';
 import { CrisisModule } from '../crisis/crisis.module';
 import { SpokeSessionModule } from '../spoke-session/spoke-session.module';
+import { BillingModule } from '../billing/billing.module';
 
 @Module({
   // Depends on CoachModelModule (just the LLM adapter) rather than CoachingModule, so the DM router in
@@ -23,6 +24,9 @@ import { SpokeSessionModule } from '../spoke-session/spoke-session.module';
     CrisisModule,
     // JournalDmHandler arms the spoke floor on a bare journal intent (two-turn capture).
     SpokeSessionModule,
+    // BillingModule exports AccessResolver — the single source for a person's timezone, so a journal
+    // Engagement buckets its day boundary the same way coaching and /profile do.
+    BillingModule,
   ],
   providers: [JournalService, JournalController, JournalDmHandler],
   exports: [JournalService, JournalDmHandler],
