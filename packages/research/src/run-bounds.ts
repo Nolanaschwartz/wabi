@@ -12,7 +12,7 @@ import { Bounds } from './types';
  * bug this module fixes: the old fallback ran 3× the papers and reaped stale runs at 2× the wait).
  *
  * The drift is guarded: `run-bounds.drift.spec.ts` parses schema.prisma and asserts each @default equals
- * DEFAULTS[key] for the eight DB columns, so a schema edit that forgets this table (or vice versa) fails CI.
+ * DEFAULTS[key] for the eleven DB columns, so a schema edit that forgets this table (or vice versa) fails CI.
  */
 export const DEFAULTS: Bounds = {
   maxTopicsPerRun: 5,
@@ -29,11 +29,11 @@ export const DEFAULTS: Bounds = {
   tokenBudget: 200_000,
 };
 
-/** The eight DB-governed bounds (ADR-0034) — every {@link Bounds} field except the env-only searchLimit. */
+/** The eleven DB-governed bounds (ADR-0034) — every {@link Bounds} field except the env-only searchLimit. */
 export type ResearchBounds = Omit<Bounds, 'searchLimit'>;
 
 /**
- * Inclusive valid ranges for the eight DB columns. Keyed by `keyof ResearchBounds` so the table can
+ * Inclusive valid ranges for the eleven DB columns. Keyed by `keyof ResearchBounds` so the table can
  * never drift from the type: add a bound to {@link Bounds} and this Record (and the schema, and
  * DEFAULTS) fail to compile until updated.
  * - counts: 1..100 (a run touching >100 topics/papers per step is a config error)

@@ -247,6 +247,28 @@ describe('ResearchConfigService', () => {
       expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
     });
 
+    it('accepts a valid fractional budgetPressureFraction (0.5)', async () => {
+      const updated = { id: 'singleton', ...validBounds, budgetPressureFraction: 0.5 };
+      prismaMock.researchConfig.update.mockResolvedValue(updated);
+
+      const result = await service.updateBounds({ ...validBounds, budgetPressureFraction: 0.5 });
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { ...validBounds, budgetPressureFraction: 0.5 },
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it('rejects budgetPressureFraction above the ceiling (1.5)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, budgetPressureFraction: 1.5 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
     it('names the offending field in the rejection message', async () => {
       await expect(service.updateBounds({ ...validBounds, tokenBudget: 0 })).rejects.toThrow(
         /tokenBudget/,
