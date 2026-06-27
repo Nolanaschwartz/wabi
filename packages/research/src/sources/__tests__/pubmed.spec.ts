@@ -164,6 +164,44 @@ describe('PubMedTool', () => {
     expect(await tool.fullText(pm('111'))).toBeNull();
   });
 
+  it('summarize fetches titles for many PMIDs in one esummary call', async () => {
+    const fetchFn = jest.fn().mockReturnValue(jsonResponse({ result: {
+      uids: ['111', '222'],
+      '111': { uid: '111', title: 'First' },
+      '222': { uid: '222', title: 'Second' },
+    }}));
+    const src = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    const out = await src.summarize!(['PMID:111', 'PMID:222']);
+    expect(out).toEqual([{ id: 'PMID:111', title: 'First' }, { id: 'PMID:222', title: 'Second' }]);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(fetchFn.mock.calls[0][0]).toMatch(/esummary\.fcgi.*id=111,222/);
+  });
+
+  it('summarize returns [] on fetch error (fail-open)', async () => {
+    const fetchFn = jest.fn().mockRejectedValue(new Error('network error'));
+    const src = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    const out = await src.summarize!(['PMID:111']);
+    expect(out).toEqual([]);
+  });
+
+  it('summarize filters out entries with empty titles', async () => {
+    const fetchFn = jest.fn().mockReturnValue(jsonResponse({ result: {
+      uids: ['111', '222'],
+      '111': { uid: '111', title: '' },
+      '222': { uid: '222', title: 'Second' },
+    }}));
+    const src = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    const out = await src.summarize!(['PMID:111', 'PMID:222']);
+    expect(out).toEqual([{ id: 'PMID:222', title: 'Second' }]);
+  });
+
+  it('summarize returns [] for empty id list', async () => {
+    const fetchFn = jest.fn();
+    const src = new PubMedTool({ fetchFn, minIntervalMs: 0 });
+    expect(await src.summarize!([])).toEqual([]);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it('throws on a 4xx HTTP error (not retried)', async () => {
     const fetchFn = jest.fn().mockResolvedValue({ ok: false, status: 400, text: async () => '', json: async () => ({}) });
     const tool = new PubMedTool({ fetchFn, minIntervalMs: 0 });
