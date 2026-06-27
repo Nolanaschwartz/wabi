@@ -20,6 +20,13 @@ export function sourceMaxTextChars(kind: SourceKindName): number {
   return sourceNum(kind, 'MAX_TEXT_CHARS', 50_000);
 }
 
+/** Full-text download byte cap (oversize -> abstract fallback), shared across the preprint sources
+ * with the same 3-tier `RESEARCH_MAX_DOC_BYTES` / `RESEARCH_<KIND>_MAX_DOC_BYTES` fallback. Caps both
+ * PDF and DOCX downloads. Resolved lazily per call — never frozen at import. */
+export function sourceMaxDocBytes(kind: SourceKindName): number {
+  return sourceNum(kind, 'MAX_DOC_BYTES', 20_000_000);
+}
+
 // Run Bounds (caps + defaults + ranges) now live in run-bounds.ts, sourced from the ResearchConfig
 // singleton via ResearchConfigService.loadRunBounds() (ADR-0034). The old env-only loadBounds() is gone.
 

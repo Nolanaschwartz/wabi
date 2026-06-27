@@ -2,7 +2,7 @@ import { RateLimiter } from '../util/rate-limiter';
 import { Paper } from '../types';
 import { Source } from './source';
 import { Logger, noopLogger } from '../util/logger';
-import { fetchAndParsePdf } from './pdf';
+import { fetchAndParseDoc } from './doc';
 
 const BASE = 'https://api.osf.io/v2/preprints/';
 
@@ -21,7 +21,7 @@ export interface PsyArxivDeps {
   token?: string;          // OSF personal token -> higher rate limit; from OSF_TOKEN
   minIntervalMs?: number;  // default 1000ms (OSF anonymous is rate-limited)
   pageSize?: number;       // default 50 matches per phrase request
-  maxPdfBytes?: number;
+  maxDocBytes?: number;
   maxTextChars?: number;
   parsePdf?: (buf: Uint8Array) => Promise<string>;
   log?: Logger;
@@ -40,7 +40,7 @@ export class PsyArxivSource implements Source {
   private readonly token?: string;
   private readonly limiter: RateLimiter;
   private readonly pageSize: number;
-  private readonly maxPdfBytes: number;
+  private readonly maxDocBytes: number;
   private readonly maxTextChars: number;
   private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
   private readonly log: Logger;
@@ -50,7 +50,7 @@ export class PsyArxivSource implements Source {
     this.token = deps.token ?? (process.env.OSF_TOKEN || undefined);
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 1000);
     this.pageSize = deps.pageSize ?? 50;
-    this.maxPdfBytes = deps.maxPdfBytes ?? 10_000_000;
+    this.maxDocBytes = deps.maxDocBytes ?? 20_000_000;
     this.maxTextChars = deps.maxTextChars ?? 50_000;
     this.parsePdf = deps.parsePdf;
     this.log = deps.log ?? noopLogger;
@@ -111,7 +111,7 @@ export class PsyArxivSource implements Source {
   }
 
   /** Resolve `osf:<guid>` → preprint detail → primary_file → `links.download`, then parse via the
-   * shared PDF helper. Fail-safe to null so the agent falls back to the abstract. */
+   * shared document helper (PDF or DOCX). Fail-safe to null so the agent falls back to the abstract. */
   async fullText(paper: Paper): Promise<string | null> {
     let pdf: string | null = null;
     try {
@@ -129,10 +129,10 @@ export class PsyArxivSource implements Source {
       return null;
     }
     if (!pdf) return null;
-    return fetchAndParsePdf(pdf, {
+    return fetchAndParseDoc(pdf, {
       fetchFn: this.fetchFn,
       schedule: (fn) => this.limiter.schedule(fn),
-      maxPdfBytes: this.maxPdfBytes,
+      maxDocBytes: this.maxDocBytes,
       maxTextChars: this.maxTextChars,
       parsePdf: this.parsePdf,
       log: this.log,

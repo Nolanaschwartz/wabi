@@ -2,7 +2,7 @@ import { RateLimiter } from '../util/rate-limiter';
 import { Paper } from '../types';
 import { Source } from './source';
 import { Logger, noopLogger } from './../util/logger';
-import { fetchAndParsePdf } from './pdf';
+import { fetchAndParseDoc } from './doc';
 import { fetchWithRetry } from './fetch-retry';
 
 const SEARCH = 'https://www.ebi.ac.uk/europepmc/webservices/rest/search';
@@ -26,7 +26,7 @@ export interface EuropePmcDeps {
   fetchFn?: typeof fetch;
   minIntervalMs?: number;     // default 350ms — Europe PMC is generous; matches the PubMed cadence
   pageSize?: number;          // default 100 (EPMC cap is 1000); we usually need one page
-  maxPdfBytes?: number;
+  maxDocBytes?: number;
   maxTextChars?: number;
   parsePdf?: (buf: Uint8Array) => Promise<string>;
   log?: Logger;
@@ -45,7 +45,7 @@ export class EuropePmcSource implements Source {
   private readonly fetchFn: typeof fetch;
   private readonly limiter: RateLimiter;
   private readonly pageSize: number;
-  private readonly maxPdfBytes: number;
+  private readonly maxDocBytes: number;
   private readonly maxTextChars: number;
   private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
   private readonly log: Logger;
@@ -56,7 +56,7 @@ export class EuropePmcSource implements Source {
     this.fetchFn = deps.fetchFn ?? fetch;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 350);
     this.pageSize = deps.pageSize ?? 100;
-    this.maxPdfBytes = deps.maxPdfBytes ?? 10_000_000;
+    this.maxDocBytes = deps.maxDocBytes ?? 20_000_000;
     this.maxTextChars = deps.maxTextChars ?? 50_000;
     this.parsePdf = deps.parsePdf;
     this.log = deps.log ?? noopLogger;
@@ -126,10 +126,10 @@ export class EuropePmcSource implements Source {
     const r = this.byId.get(paper.sourceId);
     const pdf = r?.fullTextUrlList?.fullTextUrl?.find((u) => u.documentStyle === 'pdf' && u.url)?.url;
     if (!pdf) return null;
-    return fetchAndParsePdf(pdf, {
+    return fetchAndParseDoc(pdf, {
       fetchFn: this.fetchFn,
       schedule: (fn) => this.limiter.schedule(fn),
-      maxPdfBytes: this.maxPdfBytes,
+      maxDocBytes: this.maxDocBytes,
       maxTextChars: this.maxTextChars,
       parsePdf: this.parsePdf,
       log: this.log,
