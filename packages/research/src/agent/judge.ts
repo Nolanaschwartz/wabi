@@ -19,6 +19,7 @@ function capForTier(tier: EvidenceTier): number {
 
 const JudgeSchema = z.object({
   verdicts: z.array(z.object({
+    index: z.number().int(),
     faithful: z.boolean(),
     scopeOk: z.boolean(),
     score: z.number(),
@@ -45,8 +46,9 @@ export async function judgeCandidates(genObj: ResearchGenerateObject, candidates
     `"scopeOk" (true ONLY if a person could do this unaided), and "score" (0..1 overall quality). ` +
     `You MAY sharpen title/technique wording but do NOT invent claims or change meaning. Keep a ` +
     `rewritten title short, plain, action-oriented.\n` +
-    `Return JSON with a "verdicts" array, one object per input item IN ORDER:\n` +
-    `{"verdicts":[{"faithful":boolean,"scopeOk":boolean,"score":number,"title":string,"technique":string,"rationale":string}]}\n` +
+    `Return JSON with a "verdicts" array — one object per input item:\n` +
+    `{"verdicts":[{"index":0,"faithful":boolean,"scopeOk":boolean,"score":number,"title":string,"technique":string,"rationale":string}]}\n` +
+    `Each verdict MUST include its 0-based \`index\` matching the input item. Return one verdict per item.\n` +
     `Output only the JSON object — no prose, no markdown.\n\n` +
     candidates.map((c, i) => `[${i}] Title: ${c.title}\nTechnique: ${c.technique}\nSourceText: ${c.sourceText}`).join('\n\n');
 
@@ -59,8 +61,11 @@ export async function judgeCandidates(genObj: ResearchGenerateObject, candidates
     object = res.object;
     tokens = res.tokens;
   } catch {
-    // Provider failure: nothing spent. Per-index fail-open — keep all at neutral.
-    return { candidates: candidates.map((c) => ({ ...c, confidence: 0.5, rationale: 'judge unavailable' })), tokens: 0 };
+    // Provider failure: nothing spent. Per-index fail-open — keep all at neutral, still capped per tier.
+    return {
+      candidates: candidates.slice(0, capForTier(tier)).map((c) => ({ ...c, confidence: 0.5, rationale: 'judge unavailable' })),
+      tokens: 0,
+    };
   }
 
   // When genObj returns object undefined (schema/soft failure), verdicts is empty → every index falls
@@ -69,14 +74,17 @@ export async function judgeCandidates(genObj: ResearchGenerateObject, candidates
 
   const kept: Candidate[] = [];
   candidates.forEach((c, i) => {
-    const v = verdicts[i] as Verdict | undefined;
+    const v = verdicts.find((x) => x.index === i);
     if (!v || typeof v.score !== 'number') {
       kept.push({ ...c, confidence: 0.5, rationale: 'judge unavailable' }); // per-index fail-open
       return;
     }
     if (!v.faithful || v.scopeOk === false || v.score < floorForTier(tier)) return; // dropped
     // sourceText is NEVER rewritten — only title/technique may be sharpened by the judge (ADR-0021).
-    kept.push({ ...c, title: v.title ?? c.title, technique: v.technique ?? c.technique, confidence: v.score, rationale: v.rationale ?? '' });
+    // An empty-string title/technique from the model falls back to the candidate's original (trim() guards '  ').
+    const title = v.title?.trim() ? v.title : c.title;
+    const technique = v.technique?.trim() ? v.technique : c.technique;
+    kept.push({ ...c, title, technique, confidence: v.score, rationale: v.rationale ?? '' });
   });
 
   kept.sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));

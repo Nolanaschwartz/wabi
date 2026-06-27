@@ -274,6 +274,26 @@ describe('ResearchConfigService', () => {
         /tokenBudget/,
       );
     });
+
+    it('accepts a partial payload (omitting some fields) and writes only the provided keys', async () => {
+      prismaMock.researchConfig.update.mockResolvedValue({ id: 'singleton', maxTopicsPerRun: 3, tokenBudget: 50_000 });
+
+      await service.updateBounds({ maxTopicsPerRun: 3, tokenBudget: 50_000 } as any);
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { maxTopicsPerRun: 3, tokenBudget: 50_000 },
+      });
+    });
+
+    it('rejects a partial payload where the present field is out of range (still validates present fields)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ maxTopicsPerRun: 0 } as any), // 0 is below the min of 1
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('loadRunBounds', () => {

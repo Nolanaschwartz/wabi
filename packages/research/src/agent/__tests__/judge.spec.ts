@@ -7,12 +7,14 @@ import { Candidate, EvidenceTier } from '../../types';
 import type { ResearchGenerateObject } from '../research-generate';
 
 // Helper: wraps a single verdict in the {verdicts:[v]} envelope that matches JudgeSchema.
+// index: 0 is injected so the verdict matches candidate 0 by the index-based lookup (fix 2a).
 const verdict = (v: object, tokens = 5): jest.MockedFunction<ResearchGenerateObject> =>
-  jest.fn().mockResolvedValue({ object: { verdicts: [v] }, tokens }) as jest.MockedFunction<ResearchGenerateObject>;
+  jest.fn().mockResolvedValue({ object: { verdicts: [{ index: 0, ...v }] }, tokens }) as jest.MockedFunction<ResearchGenerateObject>;
 
 // Helper: wraps multiple verdicts in the batched envelope.
+// Each verdict gets its 0-based index injected so the index-based lookup can match it.
 const batchVerdict = (vs: object[], tokens = 5): jest.MockedFunction<ResearchGenerateObject> =>
-  jest.fn().mockResolvedValue({ object: { verdicts: vs }, tokens }) as jest.MockedFunction<ResearchGenerateObject>;
+  jest.fn().mockResolvedValue({ object: { verdicts: vs.map((v, i) => ({ index: i, ...v })) }, tokens }) as jest.MockedFunction<ResearchGenerateObject>;
 
 // A fake `genObj` with no default return — each test scripts its own return/reject.
 const genFn = (): jest.MockedFunction<ResearchGenerateObject> => jest.fn() as jest.MockedFunction<ResearchGenerateObject>;
@@ -151,4 +153,69 @@ it('counts tokens from genObj even when object is undefined (soft failure)', asy
   const out = await judgeCandidates(genObj, [candA], 'rct');
   expect(out.tokens).toBe(40);
   expect(out.candidates[0].confidence).toBe(0.5);
+});
+
+// ── Fix 2a: index-based verdict matching ──────────────────────────────────────────────────────────
+
+it('applies verdicts to the correct candidate by index when returned out of order', async () => {
+  // Model returns verdicts in reverse order (index 1 before index 0) — must be matched by index, not position.
+  const genObj = jest.fn().mockResolvedValue({
+    object: {
+      verdicts: [
+        { index: 1, faithful: true, scopeOk: true, score: 0.8, title: 'B-sharp', technique: 'b', rationale: 'r' },
+        { index: 0, faithful: true, scopeOk: true, score: 0.9, title: 'A-sharp', technique: 'a', rationale: 'r' },
+      ],
+    },
+    tokens: 10,
+  }) as jest.MockedFunction<ResearchGenerateObject>;
+  const out = await judgeCandidates(genObj, [candA, candB], 'rct');
+  const a = out.candidates.find((c) => c.sourceText === candA.sourceText);
+  const b = out.candidates.find((c) => c.sourceText === candB.sourceText);
+  expect(a?.confidence).toBe(0.9); // candA gets index-0 verdict (score 0.9)
+  expect(b?.confidence).toBe(0.8); // candB gets index-1 verdict (score 0.8)
+});
+
+it('falls open per-index on a truncated batch: missing index → 0.5, present ones judged normally', async () => {
+  // Two candidates; model only returns a verdict for index 0 — index 1 must fall open.
+  const genObj = jest.fn().mockResolvedValue({
+    object: {
+      verdicts: [
+        { index: 0, faithful: true, scopeOk: true, score: 0.9, title: 'A', technique: 'a', rationale: 'r' },
+      ],
+    },
+    tokens: 15,
+  }) as jest.MockedFunction<ResearchGenerateObject>;
+  const out = await judgeCandidates(genObj, [candA, candB], 'rct');
+  const a = out.candidates.find((c) => c.sourceText === candA.sourceText);
+  const b = out.candidates.find((c) => c.sourceText === candB.sourceText);
+  expect(a?.confidence).toBe(0.9); // judged normally
+  expect(b?.confidence).toBe(0.5); // fell open
+  expect(b?.rationale).toBe('judge unavailable');
+});
+
+// ── Fix 2c: transport throw respects the cap ──────────────────────────────────────────────────────
+
+it('caps at capForTier when a transport throw keeps all candidates at neutral', async () => {
+  // 6 candidates for 'rct' (cap=5). Transport throw → all at 0.5, but only 5 returned.
+  const candidates = ['A', 'B', 'C', 'D', 'E', 'F'].map((t) => mk(t));
+  const genObj = genFn();
+  genObj.mockRejectedValue(new Error('provider down'));
+  const r = await judgeCandidates(genObj, candidates, 'rct');
+  expect(r.candidates).toHaveLength(5); // capForTier('rct') = 5
+  expect(r.candidates.every((c) => c.confidence === 0.5)).toBe(true);
+});
+
+// ── Fix 2d: empty-string title/technique fallback ─────────────────────────────────────────────────
+
+it('falls back to the candidate title when the verdict returns an empty string title', async () => {
+  // An empty string title from the judge must not replace the candidate's original title.
+  const genObj = verdict({ faithful: true, scopeOk: true, score: 0.8, title: '', technique: 'ok', rationale: 'r' });
+  const r = await judgeCandidates(genObj, [mk('My Title')], 'rct');
+  expect(r.candidates[0].title).toBe('My Title'); // NOT ''
+});
+
+it('falls back to the candidate technique when the verdict returns an empty string technique', async () => {
+  const genObj = verdict({ faithful: true, scopeOk: true, score: 0.8, title: 'ok', technique: '', rationale: 'r' });
+  const r = await judgeCandidates(genObj, [mk('My Title')], 'rct');
+  expect(r.candidates[0].technique).toBe('do My Title'); // NOT ''
 });

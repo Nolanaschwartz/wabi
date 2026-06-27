@@ -182,13 +182,14 @@ describe('generateObject', () => {
     expect(r.usage).not.toHaveProperty('outputTokens');
   });
 
-  it('returns { object: undefined, usage: undefined } on AI_NoObjectGeneratedError — never throws', async () => {
+  it('preserves usage from AI_NoObjectGeneratedError — never throws', async () => {
     const err = new Error('no object');
     err.name = 'AI_NoObjectGeneratedError';
+    (err as any).usage = { totalTokens: 42 };
     aiGenerateObject.mockRejectedValue(err);
     const r = await generateObject('research', { prompt: 'p', schema, maxOutputTokens: 100 });
     expect(r.object).toBeUndefined();
-    expect(r.usage).toBeUndefined();
+    expect(r.usage?.totalTokens).toBe(42);
     expect(r.model).toBe('m'); // from beforeEach default
     expect(typeof r.latencyMs).toBe('number');
   });

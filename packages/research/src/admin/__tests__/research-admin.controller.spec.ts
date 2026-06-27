@@ -66,6 +66,9 @@ describe('ResearchAdminController', () => {
       agentTimeoutMs: 90000,
       runTimeoutMs: 600000,
       tokenBudget: 200000,
+      maxNeighborsConsidered: 15,
+      maxChasePerExpansion: 3,
+      budgetPressureFraction: 0.2,
     };
     const updated = { id: 'singleton', ...bounds };
     const service = { updateBounds: jest.fn().mockResolvedValue(updated) } as unknown as ResearchConfigService;

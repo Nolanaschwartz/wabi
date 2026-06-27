@@ -24,6 +24,7 @@ jest.mock('@wabi/shared/generate', () => ({
 const bounds: Bounds = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
   maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
+  maxNeighborsConsidered: 15, maxChasePerExpansion: 3, budgetPressureFraction: 0.2,
 };
 
 function pubmedThin(id: string): Paper {

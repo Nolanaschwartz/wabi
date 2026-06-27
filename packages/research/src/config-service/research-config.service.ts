@@ -141,8 +141,9 @@ export class ResearchConfigService implements OnModuleInit {
     const data: Partial<ResearchBounds> = {};
 
     for (const key of Object.keys(RANGES) as (keyof ResearchBounds)[]) {
-      const { min, max } = RANGES[key];
       const value = bounds[key];
+      if (value === undefined) continue; // partial update: omitted field keeps its current value
+      const { min, max } = RANGES[key];
       const isIntegerBound = Number.isInteger(min);
       const valid =
         typeof value === 'number' &&

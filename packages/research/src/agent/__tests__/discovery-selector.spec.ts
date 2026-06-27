@@ -33,14 +33,14 @@ it('fails open to top-maxChase on out-of-range / unparseable indices', async () 
   expect(out.ids).toEqual(['PMID:1']);
 });
 
-it('fails open to top-maxChase when all chosen indices are out-of-range', async () => {
+it('treats an all-out-of-range selection as an explicit empty result — returns []', async () => {
   const gen = jest.fn().mockResolvedValue({ text: JSON.stringify({ chase: [99, 100] }), usage: {} });
   const out = await selectNeighbors(gen as any, 'stress', source, neighbors, 2);
-  expect(out.ids).toEqual(['PMID:1', 'PMID:2']);
+  expect(out.ids).toEqual([]);
 });
 
-it('fails open to top-maxChase when the model selects nothing', async () => {
+it('honors an explicit empty selection ({"chase":[]}) — returns [] not floor', async () => {
   const gen = jest.fn().mockResolvedValue({ text: JSON.stringify({ chase: [] }), usage: {} });
   const out = await selectNeighbors(gen as any, 'stress', source, neighbors, 2);
-  expect(out.ids).toEqual(['PMID:1', 'PMID:2']);
+  expect(out.ids).toEqual([]);
 });

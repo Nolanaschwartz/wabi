@@ -44,6 +44,7 @@ const ZERO_RESULT: RunnerResult = {
 const TEST_BOUNDS = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 8, searchLimit: 40, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10, agentTimeoutMs: 90_000, runTimeoutMs: 600_000, tokenBudget: 200_000,
+  maxNeighborsConsidered: 15, maxChasePerExpansion: 3, budgetPressureFraction: 0.2,
 };
 
 type ConfigSlice = Pick<ResearchConfigService, 'getEnabledTopics' | 'getConfig' | 'loadRunBounds'>;

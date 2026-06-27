@@ -186,7 +186,8 @@ export async function generateObject<T>(role: ProviderRole, opts: GenerateObject
   } catch (err) {
     // Schema-validation / no-object failure is a returned value, not a throw — caller owns fail policy.
     if ((err as { name?: string })?.name === 'AI_NoObjectGeneratedError') {
-      return { object: undefined, usage: undefined, model: cfg.model, latencyMs: Date.now() - start };
+      const u = (err as { usage?: RawUsage }).usage;
+      return { object: undefined, usage: sumUsage([u]), model: cfg.model, latencyMs: Date.now() - start };
     }
     throw err; // transport errors still propagate
   }

@@ -46,5 +46,5 @@ export async function selectNeighbors(
     .slice(0, maxChase)
     .map((i) => neighbors[i].id);
 
-  return { ids: ids.length > 0 ? ids : floor(), tokens };
+  return { ids, tokens }; // explicit selection (possibly empty) is honored; floor() is only for failures
 }
