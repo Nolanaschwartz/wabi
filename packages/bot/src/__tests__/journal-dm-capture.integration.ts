@@ -77,7 +77,8 @@ describe('Journal DM two-turn capture integration', () => {
       }),
     } as any;
     const habitEngagement = { record: jest.fn().mockResolvedValue({ streak: 1, message: '', xpAwarded: 10 }) } as any;
-    const journalService = new JournalService(coach, habitEngagement);
+    const journalAccessResolver = { resolveAccount: jest.fn().mockResolvedValue({ timezone: 'UTC' }) } as any;
+    const journalService = new JournalService(coach, habitEngagement, journalAccessResolver);
     // The DM handler is now the DM adapter over the transport-free recorder (ADR-0031): it mints a
     // Screened proof from the upstream verdict (no re-screen) and runs the shared persist→derive→consent
     // tail. Use the real recorder with mocked memory/consent so the entry still persists for real.

@@ -24,6 +24,9 @@ jest.mock('../../habit-engagement/habit-engagement.service', () => ({
   })),
 }));
 
+// Stub AccessResolver so the spec doesn't pull its real module graph (UserService etc.).
+jest.mock('../../billing/access-resolver', () => ({ AccessResolver: jest.fn() }));
+
 // `write` now takes a ScreenedText proof, not a bare string (ADR-0031). Forge one for the spec — the
 // brand is erased at runtime and the mint is covered in crisis-screening.spec.
 const entry = (s: string) => ({ freeText: s, derivePrefix: 'Journal' }) as any;
@@ -40,7 +43,10 @@ describe('JournalService', () => {
     jest.clearAllMocks();
     coach = new CoachService() as any;
     habitEngagement = new HabitEngagementService(undefined as any, undefined as any) as any;
-    service = new JournalService(coach, habitEngagement);
+    const accessResolver = {
+      resolveAccount: jest.fn().mockResolvedValue({ timezone: 'America/Los_Angeles' }),
+    } as any;
+    service = new JournalService(coach, habitEngagement, accessResolver);
   });
 
   it('returns a prompt', async () => {
@@ -65,7 +71,9 @@ describe('JournalService', () => {
 
     const result = await service.write('123', entry('I had a good day today'));
 
-    expect(habitEngagement.record).toHaveBeenCalledWith('123', 'journal');
+    // Threads the person's tz (not a hardcoded 'UTC') so the journal Engagement buckets its day the
+    // same way coaching and /profile do.
+    expect(habitEngagement.record).toHaveBeenCalledWith('123', 'journal', 'America/Los_Angeles');
     expect(result.xpAwarded).toBe(10);
   });
 
