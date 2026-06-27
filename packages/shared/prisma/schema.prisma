@@ -109,12 +109,19 @@ model JournalEntry {
 }
 
 model XpEntry {
-  id        String   @id @default(uuid())
-  userId    String
-  amount    Int      // XP points
-  reason    String   // journal, mood, streak, etc.
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String
+  amount     Int      // XP points
+  reason     String   // journal, mood, streak, etc.
+  engagedDay String   // "YYYY-MM-DD" in the person's tz — the per-day dedup unit (ADR-0027)
+  createdAt  DateTime @default(now())
 
+  // One Engagement per (userId, engaged-day), enforced at the DB (ADR-0027). engagedDay is the
+  // person-tz calendar day computed by the single writer at insert time, so the constraint buckets on
+  // the SAME boundary the streak/profile reads use — no UTC-vs-person-tz asymmetry. Being a plain
+  // column, this unique index is created by db:push and the integration harness too (not just by a
+  // hand-authored migration), so the race guard exists in dev/test, not only in prod.
+  @@unique([userId, engagedDay])
   @@index([userId, createdAt])
   @@index([createdAt])
 }
