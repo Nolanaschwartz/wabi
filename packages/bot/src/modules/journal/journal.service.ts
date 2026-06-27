@@ -3,6 +3,7 @@ import { prisma } from '@wabi/shared';
 import { ScreenedText } from '../crisis/screened';
 import { CoachService } from '../coaching/coach.service';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
+import { AccessResolver } from '../billing/access-resolver';
 
 const PROMPTS = [
   "What's one thing that went well today?",
@@ -33,6 +34,7 @@ export class JournalService {
   constructor(
     private readonly coach: CoachService,
     private readonly habitEngagement: HabitEngagementService,
+    private readonly accessResolver: AccessResolver,
   ) {}
 
   async prompt(): Promise<string> {
@@ -57,8 +59,10 @@ export class JournalService {
     });
 
     // XP is awarded once per engaged day, so a second entry the same day still saves but does not
-    // re-award.
-    const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal');
+    // re-award. Thread the person's timezone (same source the coaching path uses) so the journal
+    // Engagement buckets its day boundary in the person's tz, agreeing with coaching and /profile.
+    const { timezone } = await this.accessResolver.resolveAccount(discordId);
+    const { xpAwarded } = await this.habitEngagement.record(discordId, 'journal', timezone);
 
     return { reflection: reflection || '', xpAwarded };
   }

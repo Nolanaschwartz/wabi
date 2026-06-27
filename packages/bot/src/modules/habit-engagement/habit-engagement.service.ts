@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { XpService } from '../xp/xp.service';
 import { StreaksService } from '../streaks/streaks.service';
+import { dayKeyInTZ } from '../../lib/timezone-util';
 
 export type Habit = 'coaching' | 'journal';
 
@@ -41,7 +42,21 @@ export class HabitEngagementService {
     }
 
     const xpAwarded = HABIT_XP[habit];
-    await this.xp.award(userId, xpAwarded, habit);
+    try {
+      // Key the Engagement on the person's own calendar day (same boundary the streak path uses), so a
+      // genuinely-new local day that happens to share a UTC day is never falsely rejected.
+      await this.xp.award(userId, xpAwarded, habit, dayKeyInTZ(timezone, new Date()));
+    } catch (err) {
+      // DB race backstop (ADR-0027). The app-level isNewDay check above is racy: two events
+      // (e.g. journal + coaching) landing in the same instant can both see "new day" and both try
+      // to log today's Engagement. The (userId, engagedDay) unique index on XpEntry rejects the second
+      // insert with a Prisma unique-constraint violation (P2002). Treat that as a benign "already
+      // engaged today": no second award, no error surfaced — the same outcome as the same-day path.
+      if ((err as { code?: string })?.code === 'P2002') {
+        return { streak: transition.streak, message: transition.message, xpAwarded: 0 };
+      }
+      throw err;
+    }
     return { streak: transition.streak, message: transition.message, xpAwarded };
   }
 
@@ -51,16 +66,19 @@ export class HabitEngagementService {
    * both collaborators, so neither leaf model has to reach into the other (Streaks no longer depends on
    * XP). Each field reads the Engagement log independently, so they fetch concurrently.
    */
-  async profile(userId: string): Promise<{
+  async profile(userId: string, timezone = 'UTC'): Promise<{
     xp: number;
     streak: number;
     wellnessScore: number;
     wellnessLevel: string;
   }> {
+    // The Streak and Wellness Score must bucket day boundaries in the PERSON's timezone — the same tz
+    // the coaching path threads into advance — so /profile shows the same number the coaching reply does
+    // (the day ticks over at the person's midnight, not the server's). XP total is a tz-free sum.
     const [xp, streak, wellness] = await Promise.all([
       this.xp.total(userId),
-      this.streaks.getCurrentStreak(userId),
-      this.streaks.wellnessScore(userId),
+      this.streaks.getCurrentStreak(userId, timezone),
+      this.streaks.wellnessScore(userId, timezone),
     ]);
 
     return { xp, streak, wellnessScore: wellness.score, wellnessLevel: wellness.level };

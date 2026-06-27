@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Context, SlashCommand, SlashCommandContext } from 'necord';
 import { MessageFlags } from 'discord.js';
 import { HabitEngagementService } from './habit-engagement.service';
+import { AccessResolver } from '../billing/access-resolver';
 import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
 
 /**
@@ -12,14 +13,21 @@ import { COMMAND_CONTEXTS } from '../../lib/command-contexts';
  */
 @Injectable()
 export class ProfileController {
-  constructor(private readonly engagement: HabitEngagementService) {}
+  constructor(
+    private readonly engagement: HabitEngagementService,
+    private readonly accessResolver: AccessResolver,
+  ) {}
 
   @SlashCommand({ name: 'profile', description: 'View your wellness profile', ...COMMAND_CONTEXTS })
   async execute(@Context() [interaction]: SlashCommandContext): Promise<void> {
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     try {
-      const profile = await this.engagement.profile(interaction.user.id);
+      // Resolve the person's timezone from the SAME source the coaching path uses (AccessResolver),
+      // so the Streak and Wellness Score on /profile bucket day boundaries identically to the coaching
+      // reply and agree on the number (defaults to 'UTC' when unset).
+      const { timezone } = await this.accessResolver.resolveAccount(interaction.user.id);
+      const profile = await this.engagement.profile(interaction.user.id, timezone);
 
       await interaction.editReply({
         content: `**${interaction.user.username}'s Profile**
