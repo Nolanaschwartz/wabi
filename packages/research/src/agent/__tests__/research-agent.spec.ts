@@ -4,7 +4,8 @@ import { Bounds, Candidate, Paper, SourceKind } from '../../types';
 
 const bounds: Bounds = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
-  maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
+  maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000, budgetPressureFraction: 0.2,
+  maxNeighborsConsidered: 10, maxChasePerExpansion: 5,
 };
 
 /** A thin PubMed paper as the adapter's search() now yields it: id+kind+url, abstract filled by hydrate. */
@@ -282,6 +283,15 @@ describe('ResearchAgent', () => {
     const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) },
       { extract, gate: jest.fn().mockResolvedValue({ keep: true, tokens: 85 }) });
     await new ResearchAgent(deps, { ...bounds, tokenBudget: 100 }).run('topic');
+    expect(extract.mock.calls[0][3]).toHaveLength(1);
+  });
+
+  it('collapses to one lens when remaining budget < tokenBudget * budgetPressureFraction', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 0 });
+    // gate pre-spends 60 of a 100 budget, so 40% remains; with budgetPressureFraction=0.5, <50% trips collapse.
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) },
+      { extract, gate: jest.fn().mockResolvedValue({ keep: true, tokens: 60 }) });
+    await new ResearchAgent(deps, { ...bounds, tokenBudget: 100, budgetPressureFraction: 0.5 }).run('topic');
     expect(extract.mock.calls[0][3]).toHaveLength(1);
   });
 

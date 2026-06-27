@@ -9,10 +9,6 @@ import { lensesForTier } from './lenses';
 import { Concepts } from '../sources/query/concepts';
 import { queryForKind } from '../sources/query/for-kind';
 
-// Below this fraction of the token budget remaining, fan a paper out across a SINGLE lens instead of
-// the full set — lenses fall before papers, so a near-exhausted run still mines something per paper.
-const BUDGET_PRESSURE_FRACTION = 0.2;
-
 export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
    * The agent dispatches hydrate/fullText/expand to `sources.get(paper.sourceKind)` (ADR-0036). */
@@ -217,7 +213,7 @@ export class ResearchAgent {
         // Tier-scaled lens fan-out; under budget pressure collapse to one lens (lenses fall before papers).
         const tier = evidenceTier(paper);
         let lenses = lensesForTier(tier);
-        if (this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * BUDGET_PRESSURE_FRACTION) {
+        if (this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * this.bounds.budgetPressureFraction) {
           lenses = lenses.slice(0, 1);
         }
 
