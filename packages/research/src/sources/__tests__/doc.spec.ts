@@ -62,6 +62,29 @@ describe('fetchAndParseDoc', () => {
     expect(parsePdf).not.toHaveBeenCalled();
   });
 
+  it('caps an oversized streamed body incrementally (aborts before draining the whole stream)', async () => {
+    const parsePdf = jest.fn();
+    let pulled = 0;
+    async function* body() {
+      const first = new Uint8Array(400); first.set(PDF_MAGIC, 0); // carries %PDF magic
+      pulled++; yield first;
+      for (let i = 0; i < 50; i++) { pulled++; yield new Uint8Array(400); } // 50*400 = 20KB, cap is 1000
+    }
+    const res = {
+      ok: true,
+      status: 200,
+      headers: { get: () => null }, // no Content-Length — the early declared-size reject can't fire
+      body: body(),
+      arrayBuffer: async () => { throw new Error('must not buffer the whole body'); },
+    } as unknown as Response;
+    const fetchFn = jest.fn().mockResolvedValue(res);
+    const text = await fetchAndParseDoc('https://x/big.pdf', baseOpts({ fetchFn: fetchFn as any, maxDocBytes: 1000, parsePdf }));
+    expect(text).toBeNull();
+    expect(parsePdf).not.toHaveBeenCalled();
+    expect(pulled).toBeGreaterThan(0); // it streamed (the old arrayBuffer path never touches body)
+    expect(pulled).toBeLessThan(10);   // and aborted early — did NOT drain all 51 chunks into memory
+  });
+
   it('truncates parsed text to maxTextChars', async () => {
     const parsePdf = jest.fn().mockResolvedValue('x'.repeat(5000));
     const text = await fetchAndParseDoc('https://x/paper.pdf', baseOpts({ maxTextChars: 100, parsePdf }));

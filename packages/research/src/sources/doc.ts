@@ -44,15 +44,33 @@ async function unpdfParse(buf: Uint8Array): Promise<string> {
  * (deferring the load until a Word doc is actually parsed) and hand it a Node `Buffer` — it does not
  * accept a bare Uint8Array. A non-Word ZIP (.xlsx/.pptx/plain zip) throws, which the caller catches
  * and turns into a null → abstract fallback, so no pre-sniffing of `word/document.xml` is needed. */
+// ponytail: extractRawText runs CPU-bound zip-inflate + XML parse synchronously on the event loop,
+// and the byte cap bounds the *download* not the *decompression* (a crafted docx could inflate huge).
+// Same property as the existing unpdf path; reputable academic sources make this low-risk. Upgrade
+// path if it ever bites: run extraction in a worker thread / add a decompressed-size guard.
 async function mammothParse(buf: Uint8Array): Promise<string> {
   const mammoth = require('mammoth') as typeof import('mammoth');
   const { value } = await mammoth.extractRawText({ buffer: Buffer.from(buf) });
   return value ?? '';
 }
 
-/** First four bytes as space-separated hex, for the unsupported-format log line. */
-function magicHex(bytes: Uint8Array): string {
-  return [...bytes.slice(0, 4)].map((b) => b.toString(16).padStart(2, '0')).join(' ');
+/** Read the response body, enforcing the byte cap as chunks arrive so a headerless oversized
+ * download is aborted (the stream is cancelled) before the whole body is buffered. Falls back to
+ * arrayBuffer() when the runtime gives no streamable body (e.g. a mocked Response in tests). */
+async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!res.body) {
+    const u8 = new Uint8Array(await res.arrayBuffer());
+    if (u8.byteLength > maxBytes) throw new Error(`doc too large (received ${u8.byteLength} > ${maxBytes})`);
+    return u8;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+    total += chunk.byteLength;
+    if (total > maxBytes) throw new Error(`doc too large (streamed > ${maxBytes})`); // throwing cancels the stream
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 /** Detect the supported document format from the leading magic bytes, or null for anything else
@@ -73,18 +91,16 @@ export async function fetchAndParseDoc(url: string, opts: FetchDocOpts): Promise
   try {
     const bytes = await opts.schedule(async () => {
       const res = await opts.fetchFn(url);
-      if (!res.ok) throw new Error(`PDF HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`doc HTTP ${res.status}`);
       // Reject early on the server's declared size, before buffering the body.
       const declared = Number(res.headers.get('content-length'));
       if (Number.isFinite(declared) && declared > opts.maxDocBytes) {
-        throw new Error(`PDF too large (declared ${declared} > ${opts.maxDocBytes})`);
+        throw new Error(`doc too large (declared ${declared} > ${opts.maxDocBytes})`);
       }
-      const u8 = new Uint8Array(await res.arrayBuffer());
-      // Re-check against the actual received length (Content-Length may be absent or lie).
-      if (u8.byteLength > opts.maxDocBytes) {
-        throw new Error(`PDF too large (received ${u8.byteLength} > ${opts.maxDocBytes})`);
-      }
-      return u8;
+      // Enforce the cap as bytes arrive (Content-Length may be absent or lie) so a headerless
+      // oversized download aborts before the whole body is buffered — the always-on worker must
+      // not OOM on a single fetch.
+      return readCapped(res, opts.maxDocBytes);
     });
 
     await archiveDoc(url, bytes, log); // tee to disk when RESEARCH_PDF_DIR is set (temporary)
@@ -93,7 +109,7 @@ export async function fetchAndParseDoc(url: string, opts: FetchDocOpts): Promise
     // → abstract fallback (cleanly and silently).
     const format = detectFormat(bytes);
     if (!format) {
-      log.info('doc skipped: unsupported format', { url, bytes: bytes.byteLength, magic: magicHex(bytes) });
+      log.info('doc skipped: unsupported format', { url, bytes: bytes.byteLength, magic: Buffer.from(bytes.subarray(0, 4)).toString('hex') });
       return null;
     }
     const parse = format === 'pdf' ? (opts.parsePdf ?? unpdfParse) : (opts.parseDocx ?? mammothParse);

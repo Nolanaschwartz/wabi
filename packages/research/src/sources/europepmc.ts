@@ -4,6 +4,7 @@ import { Source } from './source';
 import { Logger, noopLogger } from './../util/logger';
 import { fetchAndParseDoc } from './doc';
 import { fetchWithRetry } from './fetch-retry';
+import { sourceMaxDocBytes, sourceMaxTextChars } from '../config';
 
 const SEARCH = 'https://www.ebi.ac.uk/europepmc/webservices/rest/search';
 
@@ -29,6 +30,7 @@ export interface EuropePmcDeps {
   maxDocBytes?: number;
   maxTextChars?: number;
   parsePdf?: (buf: Uint8Array) => Promise<string>;
+  parseDocx?: (buf: Uint8Array) => Promise<string>;
   log?: Logger;
 }
 
@@ -48,6 +50,7 @@ export class EuropePmcSource implements Source {
   private readonly maxDocBytes: number;
   private readonly maxTextChars: number;
   private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
+  private readonly parseDocx?: (buf: Uint8Array) => Promise<string>;
   private readonly log: Logger;
   // sourceId -> the result, so fullText can find the PDF url from the paper that search returned.
   private byId = new Map<string, EpmcResult>();
@@ -56,9 +59,10 @@ export class EuropePmcSource implements Source {
     this.fetchFn = deps.fetchFn ?? fetch;
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 350);
     this.pageSize = deps.pageSize ?? 100;
-    this.maxDocBytes = deps.maxDocBytes ?? 20_000_000;
-    this.maxTextChars = deps.maxTextChars ?? 50_000;
+    this.maxDocBytes = deps.maxDocBytes ?? sourceMaxDocBytes('europepmc');
+    this.maxTextChars = deps.maxTextChars ?? sourceMaxTextChars('europepmc');
     this.parsePdf = deps.parsePdf;
+    this.parseDocx = deps.parseDocx;
     this.log = deps.log ?? noopLogger;
   }
 
@@ -132,6 +136,7 @@ export class EuropePmcSource implements Source {
       maxDocBytes: this.maxDocBytes,
       maxTextChars: this.maxTextChars,
       parsePdf: this.parsePdf,
+      parseDocx: this.parseDocx,
       log: this.log,
     });
   }

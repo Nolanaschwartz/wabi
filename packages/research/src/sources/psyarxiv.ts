@@ -3,6 +3,7 @@ import { Paper } from '../types';
 import { Source } from './source';
 import { Logger, noopLogger } from '../util/logger';
 import { fetchAndParseDoc } from './doc';
+import { sourceMaxDocBytes, sourceMaxTextChars } from '../config';
 
 const BASE = 'https://api.osf.io/v2/preprints/';
 
@@ -24,6 +25,7 @@ export interface PsyArxivDeps {
   maxDocBytes?: number;
   maxTextChars?: number;
   parsePdf?: (buf: Uint8Array) => Promise<string>;
+  parseDocx?: (buf: Uint8Array) => Promise<string>;
   log?: Logger;
 }
 
@@ -43,6 +45,7 @@ export class PsyArxivSource implements Source {
   private readonly maxDocBytes: number;
   private readonly maxTextChars: number;
   private readonly parsePdf?: (buf: Uint8Array) => Promise<string>;
+  private readonly parseDocx?: (buf: Uint8Array) => Promise<string>;
   private readonly log: Logger;
 
   constructor(deps: PsyArxivDeps = {}) {
@@ -50,9 +53,10 @@ export class PsyArxivSource implements Source {
     this.token = deps.token ?? (process.env.OSF_TOKEN || undefined);
     this.limiter = new RateLimiter(deps.minIntervalMs ?? 1000);
     this.pageSize = deps.pageSize ?? 50;
-    this.maxDocBytes = deps.maxDocBytes ?? 20_000_000;
-    this.maxTextChars = deps.maxTextChars ?? 50_000;
+    this.maxDocBytes = deps.maxDocBytes ?? sourceMaxDocBytes('psyarxiv');
+    this.maxTextChars = deps.maxTextChars ?? sourceMaxTextChars('psyarxiv');
     this.parsePdf = deps.parsePdf;
+    this.parseDocx = deps.parseDocx;
     this.log = deps.log ?? noopLogger;
   }
 
@@ -135,6 +139,7 @@ export class PsyArxivSource implements Source {
       maxDocBytes: this.maxDocBytes,
       maxTextChars: this.maxTextChars,
       parsePdf: this.parsePdf,
+      parseDocx: this.parseDocx,
       log: this.log,
     });
   }

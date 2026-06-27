@@ -36,4 +36,10 @@ describe('sourceMaxDocBytes', () => {
     expect(sourceMaxDocBytes('psyarxiv')).toBe(7000); // per-source override
     expect(sourceMaxDocBytes('europepmc')).toBe(5000); // others keep the shared value
   });
+
+  it('falls through a BLANK per-source override to the shared tier (not the built-in default)', () => {
+    process.env.RESEARCH_MAX_DOC_BYTES = '5000000';
+    process.env.RESEARCH_PSYARXIV_MAX_DOC_BYTES = ''; // blank, e.g. left over after an edit
+    expect(sourceMaxDocBytes('psyarxiv')).toBe(5000000); // shared value, NOT the 20MB default
+  });
 });

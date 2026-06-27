@@ -9,7 +9,9 @@ export type SourceKindName = 'pubmed' | 'psyarxiv' | 'europepmc';
  * `RESEARCH_<KEY>` overrides the built-in default. Empty/invalid values fall through to the next
  * tier (so `FOO=` doesn't silently mean 0). Resolved lazily per call — never frozen at import. */
 function sourceNum(kind: SourceKindName, key: string, fallback: number): number {
-  const raw = process.env[`RESEARCH_${kind.toUpperCase()}_${key}`] ?? process.env[`RESEARCH_${key}`];
+  // `||` (not `??`) so a blank per-source override (`RESEARCH_<KIND>_<KEY>=`) falls through to the
+  // shared tier — '' and undefined are the only falsy strings here ('0' stays truthy).
+  const raw = process.env[`RESEARCH_${kind.toUpperCase()}_${key}`] || process.env[`RESEARCH_${key}`];
   const n = Number(raw);
   return raw !== undefined && raw !== '' && Number.isFinite(n) ? n : fallback;
 }
