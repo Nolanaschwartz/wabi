@@ -13,8 +13,9 @@
  * libraries never enter @wabi/web's bundle graph (it imports the barrel and runs no inference).
  */
 import { createOpenAI } from '@ai-sdk/openai';
-import { generateText } from 'ai';
+import { generateText, generateObject as aiGenerateObject } from 'ai';
 import type { Tracer } from '@opentelemetry/api';
+import type { ZodSchema } from 'zod';
 import { getProvider, type ProviderRole } from './provider';
 
 /**
@@ -156,4 +157,37 @@ export async function generate(role: ProviderRole, opts: GenerateOptions): Promi
   }
 
   return { text, usage: sumUsage(usageParts), model: cfg.model, latencyMs };
+}
+
+/**
+ * Structured-output sibling of `generate` (ADR-0037). Resolves the provider lazily, runs the AI
+ * SDK's `generateObject`, and returns the typed object + normalised usage. Schema-validation /
+ * no-object failures return `{ object: undefined, ... }` — the caller owns fail policy (never
+ * throws on a parse error). Transport errors propagate unchanged so each call site maps them to its
+ * own domain fail-open value. No retry, no telemetry wiring — these belong to callers that need them.
+ */
+export interface GenerateObjectOptions<T> extends Omit<GenerateOptions, never> { schema: ZodSchema<T>; }
+export interface GenerateObjectResult<T> { object?: T; usage?: GenerateUsage; model: string; latencyMs: number; }
+
+export async function generateObject<T>(role: ProviderRole, opts: GenerateObjectOptions<T>): Promise<GenerateObjectResult<T>> {
+  const cfg = getProvider(role);
+  const openai = createOpenAI({ baseURL: cfg.baseUrl, apiKey: cfg.apiKey });
+  const start = Date.now();
+  try {
+    const res = await aiGenerateObject({
+      model: openai(cfg.model),
+      schema: opts.schema,
+      system: opts.system,
+      prompt: opts.prompt,
+      temperature: opts.temperature,
+      maxOutputTokens: opts.maxOutputTokens,
+    });
+    return { object: res.object as T, usage: sumUsage([res.usage as RawUsage]), model: cfg.model, latencyMs: Date.now() - start };
+  } catch (err) {
+    // Schema-validation / no-object failure is a returned value, not a throw — caller owns fail policy.
+    if ((err as { name?: string })?.name === 'AI_NoObjectGeneratedError') {
+      return { object: undefined, usage: undefined, model: cfg.model, latencyMs: Date.now() - start };
+    }
+    throw err; // transport errors still propagate
+  }
 }

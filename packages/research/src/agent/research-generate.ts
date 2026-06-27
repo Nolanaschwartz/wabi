@@ -1,6 +1,7 @@
-import { generate, type GenerateResult } from '@wabi/shared/generate';
+import { generate, generateObject, type GenerateResult } from '@wabi/shared/generate';
 import { extractMaxTokens, triageMaxTokens } from '../config';
 import type { ResearchSpanInput, ResearchSpanName } from './research-tracer';
+import type { ZodSchema } from 'zod';
 
 /** The slice of the tracer the seam needs: emit one span. Kept as a structural interface (not the
  * concrete class) so a test hands `gen` a fake tracer. Mirrors {@link AgentTracer} in research-agent. */
@@ -79,5 +80,42 @@ export function makeResearchGenerate(tracer?: SpanEmitter, runId?: string): Rese
     }
 
     return result;
+  };
+}
+
+/**
+ * The structured-output sibling of {@link ResearchGenerate}. A step calls
+ * `genObj(spanName, role, { prompt, schema })`; the seam binds the role's standard output cap,
+ * runs `generateObject`, and ON SUCCESS emits the same Langfuse generation span shape as `gen`.
+ * Transport errors propagate; no-object (schema/validation failure) returns object undefined with
+ * tokens 0 — the caller owns fail policy. Tracing stays fail-open per ADR-0021.
+ */
+export type ResearchGenerateObject = <T>(
+  spanName: ResearchSpanName,
+  role: ResearchRole,
+  opts: { prompt: string; schema: ZodSchema<T>; system?: string; temperature?: number },
+) => Promise<{ object?: T; tokens: number }>;
+
+export function makeResearchGenerateObject(tracer?: SpanEmitter, runId?: string): ResearchGenerateObject {
+  return async (spanName, role, opts) => {
+    const result = await generateObject(role, { ...opts, maxOutputTokens: capForRole(role) });
+
+    if (tracer && runId) {
+      try {
+        tracer.span({
+          runId,
+          span: spanName,
+          input: opts.prompt,
+          output: JSON.stringify(result.object ?? null),
+          model: result.model,
+          usage: { inputTokens: result.usage?.inputTokens, outputTokens: result.usage?.outputTokens },
+          latencyMs: result.latencyMs,
+        });
+      } catch {
+        // swallowed — a tracing error is never allowed to break a run
+      }
+    }
+
+    return { object: result.object, tokens: result.usage?.totalTokens ?? 0 };
   };
 }

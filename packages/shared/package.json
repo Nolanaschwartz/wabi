@@ -46,7 +46,8 @@
     "@opentelemetry/sdk-trace-base": "^2.8.0",
     "@opentelemetry/sdk-trace-node": "^2.8.0",
     "@prisma/client": "^6.15.0",
-    "ai": "^6.0.197"
+    "ai": "^6.0.197",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
