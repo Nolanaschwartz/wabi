@@ -70,7 +70,12 @@ async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> 
     if (total > maxBytes) throw new Error(`doc too large (streamed > ${maxBytes})`); // throwing cancels the stream
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks);
+  // Concat into a *plain* Uint8Array, not a Buffer: unpdf's extractText rejects Buffer
+  // ("provide binary data as Uint8Array"). mammoth (Buffer.from) accepts either.
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.byteLength; }
+  return out;
 }
 
 /** Detect the supported document format from the leading magic bytes, or null for anything else
