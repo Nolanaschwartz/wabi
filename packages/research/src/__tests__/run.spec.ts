@@ -2,8 +2,9 @@ import { runResearch, RunDeps } from '../run';
 import { Bounds, Candidate } from '../types';
 
 const bounds: Bounds = {
-  maxTopicsPerRun: 2, maxPapersPerTopic: 8, searchLimit: 40, maxDiscoverySteps: 2, maxDraftsPerTopic: 3,
-  maxDraftsPerRun: 3, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
+  maxTopicsPerRun: 2, maxPapersPerTopic: 8, searchLimit: 40, maxDiscoverySteps: 2,
+  maxNeighborsConsidered: 15, maxChasePerExpansion: 3, budgetPressureFraction: 0.2,
+  maxDraftsPerTopic: 3, maxDraftsPerRun: 3, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
 };
 const cand = (id: string): Candidate => ({
   title: `t${id}`, technique: `q${id}`, sourceText: 's', evidence: 'e', evidenceTier: 'rct', sourceUrl: 'u',

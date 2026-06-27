@@ -170,6 +170,9 @@ describe('ResearchConfigService', () => {
       maxTopicsPerRun: 5,
       maxPapersPerTopic: 8,
       maxDiscoverySteps: 2,
+      maxNeighborsConsidered: 15,
+      maxChasePerExpansion: 3,
+      budgetPressureFraction: 0.2,
       maxDraftsPerTopic: 3,
       maxDraftsPerRun: 10,
       agentTimeoutMs: 90000,
@@ -262,8 +265,9 @@ describe('ResearchConfigService', () => {
     it('reads the singleton once and maps it to a full Bounds (searchLimit from env)', async () => {
       delete process.env[KEY];
       const row = {
-        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
-        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
+        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3,
+        maxNeighborsConsidered: 20, maxChasePerExpansion: 5, budgetPressureFraction: 0.3,
+        maxDraftsPerTopic: 4, maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
       };
       prismaMock.researchConfig.findUnique.mockResolvedValue(row);
 
