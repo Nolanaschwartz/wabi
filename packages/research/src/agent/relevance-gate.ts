@@ -22,8 +22,8 @@ export async function relevanceGate(genObj: ResearchGenerateObject, abstract: st
       `${SCOPE_FRAGMENT}\n\n` +
       `Topic: "${topic}". Could this abstract plausibly yield an in-scope practice relevant to that ` +
       `topic — directly, or via a transferable mechanism — either a technique it describes OR a ` +
-      `finding that directly supports one? Answer "no" if it is out of scope or unrelated to the ` +
-      `topic. Answer only "yes" or "no".\n\n` +
+      `finding that directly supports one? Return {"keep": true} if it could plausibly yield an ` +
+      `in-scope practice relevant to the topic, or {"keep": false} if it is out of scope or unrelated.\n\n` +
       `Abstract: ${abstract}`;
     const { object, tokens } = await genObj('gate', 'research-triage', {
       prompt,
