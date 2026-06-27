@@ -9,7 +9,9 @@ export type SourceKindName = 'pubmed' | 'psyarxiv' | 'europepmc';
  * `RESEARCH_<KEY>` overrides the built-in default. Empty/invalid values fall through to the next
  * tier (so `FOO=` doesn't silently mean 0). Resolved lazily per call — never frozen at import. */
 function sourceNum(kind: SourceKindName, key: string, fallback: number): number {
-  const raw = process.env[`RESEARCH_${kind.toUpperCase()}_${key}`] ?? process.env[`RESEARCH_${key}`];
+  // `||` (not `??`) so a blank per-source override (`RESEARCH_<KIND>_<KEY>=`) falls through to the
+  // shared tier — '' and undefined are the only falsy strings here ('0' stays truthy).
+  const raw = process.env[`RESEARCH_${kind.toUpperCase()}_${key}`] || process.env[`RESEARCH_${key}`];
   const n = Number(raw);
   return raw !== undefined && raw !== '' && Number.isFinite(n) ? n : fallback;
 }
@@ -18,6 +20,13 @@ function sourceNum(kind: SourceKindName, key: string, fallback: number): number 
  * `RESEARCH_MAX_TEXT_CHARS` fallback as the preprint sources. */
 export function sourceMaxTextChars(kind: SourceKindName): number {
   return sourceNum(kind, 'MAX_TEXT_CHARS', 50_000);
+}
+
+/** Full-text download byte cap (oversize -> abstract fallback), shared across the preprint sources
+ * with the same 3-tier `RESEARCH_MAX_DOC_BYTES` / `RESEARCH_<KIND>_MAX_DOC_BYTES` fallback. Caps both
+ * PDF and DOCX downloads. Resolved lazily per call — never frozen at import. */
+export function sourceMaxDocBytes(kind: SourceKindName): number {
+  return sourceNum(kind, 'MAX_DOC_BYTES', 20_000_000);
 }
 
 // Run Bounds (caps + defaults + ranges) now live in run-bounds.ts, sourced from the ResearchConfig

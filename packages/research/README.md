@@ -57,8 +57,9 @@ implementations and is invoked by the `research-run` consumer.
 - `sources/` — each adapter implements the uniform `Source` interface (`source.ts`, ADR-0036)
   and owns its own id keyspace (`PMID:` / `doi:` / `osf:`): `pubmed.ts` (NCBI E-utilities +
   BioC/Europe PMC full text, id-based thin papers — hydrate before the gate), `europepmc.ts`
-  (Europe PMC search, complete papers), `psyarxiv.ts` (OSF API v2 preprints). `pdf.ts` is the
-  shared fetch+parse (with an optional local archive). `query/` turns a topic into search
+  (Europe PMC search, complete papers), `psyarxiv.ts` (OSF API v2 preprints). `doc.ts` is the
+  shared fetch+parse — magic-byte dispatch to PDF (unpdf) or DOCX (mammoth), with an optional local
+  archive. `query/` turns a topic into search
   concepts via the gate model and renders them into each source's query syntax — server-side
   topical search (ADR-0039). Fixture-backed tests.
 - `agent/` — the LLM pipeline: `relevance-gate.ts`, `extract.ts` / `extract-with-lenses.ts`
@@ -100,9 +101,9 @@ Reads the canonical root `.env`. Relevant vars:
   anonymous rate limit). Tuning is **shared** across the windowed preprint sources (medRxiv,
   PsyArXiv) via `config.ts` → `loadSourceConfig`: set the shared `RESEARCH_<KEY>` and override one
   source with `RESEARCH_<SOURCE>_<KEY>`. Keys (defaults): `WINDOW_DAYS` (60), `MAX_RECORDS` (1500),
-  `MIN_TERM_FRACTION` (0.5), `MAX_PDF_BYTES` (20MB), `MAX_TEXT_CHARS` (50000). `MAX_TEXT_CHARS` also
-  caps PubMed BioC/Europe PMC full text (`sourceMaxTextChars`). e.g. `RESEARCH_MAX_PDF_BYTES` for all,
-  `RESEARCH_PSYARXIV_MAX_PDF_BYTES` to override just PsyArXiv.
+  `MIN_TERM_FRACTION` (0.5), `MAX_DOC_BYTES` (20MB, caps PDF+DOCX downloads), `MAX_TEXT_CHARS` (50000).
+  `MAX_TEXT_CHARS` also caps PubMed BioC/Europe PMC full text (`sourceMaxTextChars`). e.g.
+  `RESEARCH_MAX_DOC_BYTES` for all, `RESEARCH_PSYARXIV_MAX_DOC_BYTES` to override just PsyArXiv.
 - **Run bounds** — the `RESEARCH_MAX_*` vars are now **seed defaults only**; once the worker has
   booted, the `ResearchConfig` singleton (editable from `/admin/research`) is the source of truth.
 

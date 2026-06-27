@@ -6,6 +6,7 @@ import { Source } from '../sources/source';
 import { PubMedTool } from '../sources/pubmed';
 import { createPsyArxivSource } from '../sources/psyarxiv';
 import { EuropePmcSource } from '../sources/europepmc';
+import { sourceMaxDocBytes } from '../config';
 import { relevanceGate } from '../agent/relevance-gate';
 import { topicToConcepts } from '../sources/query/concepts';
 import { extractWithLenses } from '../agent/extract-with-lenses';
@@ -132,8 +133,10 @@ function defaultBuildAgent(bounds: Bounds, log: Logger): BuiltAgent {
   // here (per-run, after ConfigModule loads), never frozen at import.
   const sources = new Map<SourceKind, Source>([
     ['pubmed', new PubMedTool({ apiKey: process.env.NCBI_API_KEY })],
-    ['europepmc', new EuropePmcSource({ log })], // medRxiv/bioRxiv preprints via topical SRC:PPR search (ADR-0039)
-    ['psyarxiv', createPsyArxivSource({ token: process.env.OSF_TOKEN, log })],
+    // medRxiv/bioRxiv preprints via topical SRC:PPR search (ADR-0039). maxDocBytes wired from the env
+    // knob (RESEARCH_MAX_DOC_BYTES / per-kind) so the documented cap is actually honored.
+    ['europepmc', new EuropePmcSource({ log, maxDocBytes: sourceMaxDocBytes('europepmc') })],
+    ['psyarxiv', createPsyArxivSource({ token: process.env.OSF_TOKEN, log, maxDocBytes: sourceMaxDocBytes('psyarxiv') })],
   ]);
 
   // One tracer + one runId for the whole run (every topic's agent hangs under the same parent trace).
