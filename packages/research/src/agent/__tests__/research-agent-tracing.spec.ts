@@ -1,18 +1,25 @@
 /**
- * ResearchAgent ↔ tracing wiring. The orchestrator builds ONE `gen` seam per run from the run's tracer
- * + run-id and passes it into each step; the step's span is emitted INSIDE `gen` on a successful call
- * (the orchestrator no longer re-emits a per-step trace). Tracing is additive — a run completes
- * identically whether the tracer is absent, disabled, or THROWS (it must never break a run, ADR-0021).
+ * ResearchAgent ↔ tracing wiring. The orchestrator builds `gen` (text seam) and `genObj` (structured-
+ * output seam) ONCE per run from the run's tracer + run-id, and passes the right one into each step:
+ * genObj → gate/extract/merge/judge; gen → dedup + discovery-selector. Each seam emits its span INSIDE
+ * the seam on a successful call — the orchestrator no longer threads or re-emits per-step traces.
+ * Tracing is additive — a run completes identically whether the tracer is absent, disabled, or THROWS
+ * (it must never break a run, ADR-0021).
  *
- * The steps are faked here, so to prove the wiring the fakes CALL the `gen` they were handed (with their
- * own span name) — that is exactly what the real steps do, and it routes through to the injected tracer.
+ * The steps are faked here, so to prove the wiring the fakes CALL the seam they were handed (with
+ * their own span name) — that is exactly what the real steps do, and it routes through to the tracer.
  */
 import { ResearchAgent, AgentDeps, ExtractionPipeline } from '../research-agent';
 import { Source } from '../../sources/source';
 import { Bounds, Candidate, Paper, SourceKind } from '../../types';
-import type { ResearchGenerate } from '../research-generate';
+import type { ResearchGenerate, ResearchGenerateObject } from '../research-generate';
+import { z } from 'zod';
 
-jest.mock('@wabi/shared/generate', () => ({ generate: jest.fn().mockResolvedValue({ text: 'ok', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, model: 'm', latencyMs: 3 }) }));
+// Both seams must be mocked: `gen` (text) for dedup/discovery, `genObj` (structured) for gate/extract/merge/judge.
+jest.mock('@wabi/shared/generate', () => ({
+  generate: jest.fn().mockResolvedValue({ text: 'ok', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, model: 'm', latencyMs: 3 }),
+  generateObject: jest.fn().mockResolvedValue({ object: null, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, model: 'm', latencyMs: 3 }),
+}));
 
 const bounds: Bounds = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
@@ -45,16 +52,30 @@ function preprintSource(kind: SourceKind): Source {
     fullText: jest.fn().mockResolvedValue(null) } as Source;
 }
 
-// Pipeline-step fakes that each drive the handed `gen` with their own span name, mirroring the real steps —
-// so a span flows through to the injected tracer exactly when the orchestrator wired `gen` correctly. The
-// five are grouped behind the single `pipeline` collaborator (issue 02); a test overrides one method via `pipe`.
+// Minimal schemas for the tracing fakes — the real schemas live co-located in each step module; here
+// we use inline placeholders so a span flows through to the injected tracer via genObj.
+const _gateSchema = z.object({ keep: z.boolean() });
+const _extractSchema = z.object({ techniques: z.array(z.object({ title: z.string(), technique: z.string(), sourceText: z.string(), lens: z.string() })) });
+
+// Pipeline-step fakes that each drive the handed seam with their own span name, mirroring the real
+// steps — so a span flows through to the injected tracer exactly when the orchestrator wired the seam
+// correctly. gate/extract/merge/judge use genObj (structured); dedup uses gen (text).
 function fakePipeline(over: Partial<ExtractionPipeline> = {}): ExtractionPipeline {
   return {
-    gate: jest.fn(async (gen: ResearchGenerate, abstract: string) => { await gen('gate', 'research-triage', { prompt: abstract, temperature: 0 }); return { keep: true, tokens: 1 }; }),
-    extract: jest.fn(async (gen: ResearchGenerate, p: Paper, body: string) => { await gen('extract', 'research', { prompt: body }); return { candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 }; }),
-    merge: jest.fn(async (_gen: ResearchGenerate, cands: Candidate[]) => ({ candidates: cands, tokens: 0 })),
-    judge: jest.fn(async (_gen: ResearchGenerate, cands: Candidate[]) => ({ candidates: cands, tokens: 0 })),
-    dedup: jest.fn(async (gen: ResearchGenerate, c: Candidate) => { await gen('dedup', 'research-triage', { prompt: c.title }); return { duplicate: false, tokens: 0 }; }),
+    gate: jest.fn(async (genObj: ResearchGenerateObject, abstract: string) => {
+      await genObj('gate', 'research-triage', { prompt: abstract, schema: _gateSchema, temperature: 0 });
+      return { keep: true, tokens: 1 };
+    }),
+    extract: jest.fn(async (genObj: ResearchGenerateObject, p: Paper, body: string) => {
+      await genObj('extract', 'research', { prompt: body, schema: _extractSchema });
+      return { candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 10 };
+    }),
+    merge: jest.fn(async (_genObj: ResearchGenerateObject, cands: Candidate[]) => ({ candidates: cands, tokens: 0 })),
+    judge: jest.fn(async (_genObj: ResearchGenerateObject, cands: Candidate[]) => ({ candidates: cands, tokens: 0 })),
+    dedup: jest.fn(async (gen: ResearchGenerate, c: Candidate) => {
+      await gen('dedup', 'research-triage', { prompt: c.title });
+      return { duplicate: false, tokens: 0 };
+    }),
     ...over,
   };
 }
@@ -92,19 +113,25 @@ describe('ResearchAgent tracing', () => {
     expect(tracer.span.mock.calls.every((c) => c[0].runId === 'run-x')).toBe(true);
   });
 
-  it('passes the prompt + model/usage/latency through to the gate span', async () => {
+  it('passes the prompt + model/usage/latency through to the gate span (via genObj → generateObject)', async () => {
     const tracer = fakeTracer();
     const agent = new ResearchAgent(baseDeps(), bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const gateSpan = tracer.span.mock.calls.map((c) => c[0]).find((s) => s.span === 'gate');
-    // gen prompts with the abstract (A1) and surfaces the generate result's model + usage.
-    expect(gateSpan).toMatchObject({ span: 'gate', input: 'A1', output: 'ok', model: 'm', latencyMs: 3 });
+    // genObj prompts with the abstract (A1) and surfaces the generateObject result's model + usage.
+    // output is JSON-stringified object (not raw text) since gate now uses the structured-output seam.
+    expect(gateSpan).toMatchObject({ span: 'gate', input: 'A1', model: 'm', latencyMs: 3 });
     expect(gateSpan.usage).toMatchObject({ inputTokens: 1, outputTokens: 1 });
   });
 
   it('emits a gate span but NO extract span for a gated-out paper', async () => {
     const tracer = fakeTracer();
-    const deps = baseDeps({}, { gate: jest.fn(async (gen: ResearchGenerate, abstract: string) => { await gen('gate', 'research-triage', { prompt: abstract, temperature: 0 }); return { keep: false, tokens: 1 }; }) });
+    const deps = baseDeps({}, {
+      gate: jest.fn(async (genObj: ResearchGenerateObject, abstract: string) => {
+        await genObj('gate', 'research-triage', { prompt: abstract, schema: _gateSchema, temperature: 0 });
+        return { keep: false, tokens: 1 };
+      }),
+    });
     const agent = new ResearchAgent(deps, bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);
@@ -114,7 +141,12 @@ describe('ResearchAgent tracing', () => {
 
   it('does not emit a dedup span when extract produced no candidate', async () => {
     const tracer = fakeTracer();
-    const deps = baseDeps({}, { extract: jest.fn(async (gen: ResearchGenerate, _p: Paper, body: string) => { await gen('extract', 'research', { prompt: body }); return { candidates: [], tokens: 3 }; }) });
+    const deps = baseDeps({}, {
+      extract: jest.fn(async (genObj: ResearchGenerateObject, _p: Paper, body: string) => {
+        await genObj('extract', 'research', { prompt: body, schema: _extractSchema });
+        return { candidates: [], tokens: 3 };
+      }),
+    });
     const agent = new ResearchAgent(deps, bounds, undefined, { tracer, runId: 'r' });
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);
@@ -122,7 +154,7 @@ describe('ResearchAgent tracing', () => {
     expect(names).not.toContain('dedup');
   });
 
-  it('emits no span for a step that short-circuits without calling gen (e.g. dedup prefilter)', async () => {
+  it('emits no span for a step that short-circuits without calling a seam (e.g. dedup prefilter)', async () => {
     const tracer = fakeTracer();
     // dedup short-circuits (kept empty / prefilter) → never calls gen → no dedup span.
     const deps = baseDeps({}, { dedup: jest.fn(async () => ({ duplicate: false, tokens: 0 })) });
@@ -130,7 +162,7 @@ describe('ResearchAgent tracing', () => {
     await agent.run('topic');
     const names = tracer.span.mock.calls.map((c) => c[0].span);
     expect(names).not.toContain('dedup');
-    expect(names).toContain('gate'); // gate/extract still emit (they call gen)
+    expect(names).toContain('gate'); // gate/extract still emit (they call genObj)
   });
 
   it('completes the run unchanged when NO tracer is wired (tracing absent)', async () => {

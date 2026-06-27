@@ -1,6 +1,7 @@
+import { z } from 'zod';
 import { Paper, Candidate, Lens, SourceKind } from '../types';
-import type { ResearchGenerate } from './research-generate';
-import { evidenceTag, evidenceTier, stripFences } from './extract';
+import type { ResearchGenerateObject } from './research-generate';
+import { evidenceTag, evidenceTier } from './extract';
 import { SCOPE_FRAGMENT } from './scope-policy';
 
 /** Human-readable source label carried on each Candidate (display + provenance), set from the source. */
@@ -15,6 +16,15 @@ export interface LensExtractResult {
   tokens: number;
 }
 
+const ExtractSchema = z.object({
+  techniques: z.array(z.object({
+    title: z.string(),
+    technique: z.string(),
+    sourceText: z.string(),
+    lens: z.string(),
+  })),
+});
+
 /** Extract a source body's techniques in ONE call (slice 05). The body is sent once — not re-sent per
  * lens — and the model tags each technique with the lens whose primary mechanism it reflects, drawn
  * from the tier-scaled `lenses` set (full breadth for peer-reviewed, the narrower subset for preprints).
@@ -22,12 +32,12 @@ export interface LensExtractResult {
  * must be one we asked for, wording stays audience-neutral, the scope fragment excludes supplement/
  * clinical techniques, and the tier is set from the source, never the model. Fail-open (ADR-0021): a
  * malformed/empty reply yields no candidates and never aborts the run. */
-export async function extractWithLenses(gen: ResearchGenerate, paper: Paper, body: string, lenses: Lens[]): Promise<LensExtractResult> {
+export async function extractWithLenses(genObj: ResearchGenerateObject, paper: Paper, body: string, lenses: Lens[]): Promise<LensExtractResult> {
   const allowed = new Set<Lens>(lenses);
 
-  let out;
+  let result;
   try {
-    out = await gen('extract', 'research', {
+    result = await genObj('extract', 'research', {
       prompt:
         `Extract every transferable, actionable coping/wellbeing technique the source describes.\n` +
         `${SCOPE_FRAGMENT}\n` +
@@ -39,31 +49,23 @@ export async function extractWithLenses(gen: ResearchGenerate, paper: Paper, bod
         `tilt, or any specific population — describe the general mechanism only.\n` +
         `- Each "sourceText" MUST be a verbatim quote copied exactly from the source (a real substring).\n` +
         `- "lens" MUST be exactly one of: ${lenses.join(', ')}.\n` +
-        `Return JSON array: [{"title": string, "technique": string, "sourceText": string, "lens": string}] (or []).\n` +
-        // JSON only: parse is a strict JSON.parse (after fence-strip), so leading/trailing prose from a
-        // chatty reasoning model would drop the whole extraction. Make the output exclusivity explicit.
-        `Output only the JSON array — no prose, no markdown, no other text.\n\n` +
+        `Return JSON object: {"techniques": [{"title": string, "technique": string, "sourceText": string, "lens": string}]}.\n` +
+        // JSON only: schema guides structure, but making output exclusivity explicit reduces chatty
+        // preamble from a reasoning model that would otherwise prefix output with prose.
+        `Output only the JSON object — no prose, no markdown, no other text.\n\n` +
         `Source:\n${body}`,
+      schema: ExtractSchema,
     });
   } catch {
     return { candidates: [], tokens: 0 };
   }
 
-  const tokens = out.usage?.totalTokens ?? 0;
-  const text = stripFences(out.text.trim());
-  if (text === '' || text.toLowerCase() === 'null') return { candidates: [], tokens };
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return { candidates: [], tokens };
-  }
-  if (!Array.isArray(parsed)) return { candidates: [], tokens };
+  const { object, tokens } = result;
+  if (object === undefined) return { candidates: [], tokens };
 
   const candidates: Candidate[] = [];
-  for (const item of parsed as { title?: string; technique?: string; sourceText?: string; lens?: Lens }[]) {
-    const { title, technique, sourceText, lens } = item ?? {};
+  for (const item of object.techniques) {
+    const { title, technique, sourceText, lens } = item;
     if (!title || !technique || !sourceText || !lens) continue;
     const lensNorm = String(lens).toLowerCase() as Lens; // tolerate "Behavioral"/casing from the model
     if (!allowed.has(lensNorm)) continue;        // only lenses we asked for

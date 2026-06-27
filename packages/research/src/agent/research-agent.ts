@@ -2,7 +2,7 @@ import { Bounds, Candidate, EvidenceTier, Lens, Paper, RunSummary, SourceKind } 
 import { Source } from '../sources/source';
 import { Logger, noopLogger } from '../util/logger';
 import { ResearchSpanInput, RunTraceInput } from './research-tracer';
-import { makeResearchGenerate, type ResearchGenerate } from './research-generate';
+import { makeResearchGenerate, makeResearchGenerateObject, type ResearchGenerate, type ResearchGenerateObject } from './research-generate';
 import { evidenceTier } from './extract';
 import { prescreen } from './scope-policy';
 import { lensesForTier } from './lenses';
@@ -28,15 +28,18 @@ export interface AgentDeps {
   pipeline: ExtractionPipeline;
 }
 
-/** The five LLM steps the orchestrator runs per paper, grouped behind one seam (issue 02). */
+/** The five LLM steps the orchestrator runs per paper, grouped behind one seam (issue 02).
+ * gate/extract/merge/judge use the structured-output seam (genObj) — schema-decoded, no stripFences.
+ * dedup retains gen (it moved to embeddings in Task 5 and no longer makes LLM calls, but keeps the
+ * signature for call-site stability). */
 export interface ExtractionPipeline {
-  gate(gen: ResearchGenerate, abstract: string, topic: string): Promise<{ keep: boolean; tokens: number }>;
+  gate(genObj: ResearchGenerateObject, abstract: string, topic: string): Promise<{ keep: boolean; tokens: number }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
-  extract(gen: ResearchGenerate, paper: Paper, body: string, lenses: Lens[]): Promise<{ candidates: Candidate[]; tokens: number }>;
+  extract(genObj: ResearchGenerateObject, paper: Paper, body: string, lenses: Lens[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
-  merge(gen: ResearchGenerate, candidates: Candidate[]): Promise<{ candidates: Candidate[]; tokens: number }>;
+  merge(genObj: ResearchGenerateObject, candidates: Candidate[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Score, faithfulness-check, sharpen, and tier-cap a paper's candidates (slice 05). */
-  judge(gen: ResearchGenerate, candidates: Candidate[], tier: EvidenceTier): Promise<{ candidates: Candidate[]; tokens: number }>;
+  judge(genObj: ResearchGenerateObject, candidates: Candidate[], tier: EvidenceTier): Promise<{ candidates: Candidate[]; tokens: number }>;
   dedup(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<{ duplicate: boolean; tokens: number }>;
 }
 
@@ -74,10 +77,12 @@ export class ResearchAgent {
     const kept: Candidate[] = [];
     const visited = new Set<string>();
 
-    // Build the run's `gen` seam ONCE from the run's tracer + run-id (absent → no spans, generate still
-    // runs). Each step calls it instead of importing `generate`; the span for a successful call is
-    // emitted inside `gen`, so the orchestrator no longer threads or re-emits per-step traces.
+    // Build the per-run seams ONCE from the run's tracer + run-id (absent → no spans, generate still
+    // runs). `gen` is the text seam (dedup + discovery); `genObj` is the schema-decoded sibling
+    // (gate/extract/merge/judge). Each seam emits its span on a successful call — the orchestrator no
+    // longer threads or re-emits per-step traces.
     const gen = makeResearchGenerate(this.tracing?.tracer, this.tracing?.runId);
+    const genObj = makeResearchGenerateObject(this.tracing?.tracer, this.tracing?.runId);
 
     this.log.info('topic start', { topic });
 
@@ -185,7 +190,7 @@ export class ResearchAgent {
           continue;
         }
 
-        const gate = await this.deps.pipeline.gate(gen, paper.abstract, topic);
+        const gate = await this.deps.pipeline.gate(genObj, paper.abstract, topic);
         this.tokens += gate.tokens;
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
         if (!gate.keep) {
@@ -231,15 +236,15 @@ export class ResearchAgent {
           lenses = lenses.slice(0, 1);
         }
 
-        const { candidates, tokens } = await this.deps.pipeline.extract(gen, paper, body, lenses);
+        const { candidates, tokens } = await this.deps.pipeline.extract(genObj, paper, body, lenses);
         this.tokens += tokens;
         if (candidates.length === 0) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
 
         // Collapse the lens candidates into the paper's distinct techniques, then score + tier-cap them.
-        const m = await this.deps.pipeline.merge(gen, candidates);
+        const m = await this.deps.pipeline.merge(genObj, candidates);
         this.tokens += m.tokens;
 
-        const j = await this.deps.pipeline.judge(gen, m.candidates, tier);
+        const j = await this.deps.pipeline.judge(genObj, m.candidates, tier);
         this.tokens += j.tokens;
         const distinct = j.candidates;
         summary.extracted += distinct.length;
