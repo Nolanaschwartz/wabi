@@ -42,7 +42,14 @@ export function lexSim(a: Candidate, b: Candidate): number {
   return jaccard(sig(a), sig(b));
 }
 
-export interface DedupResult { duplicate: boolean; tokens: number }
+export interface DedupResult {
+  duplicate: boolean;
+  tokens: number;
+  /** True when the embedder was down and this verdict came from the lexical-ceiling fallback, not
+   * embeddings. The run logs this once so a silent embedding outage (missing EMBEDDING_*, ADR-0034)
+   * is visible rather than a quiet recall drop (ambiguous-band paraphrases resolve DISTINCT). */
+  degraded?: boolean;
+}
 
 // ─── Embedding cosine path ──────────────────────────────────────────────────
 
@@ -76,8 +83,9 @@ export async function isDuplicateInRun(_gen: ResearchGenerate, candidate: Candid
 
   const vec = await embed(embedSig(candidate));
   if (vec.length === 0) {
-    // Fail-open: embedder down → lexical ceiling rule. No tokens spent (no LLM).
-    return { duplicate: lexicalDuplicate(candidate, kept), tokens: 0 };
+    // Fail-open: embedder down → lexical ceiling rule. No tokens spent (no LLM). `degraded` lets the
+    // run surface the outage once (the embedding path is the intended judgment; this is the fallback).
+    return { duplicate: lexicalDuplicate(candidate, kept), tokens: 0, degraded: true };
   }
   const keptVecs = await Promise.all(kept.map((k) => embed(embedSig(k))));
   const threshold = dupThreshold();

@@ -78,12 +78,15 @@ describe('makeResearchGenerate', () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
-  it('propagates a generate (transport) throw so the calling step owns the fail policy', async () => {
+  it('propagates a generate (transport) throw so the calling step owns the fail policy, and logs it', async () => {
     generate.mockRejectedValue(new Error('ECONNREFUSED'));
     const tracer = fakeTracer();
-    const gen = makeResearchGenerate(tracer, 'run-1');
+    const log = { info: jest.fn(), debug: jest.fn() };
+    const gen = makeResearchGenerate(tracer, 'run-1', log);
     await expect(gen('gate', 'research-triage', { prompt: 'p' })).rejects.toThrow('ECONNREFUSED');
     expect(tracer.span).not.toHaveBeenCalled(); // no span on a failed call
+    // the systemic outage is surfaced (content-free) instead of vanishing into the step's silent fail-open
+    expect(log.info).toHaveBeenCalledWith('llm transport error', expect.objectContaining({ span: 'gate', role: 'research-triage' }));
   });
 
   it('is fail-open on a tracer error — the result still returns and the throw never propagates', async () => {
@@ -165,12 +168,15 @@ describe('makeResearchGenerateObject', () => {
     expect(sharedGenerateObject).toHaveBeenCalledTimes(1);
   });
 
-  it('propagates a generateObject (transport) throw so the calling step owns the fail policy', async () => {
+  it('propagates a generateObject (transport) throw so the calling step owns the fail policy, and logs it', async () => {
     sharedGenerateObject.mockRejectedValue(new Error('ECONNREFUSED'));
     const tracer = { span: jest.fn() } as SpanEmitter & { span: jest.Mock };
-    const genObj = makeResearchGenerateObject(tracer, 'run-2');
+    const log = { info: jest.fn(), debug: jest.fn() };
+    const genObj = makeResearchGenerateObject(tracer, 'run-2', log);
     await expect(genObj('gate', 'research-triage', { prompt: 'p', schema })).rejects.toThrow('ECONNREFUSED');
     expect(tracer.span).not.toHaveBeenCalled();
+    // a structured-output outage (e.g. prod not honoring the SDK json-schema path) is surfaced, not silent
+    expect(log.info).toHaveBeenCalledWith('llm transport error', expect.objectContaining({ span: 'gate', role: 'research-triage' }));
   });
 
   it('is fail-open on a tracer error — the result still returns and the throw never propagates', async () => {

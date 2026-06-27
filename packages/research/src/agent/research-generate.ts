@@ -1,6 +1,7 @@
 import { generate, generateObject, type GenerateResult } from '@wabi/shared/generate';
 import { extractMaxTokens, triageMaxTokens } from '../config';
 import type { ResearchSpanInput, ResearchSpanName } from './research-tracer';
+import { type Logger, noopLogger } from '../util/logger';
 import type { ZodSchema } from 'zod';
 
 /** The slice of the tracer the seam needs: emit one span. Kept as a structural interface (not the
@@ -49,16 +50,23 @@ function capForRole(role: ResearchRole): number {
  * already swallows its own errors (ADR-0021), so a tracer fault never breaks a run; the generate throw
  * is the ONLY thing that propagates, and only to the calling step's catch.
  */
-export function makeResearchGenerate(tracer?: SpanEmitter, runId?: string): ResearchGenerate {
+export function makeResearchGenerate(tracer?: SpanEmitter, runId?: string, log: Logger = noopLogger): ResearchGenerate {
   return async (spanName, role, opts) => {
     // Transport errors PROPAGATE (not caught here): the step's own catch maps them to its fail-open
-    // domain value. Only a SUCCESSFUL call reaches the span emission below.
-    const result = await generate(role, {
-      prompt: opts.prompt,
-      system: opts.system,
-      temperature: opts.temperature,
-      maxOutputTokens: capForRole(role),
-    });
+    // domain value. We LOG before re-throwing so a systemic provider outage is visible rather than a
+    // silent run of all-fail-open steps (the message carries no prompt/content — privacy by construction).
+    let result: GenerateResult;
+    try {
+      result = await generate(role, {
+        prompt: opts.prompt,
+        system: opts.system,
+        temperature: opts.temperature,
+        maxOutputTokens: capForRole(role),
+      });
+    } catch (err) {
+      log.info('llm transport error', { span: spanName, role, err: (err as Error)?.message ?? String(err) });
+      throw err;
+    }
 
     if (tracer && runId) {
       // Tracing is fail-open (ADR-0021): emit the span, but a tracer fault must NEVER propagate into the
@@ -96,9 +104,18 @@ export type ResearchGenerateObject = <T>(
   opts: { prompt: string; schema: ZodSchema<T>; system?: string; temperature?: number },
 ) => Promise<{ object?: T; tokens: number }>;
 
-export function makeResearchGenerateObject(tracer?: SpanEmitter, runId?: string): ResearchGenerateObject {
+export function makeResearchGenerateObject(tracer?: SpanEmitter, runId?: string, log: Logger = noopLogger): ResearchGenerateObject {
   return async (spanName, role, opts) => {
-    const result = await generateObject(role, { ...opts, maxOutputTokens: capForRole(role) });
+    // A no-object (schema/validation) failure is a RETURNED value (object undefined) — only a transport
+    // throw reaches here, and we log it before re-throwing so a structured-output outage (e.g. the prod
+    // endpoint not honoring the SDK json-schema path) surfaces instead of a silent zero-draft run.
+    let result;
+    try {
+      result = await generateObject(role, { ...opts, maxOutputTokens: capForRole(role) });
+    } catch (err) {
+      log.info('llm transport error', { span: spanName, role, err: (err as Error)?.message ?? String(err) });
+      throw err;
+    }
 
     if (tracer && runId) {
       try {

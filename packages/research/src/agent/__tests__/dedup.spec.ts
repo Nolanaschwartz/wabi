@@ -51,11 +51,18 @@ describe('isDuplicateInRun', () => {
     expect(out.duplicate).toBe(false);
   });
 
-  it('falls back to lexical jaccard when embed returns []', async () => {
+  it('falls back to lexical jaccard when embed returns [] and flags degraded', async () => {
     jest.spyOn(embedMod, 'embed').mockResolvedValue([]);
     // candHigh and candHighDup share enough tokens to clear the lexical HIGH ceiling
     const out = await isDuplicateInRun(noopGen, candHigh, [candHighDup]);
     expect(out.duplicate).toBe(true);
+    expect(out.degraded).toBe(true); // embedder-down signal so the run can surface the outage once
+  });
+
+  it('does not flag degraded on the normal embedding path', async () => {
+    jest.spyOn(embedMod, 'embed').mockResolvedValue([1, 0, 0]);
+    const out = await isDuplicateInRun(noopGen, candA, [candB]);
+    expect(out.degraded).toBeFalsy();
   });
 
   it('falls back to distinct (not duplicate) on empty embed when tokens are below lexical ceiling', async () => {

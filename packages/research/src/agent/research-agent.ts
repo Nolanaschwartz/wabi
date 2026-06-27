@@ -40,7 +40,7 @@ export interface ExtractionPipeline {
   merge(genObj: ResearchGenerateObject, candidates: Candidate[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Score, faithfulness-check, sharpen, and tier-cap a paper's candidates (slice 05). */
   judge(genObj: ResearchGenerateObject, candidates: Candidate[], tier: EvidenceTier): Promise<{ candidates: Candidate[]; tokens: number }>;
-  dedup(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<{ duplicate: boolean; tokens: number }>;
+  dedup(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<{ duplicate: boolean; tokens: number; degraded?: boolean }>;
 }
 
 /** The structural slice of {@link ResearchTracer} the orchestrator uses. Kept as an interface (not the
@@ -76,13 +76,14 @@ export class ResearchAgent {
     const summary = emptySummary();
     const kept: Candidate[] = [];
     const visited = new Set<string>();
+    let dedupDegraded = false; // log the embedder-down fallback at most once per topic, not per candidate
 
     // Build the per-run seams ONCE from the run's tracer + run-id (absent → no spans, generate still
     // runs). `gen` is the text seam (dedup + discovery); `genObj` is the schema-decoded sibling
     // (gate/extract/merge/judge). Each seam emits its span on a successful call — the orchestrator no
     // longer threads or re-emits per-step traces.
-    const gen = makeResearchGenerate(this.tracing?.tracer, this.tracing?.runId);
-    const genObj = makeResearchGenerateObject(this.tracing?.tracer, this.tracing?.runId);
+    const gen = makeResearchGenerate(this.tracing?.tracer, this.tracing?.runId, this.log);
+    const genObj = makeResearchGenerateObject(this.tracing?.tracer, this.tracing?.runId, this.log);
 
     this.log.info('topic start', { topic });
 
@@ -255,6 +256,10 @@ export class ResearchAgent {
           if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
           const dd = await this.deps.pipeline.dedup(gen, candidate, kept);
           this.tokens += dd.tokens;
+          if (dd.degraded && !dedupDegraded) {
+            dedupDegraded = true;
+            this.log.info('dedup degraded: embedder unavailable, using lexical fallback', { topic });
+          }
           if (dd.duplicate) {
             summary.inRunDeduped++;
             this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });
