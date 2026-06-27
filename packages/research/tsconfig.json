@@ -8,6 +8,7 @@
     "baseUrl": ".",
     "paths": {
       "@wabi/shared/generate": ["node_modules/@wabi/shared/dist/generate"],
+      "@wabi/shared/embed": ["node_modules/@wabi/shared/dist/embed"],
       "@wabi/shared/otel": ["node_modules/@wabi/shared/dist/otel"]
     }
   },
