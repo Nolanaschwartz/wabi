@@ -85,6 +85,24 @@ describe('fetchAndParseDoc', () => {
     expect(pulled).toBeLessThan(10);   // and aborted early — did NOT drain all 51 chunks into memory
   });
 
+  it('hands the parser a plain Uint8Array (not a Buffer) on the streamed success path', async () => {
+    // unpdf's extractText rejects a Buffer ("provide binary data as Uint8Array"). Buffer.concat
+    // returns a Buffer, so the streaming path must normalise to a plain Uint8Array.
+    let received: unknown;
+    const parsePdf = jest.fn(async (buf: Uint8Array) => { received = buf; return 'ok'; });
+    async function* body() { const b = new Uint8Array(8); b.set(PDF_MAGIC, 0); yield b; }
+    const res = {
+      ok: true, status: 200,
+      headers: { get: () => null },
+      body: body(),
+      arrayBuffer: async () => { throw new Error('must not buffer the whole body'); },
+    } as unknown as Response;
+    const fetchFn = jest.fn().mockResolvedValue(res);
+    await fetchAndParseDoc('https://x/paper.pdf', baseOpts({ fetchFn: fetchFn as any, parsePdf }));
+    expect(received).toBeInstanceOf(Uint8Array);
+    expect(Buffer.isBuffer(received)).toBe(false);
+  });
+
   it('truncates parsed text to maxTextChars', async () => {
     const parsePdf = jest.fn().mockResolvedValue('x'.repeat(5000));
     const text = await fetchAndParseDoc('https://x/paper.pdf', baseOpts({ maxTextChars: 100, parsePdf }));

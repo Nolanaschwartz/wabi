@@ -24,8 +24,8 @@ export const DEFAULTS: Bounds = {
   budgetPressureFraction: 0.2,
   maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10,
-  agentTimeoutMs: 90_000,
-  runTimeoutMs: 600_000,
+  agentTimeoutMs: 180_000,
+  runTimeoutMs: 1_200_000,
   tokenBudget: 200_000,
 };
 
