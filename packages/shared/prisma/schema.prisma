@@ -209,8 +209,8 @@ model ResearchConfig {
   budgetPressureFraction Float    @default(0.2)
   maxDraftsPerTopic      Int      @default(3)
   maxDraftsPerRun   Int      @default(10)
-  agentTimeoutMs    Int      @default(90000)
-  runTimeoutMs      Int      @default(600000)
+  agentTimeoutMs    Int      @default(180000)
+  runTimeoutMs      Int      @default(1200000)
   tokenBudget       Int      @default(200000)
   updatedAt         DateTime @updatedAt
 }
