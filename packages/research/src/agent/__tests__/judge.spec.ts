@@ -6,7 +6,10 @@ import { Candidate, EvidenceTier } from '../../types';
 import type { ResearchGenerate } from '../research-generate';
 import type { GenerateResult } from '@wabi/shared/generate';
 
-const verdict = (v: object, totalTokens = 5): GenerateResult => ({ text: JSON.stringify(v), usage: { totalTokens }, model: 'm', latencyMs: 1 });
+// Single-item helper: wraps verdict in the batched { verdicts: [v] } envelope the judge now returns.
+const verdict = (v: object, totalTokens = 5): GenerateResult => ({ text: JSON.stringify({ verdicts: [v] }), usage: { totalTokens }, model: 'm', latencyMs: 1 });
+// Multi-item helper: wraps an array of verdicts in the batched envelope.
+const batchVerdict = (vs: object[], totalTokens = 5): GenerateResult => ({ text: JSON.stringify({ verdicts: vs }), usage: { totalTokens }, model: 'm', latencyMs: 1 });
 
 // A fake `gen` that resolves the next queued reply (so per-call scripting via mockResolvedValueOnce works).
 const genFn = (): jest.MockedFunction<ResearchGenerate> => jest.fn() as jest.MockedFunction<ResearchGenerate>;
@@ -15,6 +18,10 @@ const mk = (title: string, tier: EvidenceTier = 'rct'): Candidate => ({
   title, technique: `do ${title}`, sourceText: `quote ${title}`, evidence: 'e', evidenceTier: tier,
   sourceUrl: 'u', source: 'PubMed', sourceId: 'PMID:1', sourceKind: 'pubmed', trustLevel: 'research-agent',
 });
+
+// Shared fixtures for batch tests (illustrative names from the brief map to mk('A') / mk('B')).
+const candA = mk('A');
+const candB = mk('B');
 
 it('keeps a faithful candidate and sets confidence + rationale', async () => {
   const gen = genFn();
@@ -81,8 +88,11 @@ it('applies the judge rewrite to title/technique but never to sourceText', async
 
 it('caps peer-reviewed papers to the top 5 by score', async () => {
   const gen = genFn();
-  // 6 candidates, descending scores; the lowest is dropped by the cap.
-  for (const s of [0.9, 0.85, 0.8, 0.75, 0.7, 0.65]) gen.mockResolvedValueOnce(verdict({ faithful: true, score: s, rationale: 'r' }));
+  // 6 candidates, all in one batched call; the lowest score is dropped by the cap.
+  gen.mockResolvedValue(batchVerdict(
+    [0.9, 0.85, 0.8, 0.75, 0.7, 0.65].map((s) => ({ faithful: true, score: s, rationale: 'r' })),
+    30,
+  ));
   const r = await judgeCandidates(gen, [mk('A'), mk('B'), mk('C'), mk('D'), mk('E'), mk('F')], 'rct');
   expect(r.candidates).toHaveLength(5);
   expect(r.candidates.map((c) => c.confidence)).toEqual([0.9, 0.85, 0.8, 0.75, 0.7]);
@@ -90,7 +100,11 @@ it('caps peer-reviewed papers to the top 5 by score', async () => {
 
 it('caps preprints to the top 2 by score', async () => {
   const gen = genFn();
-  for (const s of [0.95, 0.9, 0.85]) gen.mockResolvedValueOnce(verdict({ faithful: true, score: s, rationale: 'r' }));
+  // All three scores clear the preprint floor (0.7); one call returns all verdicts, cap trims to 2.
+  gen.mockResolvedValue(batchVerdict(
+    [0.95, 0.9, 0.85].map((s) => ({ faithful: true, score: s, rationale: 'r' })),
+    15,
+  ));
   const r = await judgeCandidates(gen, [mk('A', 'preprint'), mk('B', 'preprint'), mk('C', 'preprint')], 'preprint');
   expect(r.candidates).toHaveLength(2);
 });
@@ -113,4 +127,38 @@ it('counts the tokens gen spent even when the model returns unparseable JSON', a
   expect(r.candidates).toHaveLength(1);
   expect(r.candidates[0].confidence).toBe(0.5);
   expect(r.tokens).toBe(42);
+});
+
+// ── Batch-specific tests (the three new cases from the task brief) ──────────────────────────────
+
+it('judges all candidates in a single gen call', async () => {
+  const gen = genFn();
+  gen.mockResolvedValue(batchVerdict([
+    { faithful: true, scopeOk: true, score: 0.9, title: 'A', technique: 'a', rationale: 'r' },
+    { faithful: true, scopeOk: true, score: 0.8, title: 'B', technique: 'b', rationale: 'r' },
+  ], 50));
+  const out = await judgeCandidates(gen, [candA, candB], 'rct');
+  expect(gen).toHaveBeenCalledTimes(1);
+  expect(out.candidates).toHaveLength(2);
+  expect(out.tokens).toBe(50);
+});
+
+it('falls open per-index: a missing verdict keeps that candidate at 0.5, others judged', async () => {
+  const gen = genFn();
+  gen.mockResolvedValue(batchVerdict([
+    { faithful: true, scopeOk: true, score: 0.9, title: 'A', technique: 'a', rationale: 'r' },
+    // only one verdict for two candidates — candB gets no entry
+  ], 30));
+  const out = await judgeCandidates(gen, [candA, candB], 'rct');
+  const b = out.candidates.find((c) => c.sourceText === candB.sourceText);
+  expect(b?.confidence).toBe(0.5);
+  expect(b?.rationale).toBe('judge unavailable');
+});
+
+it('counts usage even when the batch body will not parse', async () => {
+  const gen = genFn();
+  gen.mockResolvedValue({ text: 'not json', usage: { totalTokens: 40 }, model: 'm', latencyMs: 1 });
+  const out = await judgeCandidates(gen, [candA], 'rct');
+  expect(out.tokens).toBe(40);
+  expect(out.candidates[0].confidence).toBe(0.5);
 });
