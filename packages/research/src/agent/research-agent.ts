@@ -8,6 +8,7 @@ import { prescreen } from './scope-policy';
 import { lensesForTier } from './lenses';
 import { Concepts } from '../sources/query/concepts';
 import { queryForKind } from '../sources/query/for-kind';
+import { selectNeighbors } from './discovery-selector';
 
 export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
@@ -196,13 +197,26 @@ export class ResearchAgent {
 
         // Citation-graph discovery, where the source offers it (pubmed). Expanded papers re-enter the
         // queue as thin hits and flow through the same hydrate path.
-        if (src.expand && discoverySteps < this.bounds.maxDiscoverySteps) {
+        // Budget pressure skips the WHOLE expansion (no expand, no summarize, no selector) so the
+        // remaining budget is reserved for lenses rather than wasted on discovery (ADR-0021).
+        const underPressure =
+          this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * this.bounds.budgetPressureFraction;
+        if (src.expand && src.summarize && discoverySteps < this.bounds.maxDiscoverySteps && !underPressure) {
           discoverySteps++;
-          const related = await src.expand(paper).catch(() => [] as Paper[]);
-          for (const rp of related) {
-            if (!visited.has(rp.sourceId)) queue.push(rp);
+          const related = (await src.expand(paper).catch(() => [] as Paper[]))
+            .filter((rp) => !visited.has(rp.sourceId))
+            .slice(0, this.bounds.maxNeighborsConsidered); // deterministic relatedness cap
+          if (related.length > 0) {
+            const titles = await src.summarize(related.map((rp) => rp.sourceId)).catch(() => []);
+            const byId = new Map(related.map((rp) => [rp.sourceId, rp]));
+            const neighbors = titles.filter((t) => byId.has(t.id));
+            const sel = await selectNeighbors(
+              gen, topic, { title: paper.title, abstract: paper.abstract }, neighbors, this.bounds.maxChasePerExpansion,
+            );
+            this.tokens += sel.tokens;
+            for (const id of sel.ids) { const rp = byId.get(id); if (rp) queue.push(rp); }
+            this.log.debug('discovery select', { from: paper.sourceId, considered: related.length, chased: sel.ids.length, queue: queue.length });
           }
-          this.log.debug('discovery expand', { from: paper.sourceId, related: related.length, queue: queue.length });
         }
 
         const full = await src.fullText(paper).catch(() => null);
