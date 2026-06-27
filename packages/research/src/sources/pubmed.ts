@@ -91,6 +91,20 @@ export class PubMedTool implements Source {
     return { ...paper, title: s.title, abstract, pubTypes: s.pubTypes, pmcId: s.pmcId };
   }
 
+  /** Batch title lookup for the discovery selector: one esummary call for all PMIDs, returns
+   * {id, title} pairs. Fails open to [] so a network blip never aborts discovery. */
+  async summarize(ids: string[]): Promise<{ id: string; title: string }[]> {
+    if (ids.length === 0) return [];
+    const pmids = ids.map((i) => i.replace('PMID:', ''));
+    const url = `${EUTILS}/esummary.fcgi?db=pubmed&retmode=json&id=${pmids.join(',')}${this.key()}`;
+    const data = await this.getJson<{ result?: Record<string, { uid?: string; title?: string }> }>(url)
+      .catch(() => ({} as { result?: Record<string, { uid?: string; title?: string }> }));
+    const result = data.result ?? {};
+    return pmids
+      .map((p) => ({ id: `PMID:${p}`, title: result[p]?.title ?? '' }))
+      .filter((x) => x.title !== '');
+  }
+
   /** Citation-graph neighbours as thin papers (same `PMID:` keyspace), for the agent's discovery step. */
   async expand(paper: Paper): Promise<Paper[]> {
     const related = await this.related(paper.sourceId.replace('PMID:', ''));

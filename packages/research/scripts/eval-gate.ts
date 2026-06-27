@@ -22,7 +22,7 @@ import { execSync } from 'child_process';
 import { appendFileSync } from 'fs';
 import { join } from 'path';
 import { relevanceGate } from '../src/agent/relevance-gate';
-import { makeResearchGenerate } from '../src/agent/research-generate';
+import { makeResearchGenerateObject } from '../src/agent/research-generate';
 import type { ResearchSpanInput } from '../src/agent/research-tracer';
 import { gateMetrics, GateItemResult, GateMetrics, Label } from '../src/evals/gate-metrics';
 import { evalClient, evalKeys, GATE_DATASET } from './eval-env';
@@ -129,12 +129,12 @@ async function main(): Promise<void> {
         const n = Array.from({ length: N_REPEATS });
         return { predictions: n.map(() => 'keep' as Label), emptyReplies: n.map(() => false), failures: n.map(() => true) };
       }
-      // The gate no longer returns a trace; tracing moved behind the `gen` seam. Tap it here with a
-      // capturing emitter: `gen` emits a span ONLY on a successful model call (carrying its output), so
+      // The gate no longer returns a trace; tracing moved behind the `genObj` seam. Tap it here with a
+      // capturing emitter: `genObj` emits a span ONLY on a successful model call (carrying its output), so
       // a captured span ⇒ the call ran (and its output tells empty-vs-not), and no span ⇒ the call threw
       // and fell open (a failure). This recovers the exact ran/empty/failure signal the eval needs.
       const captured: ResearchSpanInput[] = [];
-      const gen = makeResearchGenerate({ span: (s) => captured.push(s) }, 'eval');
+      const gen = makeResearchGenerateObject({ span: (s) => captured.push(s) }, 'eval');
       const predictions: Label[] = [];
       const emptyReplies: boolean[] = [];
       const failures: boolean[] = [];
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
         const r = await relevanceGate(gen, abstract, topicStr);
         const span = captured[0]; // present ⇒ the model call actually executed
         failures.push(!span); // no span ⇒ caught error (provider down / 401), fell open to keep
-        emptyReplies.push(!!span && (span.output ?? '').trim() === ''); // RAN but starved/empty text
+        emptyReplies.push(!!span && (span.output ?? '').trim() === 'null'); // RAN but produced no object (genObj soft-failure emits JSON.stringify(null) = 'null')
         predictions.push(r.keep ? 'keep' : 'reject');
       }
       return { predictions, emptyReplies, failures };

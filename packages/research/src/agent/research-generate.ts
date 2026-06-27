@@ -1,6 +1,8 @@
-import { generate, type GenerateResult } from '@wabi/shared/generate';
+import { generate, generateObject, type GenerateResult } from '@wabi/shared/generate';
 import { extractMaxTokens, triageMaxTokens } from '../config';
 import type { ResearchSpanInput, ResearchSpanName } from './research-tracer';
+import { type Logger, noopLogger } from '../util/logger';
+import type { ZodSchema } from 'zod';
 
 /** The slice of the tracer the seam needs: emit one span. Kept as a structural interface (not the
  * concrete class) so a test hands `gen` a fake tracer. Mirrors {@link AgentTracer} in research-agent. */
@@ -48,16 +50,23 @@ function capForRole(role: ResearchRole): number {
  * already swallows its own errors (ADR-0021), so a tracer fault never breaks a run; the generate throw
  * is the ONLY thing that propagates, and only to the calling step's catch.
  */
-export function makeResearchGenerate(tracer?: SpanEmitter, runId?: string): ResearchGenerate {
+export function makeResearchGenerate(tracer?: SpanEmitter, runId?: string, log: Logger = noopLogger): ResearchGenerate {
   return async (spanName, role, opts) => {
     // Transport errors PROPAGATE (not caught here): the step's own catch maps them to its fail-open
-    // domain value. Only a SUCCESSFUL call reaches the span emission below.
-    const result = await generate(role, {
-      prompt: opts.prompt,
-      system: opts.system,
-      temperature: opts.temperature,
-      maxOutputTokens: capForRole(role),
-    });
+    // domain value. We LOG before re-throwing so a systemic provider outage is visible rather than a
+    // silent run of all-fail-open steps (the message carries no prompt/content — privacy by construction).
+    let result: GenerateResult;
+    try {
+      result = await generate(role, {
+        prompt: opts.prompt,
+        system: opts.system,
+        temperature: opts.temperature,
+        maxOutputTokens: capForRole(role),
+      });
+    } catch (err) {
+      log.info('llm transport error', { span: spanName, role, err: (err as Error)?.message ?? String(err) });
+      throw err;
+    }
 
     if (tracer && runId) {
       // Tracing is fail-open (ADR-0021): emit the span, but a tracer fault must NEVER propagate into the
@@ -79,5 +88,51 @@ export function makeResearchGenerate(tracer?: SpanEmitter, runId?: string): Rese
     }
 
     return result;
+  };
+}
+
+/**
+ * The structured-output sibling of {@link ResearchGenerate}. A step calls
+ * `genObj(spanName, role, { prompt, schema })`; the seam binds the role's standard output cap,
+ * runs `generateObject`, and ON SUCCESS emits the same Langfuse generation span shape as `gen`.
+ * Transport errors propagate; no-object (schema/validation failure) returns object undefined with
+ * tokens 0 — the caller owns fail policy. Tracing stays fail-open per ADR-0021.
+ */
+export type ResearchGenerateObject = <T>(
+  spanName: ResearchSpanName,
+  role: ResearchRole,
+  opts: { prompt: string; schema: ZodSchema<T>; system?: string; temperature?: number },
+) => Promise<{ object?: T; tokens: number }>;
+
+export function makeResearchGenerateObject(tracer?: SpanEmitter, runId?: string, log: Logger = noopLogger): ResearchGenerateObject {
+  return async (spanName, role, opts) => {
+    // A no-object (schema/validation) failure is a RETURNED value (object undefined) — only a transport
+    // throw reaches here, and we log it before re-throwing so a structured-output outage (e.g. the prod
+    // endpoint not honoring the SDK json-schema path) surfaces instead of a silent zero-draft run.
+    let result;
+    try {
+      result = await generateObject(role, { ...opts, maxOutputTokens: capForRole(role) });
+    } catch (err) {
+      log.info('llm transport error', { span: spanName, role, err: (err as Error)?.message ?? String(err) });
+      throw err;
+    }
+
+    if (tracer && runId) {
+      try {
+        tracer.span({
+          runId,
+          span: spanName,
+          input: opts.prompt,
+          output: JSON.stringify(result.object ?? null),
+          model: result.model,
+          usage: { inputTokens: result.usage?.inputTokens, outputTokens: result.usage?.outputTokens },
+          latencyMs: result.latencyMs,
+        });
+      } catch {
+        // swallowed — a tracing error is never allowed to break a run
+      }
+    }
+
+    return { object: result.object, tokens: result.usage?.totalTokens ?? 0 };
   };
 }

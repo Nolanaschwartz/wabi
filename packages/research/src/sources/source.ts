@@ -31,4 +31,11 @@ export interface Source {
    * and gates expansion by `maxDiscoverySteps`.
    */
   expand?(paper: Paper): Promise<Paper[]>;
+
+  /**
+   * Optional batch title lookup for discovery: given source ids (same keyspace as `search`), return
+   * {id, title} in ONE call. Only sources with `expand` need it (the discovery selector reads titles
+   * before chasing). PubMed: one esummary call for comma-joined PMIDs.
+   */
+  summarize?(ids: string[]): Promise<{ id: string; title: string }[]>;
 }

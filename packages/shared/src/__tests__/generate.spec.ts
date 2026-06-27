@@ -1,14 +1,17 @@
 // generate owns the MECHANISM of a model call: lazy provider resolution per-call, the
 // @ai-sdk/openai client + generateText, opt-in retry-on-empty, usage+latency summed across
 // attempts. It owns no fail policy — emptiness is a value (returned), transport errors throw.
+// generateObject is the structured-output sibling: same provider wiring, no retry, no-object
+// failure returned (not thrown), transport errors propagate.
 
 jest.mock('@ai-sdk/openai', () => ({ createOpenAI: jest.fn(() => jest.fn((m: string) => ({ model: m }))) }));
-jest.mock('ai', () => ({ generateText: jest.fn() }));
+jest.mock('ai', () => ({ generateText: jest.fn(), generateObject: jest.fn() }));
 jest.mock('../provider', () => ({ getProvider: jest.fn() }));
 
-import { generate } from '../generate';
+import { generate, generateObject } from '../generate';
+import { z } from 'zod';
 
-const { generateText } = require('ai') as { generateText: jest.Mock };
+const { generateText, generateObject: aiGenerateObject } = require('ai') as { generateText: jest.Mock; generateObject: jest.Mock };
 const { createOpenAI } = require('@ai-sdk/openai') as { createOpenAI: jest.Mock };
 const { getProvider } = require('../provider') as { getProvider: jest.Mock };
 
@@ -140,5 +143,59 @@ describe('generate', () => {
   it('PROPAGATES (throws) a transport error — callers own fail policy', async () => {
     generateText.mockRejectedValue(new Error('ECONNREFUSED'));
     await expect(generate('research', { prompt: 'p', maxOutputTokens: 100 })).rejects.toThrow('ECONNREFUSED');
+  });
+});
+
+describe('generateObject', () => {
+  const schema = z.object({ reply: z.string() });
+
+  it('resolves the provider lazily and returns { object, usage, model, latencyMs }', async () => {
+    getProvider.mockReturnValue({ baseUrl: 'http://t', model: 'gpt-x', apiKey: 'k' });
+    aiGenerateObject.mockResolvedValue({
+      object: { reply: 'hello' },
+      usage: { inputTokens: 5, outputTokens: 10, totalTokens: 15 },
+    });
+    const r = await generateObject('research', { prompt: 'p', schema, maxOutputTokens: 100 });
+    expect(getProvider).toHaveBeenCalledWith('research');
+    expect(r.object).toEqual({ reply: 'hello' });
+    expect(r.usage).toEqual({ inputTokens: 5, outputTokens: 10, totalTokens: 15 });
+    expect(r.model).toBe('gpt-x');
+    expect(typeof r.latencyMs).toBe('number');
+  });
+
+  it('passes schema, prompt, system, temperature, and maxOutputTokens to the ai SDK', async () => {
+    aiGenerateObject.mockResolvedValue({ object: { reply: 'x' }, usage: { totalTokens: 1 } });
+    await generateObject('research', { prompt: 'the prompt', system: 'sys', temperature: 0.5, schema, maxOutputTokens: 200 });
+    const call = aiGenerateObject.mock.calls[0][0];
+    expect(call.schema).toBe(schema);
+    expect(call.prompt).toBe('the prompt');
+    expect(call.system).toBe('sys');
+    expect(call.temperature).toBe(0.5);
+    expect(call.maxOutputTokens).toBe(200);
+  });
+
+  it('normalises usage: only reported fields present, absent never coerced to zero', async () => {
+    aiGenerateObject.mockResolvedValue({ object: { reply: 'x' }, usage: { totalTokens: 42 } });
+    const r = await generateObject('research', { prompt: 'p', schema, maxOutputTokens: 100 });
+    expect(r.usage).toEqual({ totalTokens: 42 });
+    expect(r.usage).not.toHaveProperty('inputTokens');
+    expect(r.usage).not.toHaveProperty('outputTokens');
+  });
+
+  it('preserves usage from AI_NoObjectGeneratedError — never throws', async () => {
+    const err = new Error('no object');
+    err.name = 'AI_NoObjectGeneratedError';
+    (err as any).usage = { totalTokens: 42 };
+    aiGenerateObject.mockRejectedValue(err);
+    const r = await generateObject('research', { prompt: 'p', schema, maxOutputTokens: 100 });
+    expect(r.object).toBeUndefined();
+    expect(r.usage?.totalTokens).toBe(42);
+    expect(r.model).toBe('m'); // from beforeEach default
+    expect(typeof r.latencyMs).toBe('number');
+  });
+
+  it('PROPAGATES (throws) a transport error — callers own fail policy', async () => {
+    aiGenerateObject.mockRejectedValue(new Error('ECONNREFUSED'));
+    await expect(generateObject('research', { prompt: 'p', schema, maxOutputTokens: 100 })).rejects.toThrow('ECONNREFUSED');
   });
 });

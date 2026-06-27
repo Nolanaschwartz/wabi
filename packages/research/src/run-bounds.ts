@@ -12,13 +12,16 @@ import { Bounds } from './types';
  * bug this module fixes: the old fallback ran 3× the papers and reaped stale runs at 2× the wait).
  *
  * The drift is guarded: `run-bounds.drift.spec.ts` parses schema.prisma and asserts each @default equals
- * DEFAULTS[key] for the eight DB columns, so a schema edit that forgets this table (or vice versa) fails CI.
+ * DEFAULTS[key] for the eleven DB columns, so a schema edit that forgets this table (or vice versa) fails CI.
  */
 export const DEFAULTS: Bounds = {
   maxTopicsPerRun: 5,
   maxPapersPerTopic: 8,
   searchLimit: 40, // the one env-only field (RESEARCH_SEARCH_LIMIT) — NOT a DB column (ADR-0034)
   maxDiscoverySteps: 2,
+  maxNeighborsConsidered: 15,
+  maxChasePerExpansion: 3,
+  budgetPressureFraction: 0.2,
   maxDraftsPerTopic: 3,
   maxDraftsPerRun: 10,
   agentTimeoutMs: 90_000,
@@ -26,11 +29,11 @@ export const DEFAULTS: Bounds = {
   tokenBudget: 200_000,
 };
 
-/** The eight DB-governed bounds (ADR-0034) — every {@link Bounds} field except the env-only searchLimit. */
+/** The eleven DB-governed bounds (ADR-0034) — every {@link Bounds} field except the env-only searchLimit. */
 export type ResearchBounds = Omit<Bounds, 'searchLimit'>;
 
 /**
- * Inclusive valid ranges for the eight DB columns. Keyed by `keyof ResearchBounds` so the table can
+ * Inclusive valid ranges for the eleven DB columns. Keyed by `keyof ResearchBounds` so the table can
  * never drift from the type: add a bound to {@link Bounds} and this Record (and the schema, and
  * DEFAULTS) fail to compile until updated.
  * - counts: 1..100 (a run touching >100 topics/papers per step is a config error)
@@ -41,6 +44,9 @@ export const RANGES: Record<keyof ResearchBounds, { min: number; max: number }> 
   maxTopicsPerRun: { min: 1, max: 100 },
   maxPapersPerTopic: { min: 1, max: 100 },
   maxDiscoverySteps: { min: 1, max: 100 },
+  maxNeighborsConsidered: { min: 1, max: 100 },
+  maxChasePerExpansion: { min: 1, max: 100 },
+  budgetPressureFraction: { min: 0.01, max: 1 },
   maxDraftsPerTopic: { min: 1, max: 100 },
   maxDraftsPerRun: { min: 1, max: 100 },
   agentTimeoutMs: { min: 1_000, max: 3_600_000 },
@@ -69,6 +75,9 @@ export function fromConfigRow(
     maxPapersPerTopic: pick('maxPapersPerTopic'),
     searchLimit,
     maxDiscoverySteps: pick('maxDiscoverySteps'),
+    maxNeighborsConsidered: pick('maxNeighborsConsidered'),
+    maxChasePerExpansion: pick('maxChasePerExpansion'),
+    budgetPressureFraction: pick('budgetPressureFraction'),
     maxDraftsPerTopic: pick('maxDraftsPerTopic'),
     maxDraftsPerRun: pick('maxDraftsPerRun'),
     agentTimeoutMs: pick('agentTimeoutMs'),

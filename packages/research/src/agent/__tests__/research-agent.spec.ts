@@ -1,10 +1,16 @@
 import { ResearchAgent, AgentDeps, ExtractionPipeline } from '../research-agent';
 import { Source } from '../../sources/source';
 import { Bounds, Candidate, Paper, SourceKind } from '../../types';
+import { selectNeighbors } from '../discovery-selector';
+
+jest.mock('../discovery-selector', () => ({
+  selectNeighbors: jest.fn().mockResolvedValue({ ids: [], tokens: 0 }),
+}));
 
 const bounds: Bounds = {
   maxTopicsPerRun: 5, maxPapersPerTopic: 3, searchLimit: 40, maxDiscoverySteps: 1, maxDraftsPerTopic: 2,
-  maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000,
+  maxDraftsPerRun: 10, agentTimeoutMs: 5000, runTimeoutMs: 60000, tokenBudget: 1_000_000, budgetPressureFraction: 0.2,
+  maxNeighborsConsidered: 10, maxChasePerExpansion: 5,
 };
 
 /** A thin PubMed paper as the adapter's search() now yields it: id+kind+url, abstract filled by hydrate. */
@@ -32,6 +38,7 @@ function pubmedSource(over: Partial<Source> = {}): Source {
     }),
     fullText: jest.fn().mockResolvedValue(null),
     expand: jest.fn().mockResolvedValue([]),
+    summarize: jest.fn().mockResolvedValue([]),
     ...over,
   } as Source;
 }
@@ -174,6 +181,7 @@ describe('ResearchAgent', () => {
       pubmed: pubmedSource({
         search: jest.fn().mockResolvedValue([pubmedThin('1')]),
         expand: jest.fn().mockResolvedValue([pubmedThin('1')]),
+        summarize: jest.fn().mockResolvedValue([]),
       }),
     });
     const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 5, maxDraftsPerTopic: 5 });
@@ -285,6 +293,15 @@ describe('ResearchAgent', () => {
     expect(extract.mock.calls[0][3]).toHaveLength(1);
   });
 
+  it('collapses to one lens when remaining budget < tokenBudget * budgetPressureFraction', async () => {
+    const extract = jest.fn().mockResolvedValue({ candidates: [], tokens: 0 });
+    // gate pre-spends 60 of a 100 budget, so 40% remains; with budgetPressureFraction=0.5, <50% trips collapse.
+    const deps = baseDeps({}, { pubmed: pubmedSource({ search: jest.fn().mockResolvedValue([pubmedThin('1')]) }) },
+      { extract, gate: jest.fn().mockResolvedValue({ keep: true, tokens: 60 }) });
+    await new ResearchAgent(deps, { ...bounds, tokenBudget: 100, budgetPressureFraction: 0.5 }).run('topic');
+    expect(extract.mock.calls[0][3]).toHaveLength(1);
+  });
+
   it('does not count the search phase against the per-topic deadline (slow search still processes)', async () => {
     // Regression: the deadline used to start at run() entry, so a slow source fetch (the preprint
     // window) exhausted agentTimeoutMs before any paper was gated → `agentTimeout tokens=0` on topic 1.
@@ -353,5 +370,89 @@ describe('ResearchAgent', () => {
     const { summary } = await agent.run('topic');
     expect(summary.errors).toBe(1);
     expect(summary.collected).toBeGreaterThanOrEqual(1);
+  });
+
+  describe('discovery pocket', () => {
+    afterEach(() => jest.clearAllMocks());
+
+    it('caps neighbors to maxNeighborsConsidered, runs the selector, enqueues only chosen ids', async () => {
+      // source.expand → 20 thin neighbors; source.summarize → titles for first maxNeighborsConsidered;
+      // selector picks 2. Assert: summarize called with first 10 ids; only those 2 papers enqueued.
+      const neighbors20 = Array.from({ length: 20 }, (_, i) => pubmedThin(`n${i}`));
+      const capped = neighbors20.slice(0, bounds.maxNeighborsConsidered); // first 10
+      const summarizeResults = capped.map((p) => ({ id: p.sourceId, title: `Title ${p.sourceId}` }));
+      const chosenIds = [capped[0].sourceId, capped[3].sourceId]; // selector picks 2
+
+      jest.mocked(selectNeighbors).mockResolvedValueOnce({ ids: chosenIds, tokens: 5 });
+
+      const summarize = jest.fn().mockResolvedValue(summarizeResults);
+      const pubmed = pubmedSource({
+        search: jest.fn().mockResolvedValue([pubmedThin('main')]),
+        expand: jest.fn().mockResolvedValue(neighbors20),
+        summarize,
+      });
+
+      const extract = jest.fn().mockImplementation((_gen, p: Paper) =>
+        Promise.resolve({ candidates: [candidate(p.sourceId.replace('PMID:', ''))], tokens: 1 }));
+      const deps = baseDeps({}, { pubmed }, { extract });
+      const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 30, maxDraftsPerTopic: 30 });
+      await agent.run('topic');
+
+      // summarize was called with exactly the first maxNeighborsConsidered ids (cap enforced)
+      expect(summarize).toHaveBeenCalledWith(capped.map((p) => p.sourceId));
+      // only the selector-chosen papers were extracted (not n1, n2, n4..n19)
+      const extractedIds = extract.mock.calls.map((c) => (c[1] as Paper).sourceId);
+      expect(extractedIds).toContain(chosenIds[0]);
+      expect(extractedIds).toContain(chosenIds[1]);
+      expect(extractedIds).not.toContain(capped[1].sourceId); // n1 — not chosen
+      expect(extractedIds).not.toContain(neighbors20[10].sourceId); // n10 — beyond cap
+    });
+
+    it('skips discovery entirely under budget pressure (summarize NOT called)', async () => {
+      // Gate consumes 85 tokens of a 100-token budget; remaining (15) < tokenBudget * budgetPressureFraction (20).
+      // The whole expand block must be skipped: expand not called, summarize not called.
+      const summarize = jest.fn().mockResolvedValue([]);
+      const expand = jest.fn().mockResolvedValue([pubmedThin('nb1')]);
+      const pubmed = pubmedSource({
+        search: jest.fn().mockResolvedValue([pubmedThin('main')]),
+        expand,
+        summarize,
+      });
+
+      const deps = baseDeps({}, { pubmed }, { gate: jest.fn().mockResolvedValue({ keep: true, tokens: 85 }) });
+      const agent = new ResearchAgent(deps, { ...bounds, tokenBudget: 100 });
+      await agent.run('topic');
+
+      expect(summarize).not.toHaveBeenCalled();
+      expect(expand).not.toHaveBeenCalled();
+    });
+
+    it('falls back to deterministic top-K when the selector returns floor (gen failure path)', async () => {
+      // selectNeighbors returns the floor — first maxChasePerExpansion of the capped list —
+      // which is what it emits internally when gen throws. The agent must enqueue those ids only.
+      const neighbors10 = Array.from({ length: 10 }, (_, i) => pubmedThin(`nb${i}`));
+      const floorIds = neighbors10.slice(0, bounds.maxChasePerExpansion).map((p) => p.sourceId);
+
+      jest.mocked(selectNeighbors).mockResolvedValueOnce({ ids: floorIds, tokens: 0 });
+
+      const summarize = jest.fn().mockResolvedValue(
+        neighbors10.map((p) => ({ id: p.sourceId, title: `T${p.sourceId}` })),
+      );
+      const pubmed = pubmedSource({
+        search: jest.fn().mockResolvedValue([pubmedThin('main')]),
+        expand: jest.fn().mockResolvedValue(neighbors10),
+        summarize,
+      });
+
+      const deps = baseDeps({}, { pubmed });
+      const agent = new ResearchAgent(deps, { ...bounds, maxPapersPerTopic: 20, maxDraftsPerTopic: 20 });
+      await agent.run('topic');
+
+      // All floor ids reached the seen ledger (meaning they were enqueued and dequeued)
+      const seenCalls = jest.mocked(deps.seen).mock.calls.map((c) => c[0]);
+      floorIds.forEach((id) => expect(seenCalls).toContain(id));
+      // Papers beyond the floor were NOT enqueued
+      expect(seenCalls).not.toContain(neighbors10[bounds.maxChasePerExpansion].sourceId);
+    });
   });
 });

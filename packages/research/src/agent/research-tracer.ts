@@ -27,7 +27,7 @@ import { defaultLogger, Logger } from '../util/logger';
 
 // The research span vocabulary — one enumerated union, never ad-hoc strings at call sites. These
 // mirror the LLM steps the orchestrator drives per paper (merge = within-paper lens dedup).
-export type ResearchSpanName = 'gate' | 'extract' | 'merge' | 'judge' | 'dedup';
+export type ResearchSpanName = 'gate' | 'extract' | 'merge' | 'judge' | 'dedup' | 'discovery';
 
 export interface RunTraceInput {
   /** The orchestrator's run id — used to correlate this run's spans to one parent observation. */

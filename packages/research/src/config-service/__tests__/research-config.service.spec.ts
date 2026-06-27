@@ -170,6 +170,9 @@ describe('ResearchConfigService', () => {
       maxTopicsPerRun: 5,
       maxPapersPerTopic: 8,
       maxDiscoverySteps: 2,
+      maxNeighborsConsidered: 15,
+      maxChasePerExpansion: 3,
+      budgetPressureFraction: 0.2,
       maxDraftsPerTopic: 3,
       maxDraftsPerRun: 10,
       agentTimeoutMs: 90000,
@@ -244,10 +247,52 @@ describe('ResearchConfigService', () => {
       expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
     });
 
+    it('accepts a valid fractional budgetPressureFraction (0.5)', async () => {
+      const updated = { id: 'singleton', ...validBounds, budgetPressureFraction: 0.5 };
+      prismaMock.researchConfig.update.mockResolvedValue(updated);
+
+      const result = await service.updateBounds({ ...validBounds, budgetPressureFraction: 0.5 });
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { ...validBounds, budgetPressureFraction: 0.5 },
+      });
+      expect(result).toEqual(updated);
+    });
+
+    it('rejects budgetPressureFraction above the ceiling (1.5)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ ...validBounds, budgetPressureFraction: 1.5 }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
+    });
+
     it('names the offending field in the rejection message', async () => {
       await expect(service.updateBounds({ ...validBounds, tokenBudget: 0 })).rejects.toThrow(
         /tokenBudget/,
       );
+    });
+
+    it('accepts a partial payload (omitting some fields) and writes only the provided keys', async () => {
+      prismaMock.researchConfig.update.mockResolvedValue({ id: 'singleton', maxTopicsPerRun: 3, tokenBudget: 50_000 });
+
+      await service.updateBounds({ maxTopicsPerRun: 3, tokenBudget: 50_000 } as any);
+
+      expect(prismaMock.researchConfig.update).toHaveBeenCalledWith({
+        where: { id: 'singleton' },
+        data: { maxTopicsPerRun: 3, tokenBudget: 50_000 },
+      });
+    });
+
+    it('rejects a partial payload where the present field is out of range (still validates present fields)', async () => {
+      const { BadRequestException } = require('@nestjs/common');
+
+      await expect(
+        service.updateBounds({ maxTopicsPerRun: 0 } as any), // 0 is below the min of 1
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prismaMock.researchConfig.update).not.toHaveBeenCalled();
     });
   });
 
@@ -262,8 +307,9 @@ describe('ResearchConfigService', () => {
     it('reads the singleton once and maps it to a full Bounds (searchLimit from env)', async () => {
       delete process.env[KEY];
       const row = {
-        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3, maxDraftsPerTopic: 4,
-        maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
+        maxTopicsPerRun: 7, maxPapersPerTopic: 9, maxDiscoverySteps: 3,
+        maxNeighborsConsidered: 20, maxChasePerExpansion: 5, budgetPressureFraction: 0.3,
+        maxDraftsPerTopic: 4, maxDraftsPerRun: 12, agentTimeoutMs: 80_000, runTimeoutMs: 500_000, tokenBudget: 150_000,
       };
       prismaMock.researchConfig.findUnique.mockResolvedValue(row);
 

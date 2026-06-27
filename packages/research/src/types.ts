@@ -46,6 +46,12 @@ export interface Bounds {
    * PROCESS (`maxPapersPerTopic`). Server-ranked by relevance; the gate + processing cap pick from them. */
   searchLimit: number;
   maxDiscoverySteps: number;
+  /** Deterministic relatedness prefilter: how many PubMed neighbors the discovery selector may see. */
+  maxNeighborsConsidered: number;
+  /** Discovery selector output cap, and the deterministic fail-open floor when the selector fails. */
+  maxChasePerExpansion: number;
+  /** When remaining budget < tokenBudget * this fraction, collapse to one lens AND skip discovery. */
+  budgetPressureFraction: number;
   maxDraftsPerTopic: number;
   maxDraftsPerRun: number;
   agentTimeoutMs: number;

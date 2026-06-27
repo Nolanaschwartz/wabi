@@ -2,16 +2,13 @@ import { Bounds, Candidate, EvidenceTier, Lens, Paper, RunSummary, SourceKind } 
 import { Source } from '../sources/source';
 import { Logger, noopLogger } from '../util/logger';
 import { ResearchSpanInput, RunTraceInput } from './research-tracer';
-import { makeResearchGenerate, type ResearchGenerate } from './research-generate';
+import { makeResearchGenerate, makeResearchGenerateObject, type ResearchGenerate, type ResearchGenerateObject } from './research-generate';
 import { evidenceTier } from './extract';
 import { prescreen } from './scope-policy';
 import { lensesForTier } from './lenses';
 import { Concepts } from '../sources/query/concepts';
 import { queryForKind } from '../sources/query/for-kind';
-
-// Below this fraction of the token budget remaining, fan a paper out across a SINGLE lens instead of
-// the full set — lenses fall before papers, so a near-exhausted run still mines something per paper.
-const BUDGET_PRESSURE_FRACTION = 0.2;
+import { selectNeighbors } from './discovery-selector';
 
 export interface AgentDeps {
   /** Evidence sources keyed by kind. Insertion order is the search/queue order (pubmed→medrxiv→psyarxiv).
@@ -31,16 +28,19 @@ export interface AgentDeps {
   pipeline: ExtractionPipeline;
 }
 
-/** The five LLM steps the orchestrator runs per paper, grouped behind one seam (issue 02). */
+/** The five LLM steps the orchestrator runs per paper, grouped behind one seam (issue 02).
+ * gate/extract/merge/judge use the structured-output seam (genObj) — schema-decoded, no stripFences.
+ * dedup retains gen (it moved to embeddings in Task 5 and no longer makes LLM calls, but keeps the
+ * signature for call-site stability). */
 export interface ExtractionPipeline {
-  gate(gen: ResearchGenerate, abstract: string, topic: string): Promise<{ keep: boolean; tokens: number }>;
+  gate(genObj: ResearchGenerateObject, abstract: string, topic: string): Promise<{ keep: boolean; tokens: number }>;
   /** Fan one paper out across the given lenses; returns 0..N candidates (slice 03). */
-  extract(gen: ResearchGenerate, paper: Paper, body: string, lenses: Lens[]): Promise<{ candidates: Candidate[]; tokens: number }>;
+  extract(genObj: ResearchGenerateObject, paper: Paper, body: string, lenses: Lens[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Collapse a paper's lens candidates into its distinct techniques (slice 04). */
-  merge(gen: ResearchGenerate, candidates: Candidate[]): Promise<{ candidates: Candidate[]; tokens: number }>;
+  merge(genObj: ResearchGenerateObject, candidates: Candidate[]): Promise<{ candidates: Candidate[]; tokens: number }>;
   /** Score, faithfulness-check, sharpen, and tier-cap a paper's candidates (slice 05). */
-  judge(gen: ResearchGenerate, candidates: Candidate[], tier: EvidenceTier): Promise<{ candidates: Candidate[]; tokens: number }>;
-  dedup(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<{ duplicate: boolean; tokens: number }>;
+  judge(genObj: ResearchGenerateObject, candidates: Candidate[], tier: EvidenceTier): Promise<{ candidates: Candidate[]; tokens: number }>;
+  dedup(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<{ duplicate: boolean; tokens: number; degraded?: boolean }>;
 }
 
 /** The structural slice of {@link ResearchTracer} the orchestrator uses. Kept as an interface (not the
@@ -76,11 +76,14 @@ export class ResearchAgent {
     const summary = emptySummary();
     const kept: Candidate[] = [];
     const visited = new Set<string>();
+    let dedupDegraded = false; // log the embedder-down fallback at most once per topic, not per candidate
 
-    // Build the run's `gen` seam ONCE from the run's tracer + run-id (absent → no spans, generate still
-    // runs). Each step calls it instead of importing `generate`; the span for a successful call is
-    // emitted inside `gen`, so the orchestrator no longer threads or re-emits per-step traces.
-    const gen = makeResearchGenerate(this.tracing?.tracer, this.tracing?.runId);
+    // Build the per-run seams ONCE from the run's tracer + run-id (absent → no spans, generate still
+    // runs). `gen` is the text seam (dedup + discovery); `genObj` is the schema-decoded sibling
+    // (gate/extract/merge/judge). Each seam emits its span on a successful call — the orchestrator no
+    // longer threads or re-emits per-step traces.
+    const gen = makeResearchGenerate(this.tracing?.tracer, this.tracing?.runId, this.log);
+    const genObj = makeResearchGenerateObject(this.tracing?.tracer, this.tracing?.runId, this.log);
 
     this.log.info('topic start', { topic });
 
@@ -188,7 +191,7 @@ export class ResearchAgent {
           continue;
         }
 
-        const gate = await this.deps.pipeline.gate(gen, paper.abstract, topic);
+        const gate = await this.deps.pipeline.gate(genObj, paper.abstract, topic);
         this.tokens += gate.tokens;
         this.log.debug('gate', { id: paper.sourceId, keep: gate.keep, tokens: gate.tokens });
         if (!gate.keep) {
@@ -200,13 +203,26 @@ export class ResearchAgent {
 
         // Citation-graph discovery, where the source offers it (pubmed). Expanded papers re-enter the
         // queue as thin hits and flow through the same hydrate path.
-        if (src.expand && discoverySteps < this.bounds.maxDiscoverySteps) {
+        // Budget pressure skips the WHOLE expansion (no expand, no summarize, no selector) so the
+        // remaining budget is reserved for lenses rather than wasted on discovery (ADR-0021).
+        const underPressure =
+          this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * this.bounds.budgetPressureFraction;
+        if (src.expand && src.summarize && discoverySteps < this.bounds.maxDiscoverySteps && !underPressure) {
           discoverySteps++;
-          const related = await src.expand(paper).catch(() => [] as Paper[]);
-          for (const rp of related) {
-            if (!visited.has(rp.sourceId)) queue.push(rp);
+          const related = (await src.expand(paper).catch(() => [] as Paper[]))
+            .filter((rp) => !visited.has(rp.sourceId))
+            .slice(0, this.bounds.maxNeighborsConsidered); // deterministic relatedness cap
+          if (related.length > 0) {
+            const titles = await src.summarize(related.map((rp) => rp.sourceId)).catch(() => []);
+            const byId = new Map(related.map((rp) => [rp.sourceId, rp]));
+            const neighbors = titles.filter((t) => byId.has(t.id));
+            const sel = await selectNeighbors(
+              gen, topic, { title: paper.title, abstract: paper.abstract }, neighbors, this.bounds.maxChasePerExpansion,
+            );
+            this.tokens += sel.tokens;
+            for (const id of sel.ids) { const rp = byId.get(id); if (rp) queue.push(rp); }
+            this.log.debug('discovery select', { from: paper.sourceId, considered: related.length, chased: sel.ids.length, queue: queue.length });
           }
-          this.log.debug('discovery expand', { from: paper.sourceId, related: related.length, queue: queue.length });
         }
 
         const full = await src.fullText(paper).catch(() => null);
@@ -217,19 +233,19 @@ export class ResearchAgent {
         // Tier-scaled lens fan-out; under budget pressure collapse to one lens (lenses fall before papers).
         const tier = evidenceTier(paper);
         let lenses = lensesForTier(tier);
-        if (this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * BUDGET_PRESSURE_FRACTION) {
+        if (this.bounds.tokenBudget - this.tokens < this.bounds.tokenBudget * this.bounds.budgetPressureFraction) {
           lenses = lenses.slice(0, 1);
         }
 
-        const { candidates, tokens } = await this.deps.pipeline.extract(gen, paper, body, lenses);
+        const { candidates, tokens } = await this.deps.pipeline.extract(genObj, paper, body, lenses);
         this.tokens += tokens;
         if (candidates.length === 0) { this.log.info('extract: no candidate', { id: paper.sourceId, tokens }); continue; }
 
         // Collapse the lens candidates into the paper's distinct techniques, then score + tier-cap them.
-        const m = await this.deps.pipeline.merge(gen, candidates);
+        const m = await this.deps.pipeline.merge(genObj, candidates);
         this.tokens += m.tokens;
 
-        const j = await this.deps.pipeline.judge(gen, m.candidates, tier);
+        const j = await this.deps.pipeline.judge(genObj, m.candidates, tier);
         this.tokens += j.tokens;
         const distinct = j.candidates;
         summary.extracted += distinct.length;
@@ -240,6 +256,10 @@ export class ResearchAgent {
           if (kept.length >= this.bounds.maxDraftsPerTopic) { summary.stopReason = 'maxDraftsPerTopic'; break; }
           const dd = await this.deps.pipeline.dedup(gen, candidate, kept);
           this.tokens += dd.tokens;
+          if (dd.degraded && !dedupDegraded) {
+            dedupDegraded = true;
+            this.log.info('dedup degraded: embedder unavailable, using lexical fallback', { topic });
+          }
           if (dd.duplicate) {
             summary.inRunDeduped++;
             this.log.info('in-run duplicate', { id: paper.sourceId, title: candidate.title });

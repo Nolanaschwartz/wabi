@@ -26,8 +26,9 @@ describe('run-bounds DEFAULTS mirror the ResearchConfig schema @defaults', () =>
   );
 
   it.each(dbKeys)('%s mirrors its schema @default', (key) => {
-    const match = model?.match(new RegExp(`\\b${key}\\b\\s+Int\\s+@default\\((\\d+)\\)`));
-    expect(match).toBeTruthy(); // the column exists in the schema with an Int @default
+    // Accept both Int and Float columns so fractional bounds (e.g. budgetPressureFraction) are covered.
+    const match = model?.match(new RegExp(`\\b${key}\\b\\s+(?:Int|Float)\\s+@default\\(([\\d.]+)\\)`));
+    expect(match).toBeTruthy(); // the column exists in the schema with an Int or Float @default
     expect(DEFAULTS[key]).toBe(Number(match![1]));
   });
 });

@@ -1,20 +1,12 @@
 import { Candidate } from '../types';
 import type { ResearchGenerate } from './research-generate';
+import { embed } from '@wabi/shared/embed';
 
-const HIGH = 0.6;
-// Below LOW: auto-distinct, no LLM. Above HIGH: auto-duplicate, no LLM. The band in between goes to
-// the triage LLM. The floor is raised off the old 0.05 (which sent nearly every pair to the model)
-// because normalization below now lifts genuine paraphrases — "box breathing" vs "square breathing
-// drill" — out of near-zero overlap and into the band, instead of leaving them to be auto-rejected.
-const LOW = 0.18;
-
-// ponytail: curated stem/synonym/stopword folding, narrow on purpose. Real semantic dedup lives on
-// the bot's embeddings; here we only need raw paraphrases to clear the floor. Upgrade path = embeddings.
-// KNOWN TRADE: at floor 0.18, a genuine paraphrase whose normalized similarity stays below the floor
-// AND isn't folded by the synonym map (which today only knows square↔box) auto-resolves as distinct
-// with no LLM — both drafts then reach the human review queue (ADR-0012) as separate items. That is a
-// recall cost paid deliberately to cut the merge LLM-call volume; it loses no data (a human dedups),
-// and the upgrade that removes it is bot-style embeddings, not a bigger synonym list.
+// ponytail: curated stem/synonym/stopword folding, narrow on purpose. Real semantic dedup now lives
+// in isDuplicateInRun (embed cosine); these helpers survive as the fail-open lexical fallback AND
+// because merge-within-paper.ts imports SIM_FLOOR/SIM_CEIL/lexSim for within-paper clustering.
+// KNOWN TRADE: the lexical fallback (embed down) only fires the ceiling rule — ambiguous-band pairs
+// resolve DISTINCT (more drafts to human review, no wrongful drops), no LLM.
 const SYNONYMS: Record<string, string> = { square: 'box' };
 const STOPWORDS = new Set(['drill', 'down', 'daily', 'nightly', 'routine', 'practice', 'technique', 'exercise', 'method', 'step']);
 function stem(w: string): string {
@@ -38,50 +30,65 @@ function jaccard(a: string, b: string): number {
 }
 const sig = (c: Candidate) => `${c.title} ${c.technique}`;
 
-/** Bounds of the ambiguous band, exported so the within-paper merge pre-pass (slice 06) shares the
- * exact same lexical floor/ceiling as cross-paper dedup: below the floor is obviously distinct, at or
- * above the ceiling is obviously the same — only the band in between needs the LLM. */
-export const SIM_FLOOR = LOW;
-export const SIM_CEIL = HIGH;
+/** Bounds of the ambiguous band, exported so the within-paper merge pre-pass shares the exact same
+ * lexical floor/ceiling as the fallback: below the floor is obviously distinct, at or above the ceiling
+ * is obviously the same. Used by merge-within-paper.ts. */
+export const SIM_FLOOR = 0.18;
+export const SIM_CEIL = 0.6;
 
-/** Normalized lexical similarity of two candidates' signatures (the same metric dedup prefilters on).
- * Below {@link SIM_FLOOR} the pair is obviously distinct and never needs an LLM. */
+/** Normalized lexical similarity of two candidates' signatures. Below {@link SIM_FLOOR} the pair is
+ * obviously distinct. Used by merge-within-paper.ts. */
 export function lexSim(a: Candidate, b: Candidate): number {
   return jaccard(sig(a), sig(b));
 }
 
-export interface DedupResult { duplicate: boolean; tokens: number }
+export interface DedupResult {
+  duplicate: boolean;
+  tokens: number;
+  /** True when the embedder was down and this verdict came from the lexical-ceiling fallback, not
+   * embeddings. The run logs this once so a silent embedding outage (missing EMBEDDING_*, ADR-0034)
+   * is visible rather than a quiet recall drop (ambiguous-band paraphrases resolve DISTINCT). */
+  degraded?: boolean;
+}
 
-/** In-run technique dedup with no embeddings (those live on the bot). Lexical prefilter decides the
- * clear cases; the triage LLM only adjudicates the ambiguous middle. */
-export async function isDuplicateInRun(gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<DedupResult> {
+// ─── Embedding cosine path ──────────────────────────────────────────────────
+
+// Cosine at/above this counts an in-run duplicate. Reuses the bot's library-dedup knob so the two
+// dedups share one scale (strategy-admin dedupThreshold()). High by design: in-run dedup is LOSSY
+// (a duplicate is dropped, never reaching human review), so fail toward sending paraphrases to review.
+function dupThreshold(): number {
+  return parseFloat(process.env.RESEARCH_DEDUP_THRESHOLD || '0.95');
+}
+
+function cosine(a: number[], b: number[]): number {
+  if (a.length === 0 || b.length === 0 || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+}
+
+/** The exact string the bot's index/dedup query is built from, so our cosine scale matches the bot's. */
+const embedSig = (c: Candidate) => `${c.title}: ${c.technique}`;
+
+/** Lexical fallback (embedder down): the original ceiling-only rule — a clear paraphrase merges, the
+ * ambiguous band resolves DISTINCT (no LLM), per spec (more drafts to human, no wrongful drops). */
+function lexicalDuplicate(candidate: Candidate, kept: Candidate[]): boolean {
+  return kept.some((k) => jaccard(sig(candidate), sig(k)) >= SIM_CEIL);
+}
+
+/** In-run technique dedup via embeddings (cross-run library dedup is the bot's, ADR-0012). `_gen` is
+ * retained in the signature for call-site stability but unused — the embedding is the judgment. */
+export async function isDuplicateInRun(_gen: ResearchGenerate, candidate: Candidate, kept: Candidate[]): Promise<DedupResult> {
   if (kept.length === 0) return { duplicate: false, tokens: 0 };
 
-  let best = kept[0];
-  let bestSim = 0;
-  for (const k of kept) {
-    const s = jaccard(sig(candidate), sig(k));
-    if (s > bestSim) { bestSim = s; best = k; }
+  const vec = await embed(embedSig(candidate));
+  if (vec.length === 0) {
+    // Fail-open: embedder down → lexical ceiling rule. No tokens spent (no LLM). `degraded` lets the
+    // run surface the outage once (the embedding path is the intended judgment; this is the fallback).
+    return { duplicate: lexicalDuplicate(candidate, kept), tokens: 0, degraded: true };
   }
-
-  if (bestSim >= HIGH) return { duplicate: true, tokens: 0 };
-  if (bestSim <= LOW) return { duplicate: false, tokens: 0 };
-
-  try {
-    // The `gen` seam owns the mechanism (role→cap binding, lazy provider resolution, the call, span
-    // emission); dedup keeps its role and its fail policy. No retry-on-empty — an empty/starved reply
-    // maps to not-a-duplicate below, same as a transport error, so a second attempt buys nothing here.
-    const prompt =
-      `Are these two coaching techniques essentially the same? Answer only "same" or "different".\n` +
-      `A: ${sig(candidate)}\nB: ${sig(best)}`;
-    const { text, usage } = await gen('dedup', 'research-triage', { prompt });
-    // Empty/uncertain output (e.g. a reasoning model starved by the cap) reads as NOT duplicate,
-    // the safe direction — keep the candidate rather than silently drop it on an unparseable answer.
-    return {
-      duplicate: text.trim().toLowerCase().startsWith('same'),
-      tokens: usage?.totalTokens ?? 0,
-    };
-  } catch {
-    return { duplicate: false, tokens: 0 };
-  }
+  const keptVecs = await Promise.all(kept.map((k) => embed(embedSig(k))));
+  const threshold = dupThreshold();
+  const duplicate = keptVecs.some((kv) => cosine(vec, kv) >= threshold);
+  return { duplicate, tokens: 0 };
 }

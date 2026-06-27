@@ -12,6 +12,9 @@ describe('run-bounds', () => {
       // The rest of the schema columns.
       expect(DEFAULTS.maxTopicsPerRun).toBe(5);
       expect(DEFAULTS.maxDiscoverySteps).toBe(2);
+      expect(DEFAULTS.maxNeighborsConsidered).toBe(15);
+      expect(DEFAULTS.maxChasePerExpansion).toBe(3);
+      expect(DEFAULTS.budgetPressureFraction).toBe(0.2);
       expect(DEFAULTS.maxDraftsPerTopic).toBe(3);
       expect(DEFAULTS.maxDraftsPerRun).toBe(10);
       expect(DEFAULTS.tokenBudget).toBe(200_000);
@@ -21,31 +24,37 @@ describe('run-bounds', () => {
   });
 
   describe('RANGES', () => {
-    it('is keyed to exactly the eight DB-governed bounds (not the env-only searchLimit)', () => {
+    it('is keyed to exactly the eleven DB-governed bounds (not the env-only searchLimit)', () => {
       const keys = Object.keys(RANGES).sort();
       expect(keys).toEqual(
         [
           'agentTimeoutMs',
+          'budgetPressureFraction',
+          'maxChasePerExpansion',
           'maxDiscoverySteps',
           'maxDraftsPerRun',
           'maxDraftsPerTopic',
+          'maxNeighborsConsidered',
           'maxPapersPerTopic',
           'maxTopicsPerRun',
           'runTimeoutMs',
           'tokenBudget',
         ].sort(),
       );
-      expect(keys).toHaveLength(8);
+      expect(keys).toHaveLength(11);
       expect(keys).not.toContain('searchLimit');
     });
   });
 
   describe('fromConfigRow', () => {
-    /** A valid singleton row carrying all eight DB columns with non-default values. */
+    /** A valid singleton row carrying all eleven DB columns with non-default values. */
     const fullRow = {
       maxTopicsPerRun: 7,
       maxPapersPerTopic: 9,
       maxDiscoverySteps: 3,
+      maxNeighborsConsidered: 20,
+      maxChasePerExpansion: 5,
+      budgetPressureFraction: 0.3,
       maxDraftsPerTopic: 4,
       maxDraftsPerRun: 12,
       agentTimeoutMs: 80_000,

@@ -128,20 +128,32 @@ export class ResearchConfigService implements OnModuleInit {
   }
 
   /**
-   * Tunes the eight run bounds on the singleton. Server-side range validation is the gate: every
-   * field must be a positive integer inside its RANGES band, so an operator can never silently
+   * Tunes the run bounds on the singleton. Server-side range validation is the gate: every
+   * field must be a finite number inside its RANGES band. Integer-typed bounds (where min is
+   * itself an integer) additionally require a whole number, so an operator can never silently
    * save a zero budget (or a degenerate timeout/count) that produces nothing (issue 03, ADR-0034).
-   * Validates ALL fields and reports every offender; rejects with BadRequestException before any write.
+   * Float-typed bounds (e.g. budgetPressureFraction, where min is fractional) accept any finite
+   * number in [min, max]. Validates ALL fields and reports every offender; rejects with
+   * BadRequestException before any write.
    */
   async updateBounds(bounds: ResearchBounds): Promise<unknown> {
     const offenders: string[] = [];
     const data: Partial<ResearchBounds> = {};
 
     for (const key of Object.keys(RANGES) as (keyof ResearchBounds)[]) {
-      const { min, max } = RANGES[key];
       const value = bounds[key];
-      if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
-        offenders.push(`${key} must be an integer in [${min}, ${max}] (got ${String(value)})`);
+      if (value === undefined) continue; // partial update: omitted field keeps its current value
+      const { min, max } = RANGES[key];
+      const isIntegerBound = Number.isInteger(min);
+      const valid =
+        typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value >= min &&
+        value <= max &&
+        (!isIntegerBound || Number.isInteger(value));
+      if (!valid) {
+        const kind = isIntegerBound ? 'integer' : 'number';
+        offenders.push(`${key} must be a ${kind} in [${min}, ${max}] (got ${String(value)})`);
       } else {
         data[key] = value;
       }
