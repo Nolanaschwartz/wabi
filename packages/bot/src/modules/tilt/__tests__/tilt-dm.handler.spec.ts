@@ -26,6 +26,8 @@ describe('TiltDmHandler', () => {
     screenedBatch: { text: 'cannot catch a break' } as any,
     session: null,
     strategies: [],
+    memories: [],
+    memoryLatencyMs: 0,
     inAftermath: false,
     timezone: 'UTC',
     traceId: 'trace-1',

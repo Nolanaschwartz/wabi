@@ -55,6 +55,8 @@ describe('DmRouterService', () => {
     screenedBatch: { text: 'hey' } as any,
     session: null,
     strategies: [],
+    memories: [],
+    memoryLatencyMs: 0,
     inAftermath: false,
     timezone: 'UTC',
     traceId: 'trace-1',

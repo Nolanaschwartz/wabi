@@ -44,7 +44,12 @@ export class CoachService {
         system,
         prompt,
         temperature: 0.7,
-        maxOutputTokens: Number(process.env.COACH_MAX_OUTPUT_TOKENS) || 2048,
+        // 1024 sits above the entire observed legitimate range (real coach replies span ~230–790
+        // output tokens incl. reasoning), with headroom, while halving the worst-case generation
+        // budget that drove the latency tail (a lone runaway hit the old 2048 cap). Stays clear of the
+        // retryOnEmpty trap: a real turn never reaches the cap, so it can't truncate to empty and double
+        // the call. Env-overridable. Ponytail: raise the env if longer replies become legitimately common.
+        maxOutputTokens: Number(process.env.COACH_MAX_OUTPUT_TOKENS) || 1024,
         retryOnEmpty: { temperature: 0.3 },
         // Below the crisis gate: the AI SDK auto-captures model/usage/latency (and prompt+reply when
         // recordInputs/Outputs are set) to the isolated Langfuse tracer. Above-gate callers omit this.

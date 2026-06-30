@@ -29,6 +29,8 @@ describe('CoachHandler', () => {
     screenedBatch: { text: 'i keep tilting in ranked' } as any,
     session: null,
     strategies: [],
+    memories: [],
+    memoryLatencyMs: 0,
     inAftermath: false,
     timezone: 'UTC',
     traceId: 'trace-1',
@@ -113,12 +115,10 @@ describe('CoachHandler', () => {
   });
 
   it('emits a memory span with recall counts/similarities/ids and no memory text', async () => {
-    memoryStore.search.mockResolvedValue([
+    await handler.handle(baseCtx({ memories: [
       { id: 'm1', content: 'SECRET FACT ONE', similarity: 0.9, updatedAt: 1 },
       { id: 'm2', content: 'SECRET FACT TWO', similarity: 0.8, updatedAt: 2 },
-    ]);
-
-    await handler.handle(baseCtx());
+    ] }));
 
     const memory = langfuseTracer.traceObservation.mock.calls.map((c) => c[0] as any).find((p) => p.name === 'memory');
     expect(memory).toBeDefined();
@@ -133,11 +133,10 @@ describe('CoachHandler', () => {
 
   it('includes the query and recalled memory text on the memory span in local full fidelity', async () => {
     (langfuseTracer as any).localFullFidelity = true;
-    memoryStore.search.mockResolvedValue([
-      { id: 'm1', content: 'plays Valorant nightly', similarity: 0.9, updatedAt: 1 },
-    ]);
 
-    await handler.handle(baseCtx());
+    await handler.handle(baseCtx({ memories: [
+      { id: 'm1', content: 'plays Valorant nightly', similarity: 0.9, updatedAt: 1 },
+    ] }));
 
     const memory = langfuseTracer.traceObservation.mock.calls.map((c) => c[0] as any).find((p) => p.name === 'memory');
     expect(memory.input).not.toBe('');
@@ -146,8 +145,8 @@ describe('CoachHandler', () => {
     expect(memory.metadata.ids).toEqual(['m1']);
   });
 
-  it('still recalls memory and replies with a disabled (real) tracer — hot-path isolation', async () => {
-    // A real tracer with no Langfuse env is disabled and emits nothing; recall + reply must proceed.
+  it('replies with a disabled (real) tracer — hot-path isolation', async () => {
+    // A real tracer with no Langfuse env is disabled and emits nothing; the reply must proceed.
     const disabledHandler = new CoachHandler(
       coach as unknown as CoachService,
       sessionBuffer as unknown as SessionBufferService,
@@ -159,18 +158,15 @@ describe('CoachHandler', () => {
     const ctx = baseCtx();
 
     await expect(disabledHandler.handle(ctx)).resolves.toBeUndefined();
-    expect(memoryStore.search).toHaveBeenCalled();
     expect(ctx.message.reply).toHaveBeenCalledWith('That sounds rough. Hang in there.');
   });
 
   it('orders recalled memories newest-first before building the prompt', async () => {
     const DAY = 24 * 60 * 60 * 1000;
-    memoryStore.search.mockResolvedValue([
+    await handler.handle(baseCtx({ memories: [
       { id: 'old', content: 'STALE FACT', similarity: 0.8, updatedAt: Date.now() - 90 * DAY },
       { id: 'new', content: 'FRESH FACT', similarity: 0.8, updatedAt: Date.now() - 1 * DAY },
-    ]);
-
-    await handler.handle(baseCtx());
+    ] }));
 
     const prompt = coach.generateDetailed.mock.calls[0][1];
     expect(prompt.indexOf('FRESH FACT')).toBeLessThan(prompt.indexOf('STALE FACT'));
@@ -245,9 +241,10 @@ describe('CoachHandler', () => {
     );
   });
 
-  it('still replies when memory recall fails (degrades to no memories, hot-path isolation)', async () => {
-    memoryStore.search.mockRejectedValue(new Error('qdrant down'));
-    const ctx = baseCtx();
+  it('replies given no recalled memories (upstream recall degraded to [] — hot-path isolation)', async () => {
+    // Recall now runs upstream in CoachingService and fails open to []; the handler must coach fine on
+    // an empty memories ctx.
+    const ctx = baseCtx({ memories: [] });
 
     await expect(handler.handle(ctx)).resolves.toBeUndefined();
     expect(ctx.message.reply).toHaveBeenCalledWith('That sounds rough. Hang in there.');
