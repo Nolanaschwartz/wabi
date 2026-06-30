@@ -35,7 +35,7 @@ describe('CoachService', () => {
     expect(result).toBe("That sounds tough. Take a deep breath — you'll find your footing.");
   });
 
-  it('calls generate with the coach role, system prompt, 2048 cap, temp 0.7 and retryOnEmpty at 0.3', async () => {
+  it('calls generate with the coach role, system prompt, 1024 cap, temp 0.7 and retryOnEmpty at 0.3', async () => {
     generate.mockResolvedValue(reply('ok'));
 
     await service.generate('system text', 'prompt text');
@@ -47,7 +47,7 @@ describe('CoachService', () => {
         system: 'system text',
         prompt: 'prompt text',
         temperature: 0.7,
-        maxOutputTokens: 2048,
+        maxOutputTokens: 1024,
         retryOnEmpty: { temperature: 0.3 },
       }),
     );
@@ -125,11 +125,11 @@ describe('CoachService', () => {
     expect(result.usage).toBeUndefined();
   });
 
-  it('requests a 2048 output budget (large enough for the reasoning model on every attempt)', async () => {
+  it('requests a 1024 output budget (above the real reply range, below the old runaway cap)', async () => {
     generate.mockResolvedValue(reply('ok'));
 
     await service.generate('system', 'test');
 
-    expect(generate).toHaveBeenCalledWith('coach', expect.objectContaining({ maxOutputTokens: 2048 }));
+    expect(generate).toHaveBeenCalledWith('coach', expect.objectContaining({ maxOutputTokens: 1024 }));
   });
 });
