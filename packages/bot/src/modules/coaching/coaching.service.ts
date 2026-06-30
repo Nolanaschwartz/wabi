@@ -6,6 +6,7 @@ import { SessionBufferService } from '../session-buffer/session-buffer.service';
 import { ClassifierContextAssembler } from './classifier-context-assembler';
 import { CoachingSessionService } from '../session-buffer/coaching-session.service';
 import { StrategyRetrievalService } from '../strategy-retrieval/strategy-retrieval.service';
+import { MemoryStoreService } from '../memory/memory-store.service';
 import { BurstCoalescer } from '../burst-coalescer/burst-coalescer.service';
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
 import { AccessResolver } from '../billing/access-resolver';
@@ -50,6 +51,7 @@ export class CoachingService {
     private readonly dmRouter: DmRouterService,
     private readonly classifierContextAssembler: ClassifierContextAssembler,
     private readonly screening: CrisisScreeningService,
+    private readonly memoryStore: MemoryStoreService,
   ) {}
 
   async handle(message: Message): Promise<void> {
@@ -165,6 +167,7 @@ export class CoachingService {
       // Capture the classifier LLM's model/usage out-of-band (the verdict stays its only return) so the
       // `classify` span can be attributed; the router's equivalent rides on the routing decision.
       let classifyTelemetry: GenerationCallTelemetry | undefined;
+      // Memory recall is NOT here: memoryStore.search logs its query verbatim, so it must run post-crisis-gate (see below).
       const [classifyResult, strategyResult, decisionResult] = await Promise.all([
         measure(
           this.classifier.classify(batch, classifierContext, (t) => {
@@ -278,6 +281,13 @@ export class CoachingService {
         return;
       }
 
+      // Derived-memory recall, now that the turn is confirmed safe AND active: a crisis turn returned
+      // above (so its text never reaches search's query log, ADR-0013/0021), and a lapsed turn was gated
+      // out. Fired unawaited so it overlaps the aftermath check + tilt logic + dispatch routing below;
+      // awaited just before the coach consumes it. Best-effort — a vector-store outage degrades to no
+      // memories, never silences the coach (ADR-0021).
+      const memoryRecall = measure(this.memoryStore.search(userId, batch).catch(() => []));
+
       const inAftermath = await this.crisisAftermath.isQuarantined(userId);
 
       // Detected gameplay frustration → offer a Tilt Session (user stays in control), never
@@ -296,6 +306,7 @@ export class CoachingService {
       // The turn has cleared every gate: consented user, screened safe, active access, no tilt offer
       // outstanding. Run the prepared plan, which dispatches to the right handler (coach or journal).
       // The crisis-safety floor does NOT live in the router — it is always upstream of this call.
+      const memoryResult = await memoryRecall;
       await this.dmRouter.dispatch(
         {
           message,
@@ -306,6 +317,9 @@ export class CoachingService {
           screenedBatch: this.screening.screenedBatch(batch),
           session,
           strategies,
+          // Recalled below the gates above; the coach handler re-ranks by recency.
+          memories: memoryResult.value,
+          memoryLatencyMs: memoryResult.latencyMs,
           inAftermath,
           timezone,
           // Read-direct signup Personalization, threaded like timezone (ADR-0044). Only onboarded users

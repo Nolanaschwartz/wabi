@@ -15,6 +15,8 @@ describe('MoodDmHandler', () => {
     screenedBatch: { text: 'i want to log my mood' } as any,
     session: null,
     strategies: [],
+    memories: [],
+    memoryLatencyMs: 0,
     inAftermath: false,
     timezone: 'UTC',
     traceId: 'trace-1',

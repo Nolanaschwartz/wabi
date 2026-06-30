@@ -292,6 +292,7 @@ describe('CoachingService', () => {
       dmRouter,
       classifierContextAssembler,
       screening as any,
+      memoryStore,
     );
   });
 
@@ -478,6 +479,9 @@ describe('CoachingService', () => {
       }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
+    // Memory recall is gated behind active access: a lapsed turn never runs the vector search (it is
+    // fired only after both the crisis and access gates, off the pre-gate parallel block — ADR-0011/0013).
+    expect(memoryStore.search).not.toHaveBeenCalled();
   });
 
   it('lets a lapsed user READ back an entry (get_entry is allowed at any tier — ADR-0011)', async () => {
@@ -532,6 +536,9 @@ describe('CoachingService', () => {
       expect.objectContaining({ content: expect.stringContaining('Subscribe') }),
     );
     expect(coach.generateDetailed).not.toHaveBeenCalled();
+    // Crisis short-circuits before recall is fired: the verbatim crisis text never reaches
+    // memoryStore.search's query log (ADR-0013/0021).
+    expect(memoryStore.search).not.toHaveBeenCalled();
   });
 
   it('escalates on classifier crisis and quarantines session', async () => {
@@ -570,6 +577,9 @@ describe('CoachingService', () => {
         output: 'crisis',
       }),
     );
+    // The crisis turn never reaches recall — memoryStore.search logs its query verbatim, so it must
+    // not run on crisis text (ADR-0013/0021).
+    expect(memoryStore.search).not.toHaveBeenCalled();
   });
 
   it('coaches on safe classification with active access', async () => {

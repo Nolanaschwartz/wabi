@@ -28,6 +28,8 @@ describe('JournalDmHandler', () => {
     screenedBatch: { text: 'journal: had a rough night' } as any,
     session: null,
     strategies: [],
+    memories: [],
+    memoryLatencyMs: 0,
     inAftermath: false,
     timezone: 'UTC',
     traceId: 'trace-1',

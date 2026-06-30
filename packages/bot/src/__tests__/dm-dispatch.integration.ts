@@ -167,6 +167,7 @@ describe('DM dispatch integration', () => {
       dmRouter,
       new ClassifierContextAssembler(tilt),
       { screenedBatch: (t: string) => ({ text: t }) } as any,
+      memoryStore,
     );
 
     const crisisScreening = { tripwire: jest.fn().mockReturnValue(false) } as any;

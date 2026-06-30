@@ -156,6 +156,7 @@ describe('Journal DM two-turn capture integration', () => {
       dmRouter,
       new ClassifierContextAssembler(tilt),
       screening,
+      memoryStore,
     );
   }, 60000);
 

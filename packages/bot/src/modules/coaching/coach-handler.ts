@@ -7,7 +7,7 @@ import { SessionBufferService, type SessionContext } from '../session-buffer/ses
 import { LangfuseTracer } from '../langfuse/langfuse-tracer.service';
 import { OtelTracingService } from '../langfuse/otel-tracing.service';
 import { startActiveObservation } from '@wabi/shared/otel';
-import { MemoryStoreService } from '../memory/memory-store.service';
+import { MemoryStoreService, type MemorySearchHit } from '../memory/memory-store.service';
 import { rankByRecency } from '../memory/memory-ranker';
 import { HabitEngagementService } from '../habit-engagement/habit-engagement.service';
 import type { StrategyPoint } from '../strategy-retrieval/strategy-retrieval.service';
@@ -31,6 +31,11 @@ export interface DmTurnContext {
   /** Live session context fetched once upstream for the classifier, reused here for the prompt. */
   session: SessionContext | null;
   strategies: StrategyPoint[];
+  /** Derived-memory hits recalled in CoachingService, below the crisis+access gates (same query the
+   * classifier saw). Re-ranked by recency here. Empty on a vector-store outage (fail-open, ADR-0021). */
+  memories: MemorySearchHit[];
+  /** Wall-clock of that upstream recall, for the `memory` span this handler still emits. */
+  memoryLatencyMs: number;
   inAftermath: boolean;
   timezone: string;
   /** Read-direct signup Personalization slugs (areas + interests), threaded from CoachingService like
@@ -80,7 +85,7 @@ export class CoachHandler implements Spoke {
   }
 
   async handle(ctx: DmTurnContext): Promise<void> {
-    const { message, userId, batch, session, strategies, inAftermath, timezone, personalization, traceId } = ctx;
+    const { message, userId, batch, session, strategies, memories, memoryLatencyMs, inAftermath, timezone, personalization, traceId } = ctx;
     const start = Date.now();
 
     this.logger.log('coach handler start', { userId });
@@ -88,15 +93,10 @@ export class CoachHandler implements Spoke {
     // Hand the already-fetched session (gathered above for the classifier) to the pure prompt
     // assembler. CoachingService never shapes the prompt string itself — buildCoachPrompt owns
     // persona + layout + read-back labels.
-    // Recency-aware recall: search pulls a wide candidate pool; re-rank so recently-salient facts
-    // lead before buildCoachPrompt truncates to its display budget (PRD recency-aware-memory-
-    // retrieval). A MemorySearchHit already carries a numeric similarity, so it is directly rankable.
-    const memoryStart = Date.now();
-    // Recall is best-effort: a vector-store outage must degrade to "no memories", never silence the
-    // coach (ADR-0021). Mirrors strategy retrieval's .catch upstream in CoachingService.
-    const memories = await this.memoryStore.search(userId, batch).catch(() => []);
-    const memoryLatency = Date.now() - memoryStart;
-
+    // Recency-aware recall: the search ran in CoachingService below the crisis+access gates; here we just
+    // re-rank so recently-salient facts lead before buildCoachPrompt truncates to its display budget
+    // (PRD recency-aware-memory-retrieval). A
+    // MemorySearchHit already carries a numeric similarity, so it is directly rankable.
     // Diagnose "the coach brought up old/irrelevant stuff": record counts/ids/similarities only — the
     // verbatim memory text is held back at the boundary in prod (ADR-0013); outside production the call
     // site includes the query + recalled facts so a local trace shows exactly what was recalled. Tracing
@@ -107,7 +107,7 @@ export class CoachHandler implements Spoke {
       kind: 'span',
       input: fullFidelity ? batch : '',
       output: fullFidelity ? JSON.stringify(memories.map((m) => m.content)) : '',
-      latencyMs: memoryLatency,
+      latencyMs: memoryLatencyMs,
       metadata: {
         count: memories.length,
         ids: memories.map((m) => m.id),
