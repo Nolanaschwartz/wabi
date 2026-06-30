@@ -122,7 +122,47 @@ describe('AccessResolver', () => {
         access: { hasActiveAccess: false, subscriptionStatus: 'canceled' },
         consented: false,
         timezone: 'UTC',
+        onboardingCompleted: false,
+        improveAreas: [],
+        interests: [],
       });
+    });
+
+    it('exposes onboardingCompleted + Personalization from the SAME read (no extra query)', async () => {
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
+        discordId: '123',
+        consentAcceptedAt: new Date('2026-01-01T00:00:00Z'),
+        timezone: 'America/New_York',
+        trialEndsAt: new Date(Date.now() + 86400000),
+        subscriptionStatus: 'trialing',
+        onboardingCompletedAt: new Date('2026-01-02T00:00:00Z'),
+        improveAreas: ['tilt', 'focus'],
+        interests: ['fps'],
+      });
+
+      const result = await resolver.resolveAccount('123');
+
+      expect(userService.findByDiscordId).toHaveBeenCalledTimes(1); // onboarding rides the existing read
+      expect(result.onboardingCompleted).toBe(true);
+      expect(result.improveAreas).toEqual(['tilt', 'focus']);
+      expect(result.interests).toEqual(['fps']);
+    });
+
+    it('reports onboardingCompleted false when onboardingCompletedAt is null', async () => {
+      (userService.findByDiscordId as jest.Mock).mockResolvedValue({
+        discordId: '123',
+        consentAcceptedAt: new Date('2026-01-01T00:00:00Z'),
+        timezone: 'UTC',
+        trialEndsAt: new Date(Date.now() + 86400000),
+        subscriptionStatus: 'trialing',
+        onboardingCompletedAt: null,
+        improveAreas: [],
+        interests: [],
+      });
+
+      const result = await resolver.resolveAccount('123');
+
+      expect(result.onboardingCompleted).toBe(false);
     });
 
     it('never throws on a read failure — degrades to not-consented', async () => {

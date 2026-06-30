@@ -88,10 +88,15 @@ jest.mock('../../billing/access-resolver', () => ({
     // user (UTC) — so the existing `accessResolver.resolve.mockResolvedValue(...)` cases still drive the
     // access decision, and only the unconsented case overrides resolveAccount directly.
     const resolve = jest.fn();
+    // Default to a consented, ONBOARDED user so the existing coaching tests flow past the ADR-0044
+    // consent-tier gate; empty Personalization keeps cold-start retrieval a no-op (expandAreas([]) === []).
     const resolveAccount = jest.fn(async (id: string) => ({
       access: await resolve(id),
       consented: true,
       timezone: 'UTC',
+      onboardingCompleted: true,
+      improveAreas: [] as string[],
+      interests: [] as string[],
     }));
     return { resolve, resolveAccount };
   }),
@@ -304,6 +309,52 @@ describe('CoachingService', () => {
     );
     expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
     expect(classifier.classify).not.toHaveBeenCalled();
+  });
+
+  it('hard-gates a consented-but-un-onboarded user at the consent tier (ADR-0044): finish-onboarding nudge, no coaching pipeline', async () => {
+    process.env.NEXT_PUBLIC_BASE_URL = 'https://wabi.gg';
+    (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
+      access: { hasActiveAccess: true, subscriptionStatus: 'trialing' },
+      consented: true,
+      timezone: 'UTC',
+      onboardingCompleted: false,
+      improveAreas: [],
+      interests: [],
+    });
+
+    await service.handle(mockMessage);
+
+    // Sibling of the unconsented branch: a single nudge to /onboarding, then return.
+    expect(mockMessage.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('https://wabi.gg/onboarding') }),
+    );
+    // The gate fires BEFORE the classify∥strategy∥prepare block — no inference, structurally identical
+    // to the unconsented path (no coalesce, no classifier, no strategy, no coach).
+    expect(burstCoalescer.coalesce).not.toHaveBeenCalled();
+    expect(classifier.classify).not.toHaveBeenCalled();
+    expect(strategyRetrieval.search).not.toHaveBeenCalled();
+    expect(coach.generateDetailed).not.toHaveBeenCalled();
+  });
+
+  it('lets a consented AND onboarded user proceed to normal coaching', async () => {
+    (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
+      access: { hasActiveAccess: true, subscriptionStatus: 'trialing' },
+      consented: true,
+      timezone: 'UTC',
+      onboardingCompleted: true,
+      improveAreas: ['tilt'],
+      interests: [],
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
+
+    await service.handle(mockMessage);
+
+    expect(classifier.classify).toHaveBeenCalled();
+    expect(coach.generateDetailed).toHaveBeenCalled();
   });
 
   it('runs the crisis classifier for a lapsed user, THEN shows the subscribe link (safety is never paywalled — ADR-0011)', async () => {

@@ -13,7 +13,7 @@ import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.ser
 import { EscalationService } from '../crisis/escalation.service';
 import { TiltService } from '../tilt/tilt.service';
 import { DmRouterService } from './dm-router.service';
-import { setupLinkMessage } from '../../lib/setup-link';
+import { setupLinkMessage, finishOnboardingMessage } from '../../lib/setup-link';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
 import { startActiveObservation, getActiveTraceId } from '@wabi/shared/otel';
 import type { GenerationCallTelemetry } from '@wabi/shared/generate';
@@ -69,7 +69,8 @@ export class CoachingService {
     // OR lapsed (ADR-0011/0021): a paraphrased crisis with no tripwire keyword is only caught by the LLM,
     // and a lapsed at-risk user is exactly who must not be missed. Coaching itself is gated AFTER
     // classification, below.
-    const { access, consented, timezone } = await this.accessResolver.resolveAccount(userId);
+    const { access, consented, timezone, onboardingCompleted } =
+      await this.accessResolver.resolveAccount(userId);
 
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
 
@@ -77,6 +78,21 @@ export class CoachingService {
       this.logger.log('user no consent', { userId });
       await message.reply({
         content: setupLinkMessage(baseUrl),
+      });
+      return;
+    }
+
+    // Consent-tier onboarding gate (ADR-0044). A consented user who never finished web Onboarding
+    // (`onboardingCompletedAt` null) is treated like a pre-setup user: tripwire floor only, no
+    // classifier, no coaching. This fires as a sibling of the unconsented branch above and BEFORE the
+    // classify∥strategy∥prepare block — the un-onboarded path stays cheap and structurally identical to
+    // the unconsented path (one tier, one nudge, no inference). The always-on crisis tripwire runs
+    // UPSTREAM of this whole method (EchoController), so explicit crisis still escalates regardless;
+    // only the nuanced classifier is deferred until the person becomes a real coaching user.
+    if (!onboardingCompleted) {
+      this.logger.log('user onboarding incomplete', { userId });
+      await message.reply({
+        content: finishOnboardingMessage(baseUrl),
       });
       return;
     }
