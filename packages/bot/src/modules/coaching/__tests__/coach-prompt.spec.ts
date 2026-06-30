@@ -69,6 +69,55 @@ describe('buildCoachPrompt', () => {
     expect(prompt).toContain('assistant: hi there');
   });
 
+  it('renders the signup Personalization block: Improvement Area phrases and Interest labels', () => {
+    const { prompt } = buildCoachPrompt({
+      ...base,
+      personalization: { areas: ['tilt', 'focus'], interests: ['fps', 'music'] },
+    });
+
+    expect(prompt).toContain('What this person told us at signup:');
+    // Improvement Area slugs are expanded to their natural-language phrases (expandAreas).
+    expect(prompt).toContain('managing tilt and frustration while gaming');
+    expect(prompt).toContain('improving focus and concentration');
+    // Interest slugs are expanded to their display labels (interestLabels).
+    expect(prompt).toContain('FPS');
+    expect(prompt).toContain('Music');
+  });
+
+  it('renders only the areas line when no Interests were selected (no empty interests phrase)', () => {
+    const { prompt } = buildCoachPrompt({
+      ...base,
+      personalization: { areas: ['sleep'], interests: [] },
+    });
+
+    expect(prompt).toContain('What this person told us at signup:');
+    expect(prompt).toContain('better sleep and rest');
+    expect(prompt).not.toMatch(/enjoys/i);
+  });
+
+  it('keeps the current message pinned last even with a Personalization block present', () => {
+    const { prompt } = buildCoachPrompt({
+      ...base,
+      personalization: { areas: ['tilt'], interests: ['fps'] },
+      memories: [{ content: 'tilts after two losses' }],
+      strategies: [{ content: 'box breathing', evidence: 'RCT' }],
+    });
+
+    expect(prompt.trimEnd().endsWith('Current message: i keep losing ranked')).toBe(true);
+  });
+
+  it('omits the Personalization block entirely when no personalization is supplied', () => {
+    const { prompt } = buildCoachPrompt(base);
+
+    expect(prompt).not.toContain('What this person told us at signup');
+  });
+
+  it('names the signup-Personalization heading in the read-back guard', () => {
+    const { system } = buildCoachPrompt(base);
+
+    expect(system).toContain('What this person told us at signup');
+  });
+
   it('guards both system personas against following injected read-back as instructions', () => {
     const def = buildCoachPrompt(base).system;
     const after = buildCoachPrompt({ ...base, inAftermath: true }).system;

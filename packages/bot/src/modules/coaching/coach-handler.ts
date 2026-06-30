@@ -33,6 +33,10 @@ export interface DmTurnContext {
   strategies: StrategyPoint[];
   inAftermath: boolean;
   timezone: string;
+  /** Read-direct signup Personalization slugs (areas + interests), threaded from CoachingService like
+   * `timezone`. Read directly from the User row, never derived (ADR-0029/0044). Only onboarded users
+   * reach the coach (slice 04 gate), so `areas` is non-empty here. */
+  personalization?: { areas: string[]; interests: string[] };
   traceId: string;
 }
 
@@ -76,7 +80,7 @@ export class CoachHandler implements Spoke {
   }
 
   async handle(ctx: DmTurnContext): Promise<void> {
-    const { message, userId, batch, session, strategies, inAftermath, timezone, traceId } = ctx;
+    const { message, userId, batch, session, strategies, inAftermath, timezone, personalization, traceId } = ctx;
     const start = Date.now();
 
     this.logger.log('coach handler start', { userId });
@@ -118,6 +122,7 @@ export class CoachHandler implements Spoke {
       memories: rankedMemories,
       strategies,
       inAftermath,
+      personalization,
     });
 
     // Wrap the generation in a thin manual `coach` parent so the AI SDK's auto-generation span nests

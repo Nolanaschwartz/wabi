@@ -18,19 +18,26 @@ import { HabitEngagementService } from '../../habit-engagement/habit-engagement.
 import { TiltService } from '../../tilt/tilt.service';
 import { UserService } from '../../user/user.service';
 
-jest.mock('@wabi/shared', () => ({
-  prisma: {
-    user: {
-      findUnique: jest.fn(),
+jest.mock('@wabi/shared', () => {
+  // Keep prisma fully stubbed (no real I/O), but use the REAL pure Personalization helpers so the coach
+  // prompt renders the same area phrases / interest labels the bot ships (buildCoachPrompt calls these).
+  const actual = jest.requireActual('@wabi/shared');
+  return {
+    prisma: {
+      user: {
+        findUnique: jest.fn(),
+      },
+      escalationEvent: {
+        create: jest.fn(),
+      },
+      xpEntry: {
+        create: jest.fn(),
+      },
     },
-    escalationEvent: {
-      create: jest.fn(),
-    },
-    xpEntry: {
-      create: jest.fn(),
-    },
-  },
-}));
+    expandAreas: actual.expandAreas,
+    interestLabels: actual.interestLabels,
+  };
+});
 
 jest.mock('../../crisis/classifier.service', () => ({
   ClassifierService: jest.fn().mockImplementation(() => ({
@@ -334,6 +341,32 @@ describe('CoachingService', () => {
     expect(classifier.classify).not.toHaveBeenCalled();
     expect(strategyRetrieval.search).not.toHaveBeenCalled();
     expect(coach.generateDetailed).not.toHaveBeenCalled();
+  });
+
+  it('threads the onboarded user Personalization into the coach prompt (read-direct, ADR-0044)', async () => {
+    (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
+      access: { hasActiveAccess: true, subscriptionStatus: 'trialing' },
+      consented: true,
+      timezone: 'UTC',
+      onboardingCompleted: true,
+      improveAreas: ['tilt'],
+      interests: ['fps'],
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
+
+    await service.handle(mockMessage);
+
+    // The slugs ride the dispatch context to the coach handler, which expands them in buildCoachPrompt.
+    expect(coach.generateDetailed).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('What this person told us at signup:'),
+      expect.objectContaining({ functionId: 'coach' }),
+    );
+    expect(coach.generateDetailed.mock.calls[0][1]).toContain('managing tilt and frustration while gaming');
   });
 
   it('lets a consented AND onboarded user proceed to normal coaching', async () => {

@@ -69,7 +69,7 @@ export class CoachingService {
     // OR lapsed (ADR-0011/0021): a paraphrased crisis with no tripwire keyword is only caught by the LLM,
     // and a lapsed at-risk user is exactly who must not be missed. Coaching itself is gated AFTER
     // classification, below.
-    const { access, consented, timezone, onboardingCompleted } =
+    const { access, consented, timezone, onboardingCompleted, improveAreas, interests } =
       await this.accessResolver.resolveAccount(userId);
 
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
@@ -291,6 +291,10 @@ export class CoachingService {
           strategies,
           inAftermath,
           timezone,
+          // Read-direct signup Personalization, threaded like timezone (ADR-0044). Only onboarded users
+          // reach here (the gate above), so `areas` is non-empty by the ≥1-area completion rule. The
+          // coach prompt renders it; Interests are rapport-only and never touch retrieval.
+          personalization: { areas: improveAreas, interests },
           traceId,
         },
         decision.plan,
