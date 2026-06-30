@@ -63,6 +63,7 @@ export default async function DashboardPage() {
       playtimes={playtimes}
       streak={streak}
       billing={billing}
+      onboardingComplete={user.onboardingCompletedAt !== null}
     />
   );
 }

@@ -5,6 +5,7 @@ import MoodChart from './MoodChart';
 import MoodCalendar from './MoodCalendar';
 import AccountDataPanel from './AccountDataPanel';
 import type { MoodDayPoint } from '@/lib/mood-series';
+import { personalizationCta } from '@/lib/personalization-cta';
 
 interface BillingState {
   hasActiveAccess: boolean;
@@ -23,6 +24,37 @@ interface DashboardViewProps {
   playtimes: Array<{ duration: number; createdAt: Date }>;
   streak: number;
   billing: BillingState;
+  onboardingComplete: boolean;
+}
+
+/**
+ * Personalization CTA: a prominent "finish" card while Onboarding is incomplete, a quiet
+ * "edit" link once it's done. The dashboard is never gated on it (ADR-0011/0004) — this is a
+ * nudge, and billing + Data Rights stay reachable regardless.
+ */
+function PersonalizationCta({ onboardingComplete }: { onboardingComplete: boolean }) {
+  const cta = personalizationCta(onboardingComplete);
+  if (cta.kind === 'edit') {
+    return (
+      <a
+        href={cta.href}
+        className="mb-8 inline-block text-sm font-medium text-copper transition-colors duration-200 ease-calm hover:text-copper-bright"
+      >
+        {cta.label} →
+      </a>
+    );
+  }
+  return (
+    <a
+      href={cta.href}
+      className="mb-8 block rounded-lg border border-copper bg-copper/10 p-6 transition-colors duration-200 ease-calm hover:bg-copper/15"
+    >
+      <h2 className="font-display text-lg font-medium text-bone-0">{cta.label}</h2>
+      <p className="mt-1 text-sm text-bone-1">
+        Wabi won’t start coaching you in Discord until you tell it a little about yourself. Takes a minute.
+      </p>
+    </a>
+  );
 }
 
 const labelClass =
@@ -92,7 +124,7 @@ function BillingPanel({ billing }: { billing: BillingState }) {
   );
 }
 
-export default function DashboardView({ user, moods, moodSeries, moodGrid, calendarYear, calendarMonth, today, playtimes, streak, billing }: DashboardViewProps) {
+export default function DashboardView({ user, moods, moodSeries, moodGrid, calendarYear, calendarMonth, today, playtimes, streak, billing, onboardingComplete }: DashboardViewProps) {
   const [activeTab, setActiveTab] = useState<'mood' | 'playtime' | 'streak' | 'account'>('mood');
   const [moodWindow, setMoodWindow] = useState<7 | 30>(7);
 
@@ -130,6 +162,8 @@ export default function DashboardView({ user, moods, moodSeries, moodGrid, calen
             </button>
           </form>
         </div>
+
+        <PersonalizationCta onboardingComplete={onboardingComplete} />
 
         <BillingPanel billing={billing} />
 
