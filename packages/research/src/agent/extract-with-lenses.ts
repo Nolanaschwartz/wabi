@@ -45,9 +45,11 @@ export async function extractWithLenses(genObj: ResearchGenerateObject, paper: P
         `${lenses.join(', ')}. Skip any technique that does not fit one of those lenses.\n` +
         `Rules:\n` +
         `- "title" MUST be short, plain, and action-oriented (what the person does) — not an academic label.\n` +
-        `- Write each technique in audience-neutral language. Do NOT mention games, gamers, ranked, ` +
-        `tilt, or any specific population — describe the general mechanism only.\n` +
-        `- Each "sourceText" MUST be a verbatim quote copied exactly from the source (a real substring).\n` +
+        `- "technique" MUST be 2-4 sentences: WHAT the person does (concrete steps), WHY it works ` +
+        `(the mechanism), and WHEN/for whom the source found it effective. Audience-neutral language. ` +
+        `Do NOT mention games, gamers, ranked, tilt, or any specific population — describe the general mechanism only.\n` +
+        `- Each "sourceText" MUST be a verbatim quote copied exactly from the source (a real substring). ` +
+        `Quote a full sentence or two that states the technique AND its evidence/effect — not a fragment.\n` +
         `- "lens" MUST be exactly one of: ${lenses.join(', ')}.\n` +
         `Return JSON object: {"techniques": [{"title": string, "technique": string, "sourceText": string, "lens": string}]}.\n` +
         // JSON only: schema guides structure, but making output exclusivity explicit reduces chatty

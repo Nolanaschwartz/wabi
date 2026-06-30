@@ -46,6 +46,8 @@ export async function judgeCandidates(genObj: ResearchGenerateObject, candidates
     `"scopeOk" (true ONLY if a person could do this unaided), and "score" (0..1 overall quality). ` +
     `You MAY sharpen title/technique wording but do NOT invent claims or change meaning. Keep a ` +
     `rewritten title short, plain, action-oriented.\n` +
+    `"rationale" MUST explain your score in 1-2 sentences for a human reviewer: how well the sourceText ` +
+    `supports the technique, the strength of the evidence (study type, effect), and any scope caveat.\n` +
     `Return JSON with a "verdicts" array — one object per input item:\n` +
     `{"verdicts":[{"index":0,"faithful":boolean,"scopeOk":boolean,"score":number,"title":string,"technique":string,"rationale":string}]}\n` +
     `Each verdict MUST include its 0-based \`index\` matching the input item. Return one verdict per item.\n` +
