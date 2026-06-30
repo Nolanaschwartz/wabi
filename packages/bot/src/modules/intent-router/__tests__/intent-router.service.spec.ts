@@ -158,6 +158,15 @@ describe('IntentRouterService', () => {
     expect(system).toContain('calm frustration');
   });
 
+  it('disables reasoning on the routing task via the /no_think directive', async () => {
+    generate.mockResolvedValue(reply('{"intent":"coach","confidence":0.9}'));
+
+    await service.route('hey', CATALOGUE);
+
+    const system = generate.mock.calls[0][1].system as string;
+    expect(system).toContain('/no_think');
+  });
+
   it('calls generate with role "router", temperature 0, the 256 cap, and no retry-on-empty', async () => {
     generate.mockResolvedValue(reply('{"intent":"coach","confidence":0.9}'));
 

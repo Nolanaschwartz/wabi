@@ -186,6 +186,15 @@ describe('ClassifierService', () => {
       expect(opts.system.toLowerCase()).toContain('technique');
     });
 
+    it('disables reasoning on the label task via the /no_think directive', async () => {
+      generate.mockResolvedValue(reply('safe'));
+
+      await service.classify('hello');
+
+      const opts = generate.mock.calls[0][1];
+      expect(opts.system).toContain('/no_think');
+    });
+
     it('keeps failing closed to crisis even with context (fail-closed is unconditional — ADR-0021)', async () => {
       generate.mockResolvedValue(reply(''));
 

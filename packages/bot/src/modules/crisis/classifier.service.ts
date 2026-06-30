@@ -30,7 +30,13 @@ const CLASSIFIER_MAX_OUTPUT_TOKENS = Number(process.env.CLASSIFIER_MAX_OUTPUT_TO
 // scoped to the dimension that matters (self-harm ambiguity) so it no longer sweeps in plainly benign
 // frustration. The explicit safe carve-out for "a coping technique isn't working" is what stops the
 // tilt-session false positive at the prompt layer. (ADR-0021.)
+// `/no_think` (Qwen-family directive) suppresses hidden chain-of-thought: this is a one-word label
+// task, not a reasoning task. Thinking added ~10s of latency per call AND caused false-positive crisis
+// verdicts — the model talked itself into "crisis" on benign input ("4", "Doing well"), and when the
+// reasoning overran CLASSIFIER_MAX_OUTPUT_TOKENS it returned empty and failed closed to crisis. Ponytail:
+// prompt-level toggle; if the provider ignores it, thread providerOptions through generate() instead.
 const CLASSIFIER_SYSTEM_PROMPT =
+  '/no_think\n' +
   'Respond with ONLY "crisis" or "safe". These are Discord DMs to a wellness companion for gamers, ' +
   'who often use hyperbole about matches ("this game is killing me", "I\'m so dead", "I want to throw ' +
   'my PC") — treat game-directed hyperbole as venting, not intent. Classify as "crisis" only if the ' +

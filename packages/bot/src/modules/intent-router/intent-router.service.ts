@@ -114,6 +114,10 @@ export class IntentRouterService {
       .join('\n');
 
     return [
+      // `/no_think` (Qwen-family directive): label-only task, no reasoning needed. Suppressing hidden
+      // chain-of-thought cut ~10s of per-turn latency. Fails soft to coach if the verdict is empty, so
+      // a provider that ignores the directive degrades routing, never safety.
+      '/no_think',
       "You route a gamer's Discord DM to a wellness companion's handler that best fits their intent.",
       'Respond with ONLY a JSON object: {"intent": <intent>, "confidence": <0..1>, "tool": <tool>}.',
       'intent is one of:',
