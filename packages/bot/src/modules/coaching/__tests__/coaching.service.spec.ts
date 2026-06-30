@@ -369,6 +369,63 @@ describe('CoachingService', () => {
     expect(coach.generateDetailed.mock.calls[0][1]).toContain('managing tilt and frustration while gaming');
   });
 
+  it('cold-start: seeds the strategy query with the user Improvement Area phrases when the buffer is cold (ADR-0044)', async () => {
+    (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
+      access: { hasActiveAccess: true, subscriptionStatus: 'trialing' },
+      consented: true,
+      timezone: 'UTC',
+      onboardingCompleted: true,
+      improveAreas: ['tilt', 'sleep'],
+      interests: [],
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    // Cold buffer: no prior Conversation context.
+    sessionBuffer.getContext.mockResolvedValue(null);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
+
+    await service.handle(mockMessage);
+
+    const query = (strategyRetrieval.search as jest.Mock).mock.calls[0][0];
+    // The live message is still present, augmented with the Improvement Area phrases for a relevant
+    // day-1 fetch (Interests never touch retrieval).
+    expect(query).toContain('test message');
+    expect(query).toContain('managing tilt and frustration while gaming');
+    expect(query).toContain('better sleep and rest');
+  });
+
+  it('warm buffer: passes the live message to strategy retrieval unchanged (no area phrases appended)', async () => {
+    (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
+      access: { hasActiveAccess: true, subscriptionStatus: 'trialing' },
+      consented: true,
+      timezone: 'UTC',
+      onboardingCompleted: true,
+      improveAreas: ['tilt', 'sleep'],
+      interests: [],
+    });
+    (burstCoalescer.coalesce as jest.Mock).mockResolvedValue({ kind: 'ready', text: 'test message' });
+    classifier.classify.mockResolvedValue('safe');
+    strategyRetrieval.search.mockResolvedValue([]);
+    // Warm buffer: an ongoing Conversation already gives retrieval enough to work with.
+    sessionBuffer.getContext.mockResolvedValue({
+      sessionId: 's1',
+      turns: [
+        { role: 'user', content: 'earlier turn one' },
+        { role: 'assistant', content: 'earlier turn two' },
+      ],
+      lastSeen: new Date(),
+      doNotMine: false,
+    } as any);
+    coach.generateDetailed.mockResolvedValue({ text: 'ok', model: 'test-coach', latencyMs: 0 });
+
+    await service.handle(mockMessage);
+
+    // The query is exactly the live message — no Improvement Area phrases when the buffer is warm.
+    expect(strategyRetrieval.search).toHaveBeenCalledWith('test message');
+    expect((strategyRetrieval.search as jest.Mock).mock.calls[0][0]).not.toContain('managing tilt');
+  });
+
   it('lets a consented AND onboarded user proceed to normal coaching', async () => {
     (accessResolver.resolveAccount as jest.Mock).mockResolvedValue({
       access: { hasActiveAccess: true, subscriptionStatus: 'trialing' },
