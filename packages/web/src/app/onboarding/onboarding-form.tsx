@@ -42,17 +42,25 @@ export default function OnboardingForm({ initial, isEdit }: { initial: Initial; 
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const res = await fetch('/api/onboarding', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locale, timezone, improveAreas: areas, interests }),
-    });
-    if (!res.ok) {
+    try {
+      const res = await fetch('/api/onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ locale, timezone, improveAreas: areas, interests }),
+      });
+      if (!res.ok) {
+        // The button is disabled until ≥1 area is picked, so a non-OK here is almost always a
+        // server/auth failure rather than the empty-areas case — don't mislabel it.
+        setBusy(false);
+        setError("Something went wrong saving that. Please try again.");
+        return;
+      }
+      router.push('/dashboard');
+    } catch {
+      // Network drop / offline: recover the button instead of hanging on "Saving…".
       setBusy(false);
-      setError('Pick at least one area you want to work on.');
-      return;
+      setError('Could not reach the server. Check your connection and try again.');
     }
-    router.push('/dashboard');
   };
 
   const tzOptions =

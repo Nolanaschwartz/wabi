@@ -52,6 +52,7 @@ export async function completeOnboarding(
   userId: string,
   input: ProfileInput,
   now: Date,
+  existingCompletedAt: Date | null,
 ): Promise<CompleteResult> {
   const improveAreas = input.improveAreas.filter(isImprovementArea);
   const interests = input.interests.filter(isInterest);
@@ -67,7 +68,9 @@ export async function completeOnboarding(
       timezone: input.timezone,
       improveAreas,
       interests,
-      onboardingCompletedAt: now,
+      // Stamp completion ONCE: a later settings edit re-writes the columns but preserves the
+      // original onboarding-completion time, so the timestamp means "first completed", not "last edited".
+      onboardingCompletedAt: existingCompletedAt ?? now,
     },
   });
   return { ok: true };

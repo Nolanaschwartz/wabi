@@ -26,6 +26,8 @@ export async function POST(request: Request): Promise<Response> {
       interests: asStrings(body?.interests),
     },
     new Date(),
+    // Preserve the original completion time on a settings edit; null on first completion.
+    user.onboardingCompletedAt,
   );
 
   if (result.ok !== true) {

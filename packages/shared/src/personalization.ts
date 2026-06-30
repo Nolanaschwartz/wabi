@@ -44,24 +44,25 @@ export type InterestSlug = keyof typeof INTERESTS;
 
 /** Map known Improvement Area slugs to their query phrases; unknown slugs are dropped. */
 export function expandAreas(slugs: string[]): string[] {
-  return slugs
-    .map((s) => IMPROVEMENT_AREAS[s as ImprovementAreaSlug])
-    .filter((p) => p !== undefined);
+  return slugs.filter(isImprovementArea).map((s) => IMPROVEMENT_AREAS[s]);
 }
 
 /** Map known Interest slugs to their display labels; unknown slugs are dropped. */
 export function interestLabels(slugs: string[]): string[] {
-  return slugs
-    .map((s) => INTERESTS[s as InterestSlug])
-    .filter((l) => l !== undefined);
+  return slugs.filter(isInterest).map((s) => INTERESTS[s]);
 }
 
-/** True when the slug is a known Improvement Area — the validation seam onboarding uses. */
+/**
+ * True when the slug is a known Improvement Area — the validation seam onboarding uses.
+ * Uses an own-property check, NOT `in`: `in` matches inherited Object.prototype keys
+ * (`constructor`, `__proto__`, `toString`), which would let those non-slugs pass validation
+ * and pollute the coach prompt + retrieval query.
+ */
 export function isImprovementArea(slug: string): slug is ImprovementAreaSlug {
-  return slug in IMPROVEMENT_AREAS;
+  return Object.prototype.hasOwnProperty.call(IMPROVEMENT_AREAS, slug);
 }
 
-/** True when the slug is a known Interest. */
+/** True when the slug is a known Interest. Own-property check (see {@link isImprovementArea}). */
 export function isInterest(slug: string): slug is InterestSlug {
-  return slug in INTERESTS;
+  return Object.prototype.hasOwnProperty.call(INTERESTS, slug);
 }

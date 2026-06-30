@@ -25,6 +25,13 @@ describe('expandAreas', () => {
   it('returns an empty array for no slugs', () => {
     expect(expandAreas([])).toEqual([]);
   });
+
+  it('drops inherited Object.prototype keys (no prototype pollution)', () => {
+    expect(expandAreas(['constructor', '__proto__', 'toString', 'hasOwnProperty'])).toEqual([]);
+    expect(expandAreas(['constructor', 'tilt'])).toEqual([
+      'managing tilt and frustration while gaming',
+    ]);
+  });
 });
 
 describe('interestLabels', () => {
@@ -38,6 +45,11 @@ describe('interestLabels', () => {
 
   it('returns an empty array for no slugs', () => {
     expect(interestLabels([])).toEqual([]);
+  });
+
+  it('drops inherited Object.prototype keys (no prototype pollution)', () => {
+    expect(interestLabels(['constructor', '__proto__', 'valueOf'])).toEqual([]);
+    expect(interestLabels(['toString', 'fps'])).toEqual(['FPS']);
   });
 });
 

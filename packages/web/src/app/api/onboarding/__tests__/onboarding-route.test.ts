@@ -26,7 +26,7 @@ describe('POST /api/onboarding (thin adapter)', () => {
   });
 
   it('delegates to completeOnboarding with the user id and parsed input, returns 200 on ok', async () => {
-    requireAuthenticated.mockResolvedValue({ id: 'u1' });
+    requireAuthenticated.mockResolvedValue({ id: 'u1', onboardingCompletedAt: null });
     completeOnboarding.mockResolvedValue({ ok: true });
 
     const res = await POST(
@@ -44,6 +44,7 @@ describe('POST /api/onboarding (thin adapter)', () => {
       'u1',
       { locale: 'en-GB', timezone: 'Europe/London', improveAreas: ['tilt'], interests: ['fps'] },
       expect.any(Date),
+      null,
     );
   });
 

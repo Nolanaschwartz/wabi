@@ -24,6 +24,7 @@ describe('completeOnboarding', () => {
       'u1',
       { locale: 'en-GB', timezone: 'Europe/London', improveAreas: ['tilt', 'sleep'], interests: ['fps'] },
       now,
+      null,
     );
     expect(r).toEqual({ ok: true });
     expect(calls.update).toHaveLength(1);
@@ -46,6 +47,7 @@ describe('completeOnboarding', () => {
       'u1',
       { locale: 'en-US', timezone: 'UTC', improveAreas: [], interests: ['fps'] },
       now,
+      null,
     );
     expect(r.ok).toBe('invalid');
     expect(calls.update).toHaveLength(0);
@@ -58,6 +60,7 @@ describe('completeOnboarding', () => {
       'u1',
       { locale: 'en-US', timezone: 'UTC', improveAreas: ['tilt', 'bogus'], interests: ['fps', 'nope'] },
       now,
+      null,
     );
     expect(r).toEqual({ ok: true });
     expect(calls.update[0].data.improveAreas).toEqual(['tilt']);
@@ -71,9 +74,35 @@ describe('completeOnboarding', () => {
       'u1',
       { locale: 'en-US', timezone: 'UTC', improveAreas: ['bogus'], interests: [] },
       now,
+      null,
     );
     expect(r.ok).toBe('invalid');
     expect(calls.update).toHaveLength(0);
+  });
+
+  it('stamps onboardingCompletedAt with now on first completion', async () => {
+    const { db, calls } = writer();
+    await completeOnboarding(
+      db,
+      'u1',
+      { locale: 'en-US', timezone: 'UTC', improveAreas: ['focus'], interests: [] },
+      now,
+      null,
+    );
+    expect(calls.update[0].data.onboardingCompletedAt).toBe(now);
+  });
+
+  it('preserves the original onboardingCompletedAt on a later settings edit', async () => {
+    const { db, calls } = writer();
+    const original = new Date('2026-01-15T00:00:00Z');
+    await completeOnboarding(
+      db,
+      'u1',
+      { locale: 'en-US', timezone: 'UTC', improveAreas: ['focus'], interests: [] },
+      now,
+      original,
+    );
+    expect(calls.update[0].data.onboardingCompletedAt).toBe(original);
   });
 
   it('never writes trial or billing fields', async () => {
@@ -83,6 +112,7 @@ describe('completeOnboarding', () => {
       'u1',
       { locale: 'en-US', timezone: 'UTC', improveAreas: ['focus'], interests: [] },
       now,
+      null,
     );
     const data = calls.update[0].data;
     expect(data).not.toHaveProperty('trialEndsAt');
