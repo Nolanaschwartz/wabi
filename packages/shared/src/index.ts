@@ -10,8 +10,6 @@ export {
   interestLabels,
   isImprovementArea,
   isInterest,
-  type ImprovementAreaSlug,
-  type InterestSlug,
 } from './personalization';
 export {
   type SubscriptionStatus,

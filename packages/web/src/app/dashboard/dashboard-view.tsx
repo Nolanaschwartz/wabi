@@ -5,7 +5,6 @@ import MoodChart from './MoodChart';
 import MoodCalendar from './MoodCalendar';
 import AccountDataPanel from './AccountDataPanel';
 import type { MoodDayPoint } from '@/lib/mood-series';
-import { personalizationCta } from '@/lib/personalization-cta';
 
 interface BillingState {
   hasActiveAccess: boolean;
@@ -33,23 +32,22 @@ interface DashboardViewProps {
  * nudge, and billing + Data Rights stay reachable regardless.
  */
 function PersonalizationCta({ onboardingComplete }: { onboardingComplete: boolean }) {
-  const cta = personalizationCta(onboardingComplete);
-  if (cta.kind === 'edit') {
+  if (onboardingComplete) {
     return (
       <a
-        href={cta.href}
+        href="/onboarding"
         className="mb-8 inline-block text-sm font-medium text-copper transition-colors duration-200 ease-calm hover:text-copper-bright"
       >
-        {cta.label} →
+        Edit your personalization →
       </a>
     );
   }
   return (
     <a
-      href={cta.href}
+      href="/onboarding"
       className="mb-8 block rounded-lg border border-copper bg-copper/10 p-6 transition-colors duration-200 ease-calm hover:bg-copper/15"
     >
-      <h2 className="font-display text-lg font-medium text-bone-0">{cta.label}</h2>
+      <h2 className="font-display text-lg font-medium text-bone-0">Finish personalizing Wabi</h2>
       <p className="mt-1 text-sm text-bone-1">
         Wabi won’t start coaching you in Discord until you tell it a little about yourself. Takes a minute.
       </p>

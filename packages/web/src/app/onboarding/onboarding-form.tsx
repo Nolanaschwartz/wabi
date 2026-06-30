@@ -10,8 +10,41 @@ function areaLabel(slug: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-const AREA_SLUGS = Object.keys(IMPROVEMENT_AREAS);
+const AREA_ENTRIES = Object.keys(IMPROVEMENT_AREAS).map(
+  (slug) => [slug, areaLabel(slug)] as [string, string],
+);
 const INTEREST_ENTRIES = Object.entries(INTERESTS) as [string, string][];
+
+/** A wrap of toggle chips — one [slug, label] list, multi-select. */
+function Chips({
+  items,
+  selected,
+  onToggle,
+}: {
+  items: [string, string][];
+  selected: string[];
+  onToggle: (slug: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map(([slug, label]) => (
+        <button
+          key={slug}
+          type="button"
+          aria-pressed={selected.includes(slug)}
+          onClick={() => onToggle(slug)}
+          className={`rounded-full border px-4 py-2 text-sm transition-colors duration-200 ease-calm ${
+            selected.includes(slug)
+              ? 'border-copper bg-copper text-ink-0'
+              : 'border-ink-3 bg-ink-1 text-bone-1 hover:border-copper'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 type Initial = { locale: string; timezone: string; improveAreas: string[]; interests: string[] };
 
@@ -63,8 +96,7 @@ export default function OnboardingForm({ initial, isEdit }: { initial: Initial; 
     }
   };
 
-  const tzOptions =
-    typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [timezone];
+  const tzOptions = Intl.supportedValuesOf('timeZone');
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-20">
@@ -84,52 +116,18 @@ export default function OnboardingForm({ initial, isEdit }: { initial: Initial; 
           What do you want to work on?
         </h2>
         <p className="mb-3 text-sm text-bone-2">Pick at least one.</p>
-        <div className="flex flex-wrap gap-2">
-          {AREA_SLUGS.map((slug) => {
-            const on = areas.includes(slug);
-            return (
-              <button
-                key={slug}
-                type="button"
-                aria-pressed={on}
-                onClick={() => toggle(areas, setAreas, slug)}
-                className={`rounded-full border px-4 py-2 text-sm transition-colors duration-200 ease-calm ${
-                  on
-                    ? 'border-copper bg-copper text-ink-0'
-                    : 'border-ink-3 bg-ink-1 text-bone-1 hover:border-copper'
-                }`}
-              >
-                {areaLabel(slug)}
-              </button>
-            );
-          })}
-        </div>
+        <Chips items={AREA_ENTRIES} selected={areas} onToggle={(s) => toggle(areas, setAreas, s)} />
       </section>
 
       <section className="mb-8">
         <h2 className="mb-3 font-mono text-[11px] uppercase tracking-[0.14em] text-bone-2">
           What are you into? <span className="normal-case tracking-normal text-bone-2">(optional)</span>
         </h2>
-        <div className="flex flex-wrap gap-2">
-          {INTEREST_ENTRIES.map(([slug, label]) => {
-            const on = interests.includes(slug);
-            return (
-              <button
-                key={slug}
-                type="button"
-                aria-pressed={on}
-                onClick={() => toggle(interests, setInterests, slug)}
-                className={`rounded-full border px-4 py-2 text-sm transition-colors duration-200 ease-calm ${
-                  on
-                    ? 'border-copper bg-copper text-ink-0'
-                    : 'border-ink-3 bg-ink-1 text-bone-1 hover:border-copper'
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
+        <Chips
+          items={INTEREST_ENTRIES}
+          selected={interests}
+          onToggle={(s) => toggle(interests, setInterests, s)}
+        />
       </section>
 
       <section className="mb-10 grid grid-cols-1 gap-4 sm:grid-cols-2">
