@@ -23,6 +23,9 @@ model User {
   checkInCadence        String   @default("daily")
   innerStateMemoryEnabled Boolean @default(false)
   innerStateMemoryPromptedAt DateTime?
+  improveAreas          String[] @default([])  // Personalization: Improvement Area slugs (>=1 to complete onboarding)
+  interests             String[] @default([])  // Personalization: Interest slugs (optional)
+  onboardingCompletedAt DateTime?              // marks Onboarding complete; null = Personalization unfinished (ADR-0044)
   quietHoursStart       Int      @default(22)
   quietHoursEnd         Int      @default(8)
   lastCheckIn           DateTime?

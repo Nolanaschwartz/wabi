@@ -4,6 +4,16 @@ export { getProvider, type ProviderRole, type ProviderConfig } from './provider'
 export { scrubSentryEvent, type SentryEventLike } from './sentry-scrub';
 export { ratingToEmoji } from './mood';
 export {
+  IMPROVEMENT_AREAS,
+  INTERESTS,
+  expandAreas,
+  interestLabels,
+  isImprovementArea,
+  isInterest,
+  type ImprovementAreaSlug,
+  type InterestSlug,
+} from './personalization';
+export {
   type SubscriptionStatus,
   type AccessState,
   decideAccess,
