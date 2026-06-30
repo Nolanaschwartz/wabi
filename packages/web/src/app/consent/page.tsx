@@ -12,7 +12,8 @@ export default function ConsentPage() {
       router.push('/api/auth/discord');
       return;
     }
-    router.push('/dashboard');
+    // Consent creates the User; Personalization is the second beat of Onboarding.
+    router.push('/onboarding');
   };
 
   const decline = async () => {

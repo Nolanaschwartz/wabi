@@ -21,14 +21,24 @@ export class AccessResolver {
    * consent read: a failed/absent row resolves to not-consented, UTC, and no access — never throws — so a
    * degraded DB shows the setup link rather than crashing the turn (ADR-0011/0021).
    */
-  async resolveAccount(
-    discordId: string,
-  ): Promise<{ access: AccessState; consented: boolean; timezone: string }> {
+  async resolveAccount(discordId: string): Promise<{
+    access: AccessState;
+    consented: boolean;
+    timezone: string;
+    onboardingCompleted: boolean;
+    improveAreas: string[];
+    interests: string[];
+  }> {
     const user = await this.userService.findByDiscordId(discordId).catch(() => null);
     return {
       access: decideAccess(user, new Date()),
       consented: !!user?.consentAcceptedAt,
       timezone: user?.timezone ?? 'UTC',
+      // Onboarding rides this existing whole-User read (ADR-0044): the consent-tier coaching gate and
+      // the coach-prompt/cold-start Personalization all derive from the same row — no extra query.
+      onboardingCompleted: !!user?.onboardingCompletedAt,
+      improveAreas: user?.improveAreas ?? [],
+      interests: user?.interests ?? [],
     };
   }
 

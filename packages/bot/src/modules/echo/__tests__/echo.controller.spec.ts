@@ -163,5 +163,32 @@ describe('EchoController', () => {
       expect(escalate).toHaveBeenCalledWith('123', 'tripwire', 'conversation');
       expect(message.reply).toHaveBeenCalledWith(crisisPayload);
     });
+
+    it('escalates an explicit crisis via the upstream tripwire WITHOUT reaching coaching (so the ADR-0044 onboarding gate can never withhold the safety floor)', async () => {
+      // The tripwire runs here, before CoachingService.handle — and it reads only the message text,
+      // never the User row, so onboarding state is irrelevant to it. An un-onboarded user in explicit
+      // crisis is escalated by this floor; the consent-tier onboarding gate lives downstream in
+      // coaching.handle, which is never reached on a tripwire hit. (ADR-0044 safety floor intact.)
+      const handle = jest.fn();
+      const escalate = jest.fn().mockResolvedValue({ embeds: [{ title: '🚨' }] });
+      const controller = new EchoController(
+        { tripwire: jest.fn().mockReturnValue(true) } as any,
+        { escalate } as any,
+        { handle, cancelPending: jest.fn() } as any,
+      );
+
+      const message = {
+        author: { bot: false, id: '123' },
+        channel: { isDMBased: () => true },
+        content: 'i want to kill myself',
+        reply: jest.fn().mockResolvedValue({}),
+      } as any;
+
+      await controller.handleMessage([message]);
+
+      expect(escalate).toHaveBeenCalledWith('123', 'tripwire', 'conversation');
+      // The onboarding gate lives inside coaching.handle — which the tripwire short-circuits before.
+      expect(handle).not.toHaveBeenCalled();
+    });
   });
 });

@@ -74,6 +74,17 @@ describe('CoachHandler', () => {
     expect(ctx.message.reply).toHaveBeenCalledWith('That sounds rough. Hang in there.');
   });
 
+  it('threads the signup Personalization slugs into the built coach prompt', async () => {
+    // The slugs ride the dispatch context like timezone; the handler hands them to buildCoachPrompt,
+    // which expands them to phrases/labels. Proves the wiring reaches the model.
+    await handler.handle(baseCtx({ personalization: { areas: ['tilt'], interests: ['fps'] } }));
+
+    const prompt = coach.generateDetailed.mock.calls[0][1];
+    expect(prompt).toContain('What this person told us at signup:');
+    expect(prompt).toContain('managing tilt and frustration while gaming');
+    expect(prompt).toContain('FPS');
+  });
+
   it('instruments the coach generation with telemetry routed to the isolated tracer', async () => {
     // Model/usage/latency + prompt+reply are captured by the AI SDK's auto-generation (recordInputs/
     // Outputs), routed to the isolated Langfuse tracer — replacing the old manual coach span.

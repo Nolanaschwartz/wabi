@@ -13,10 +13,16 @@ import { CrisisAftermathService } from '../crisis-aftermath/crisis-aftermath.ser
 import { EscalationService } from '../crisis/escalation.service';
 import { TiltService } from '../tilt/tilt.service';
 import { DmRouterService } from './dm-router.service';
-import { setupLinkMessage } from '../../lib/setup-link';
+import { setupLinkMessage, finishOnboardingMessage } from '../../lib/setup-link';
+import { expandAreas } from '@wabi/shared';
 import { JsonLogger, withTraceId } from '../../lib/json-logger';
 import { startActiveObservation, getActiveTraceId } from '@wabi/shared/otel';
 import type { GenerationCallTelemetry } from '@wabi/shared/generate';
+
+// Below this many buffered turns the session is treated as "cold" for strategy retrieval: a fresh
+// Conversation carries too little signal, so we seed the query with the user's Improvement Areas
+// (ADR-0044 cold-start augmentation). At or above it the live Conversation drives retrieval unaided.
+const COLD_BUFFER_TURN_THRESHOLD = 2;
 
 // Resolve a promise while recording how long it took, so each parallel op can report its own span
 // latency. Failure handling stays with the caller (e.g. strategy search catches before measure).
@@ -69,7 +75,8 @@ export class CoachingService {
     // OR lapsed (ADR-0011/0021): a paraphrased crisis with no tripwire keyword is only caught by the LLM,
     // and a lapsed at-risk user is exactly who must not be missed. Coaching itself is gated AFTER
     // classification, below.
-    const { access, consented, timezone } = await this.accessResolver.resolveAccount(userId);
+    const { access, consented, timezone, onboardingCompleted, improveAreas, interests } =
+      await this.accessResolver.resolveAccount(userId);
 
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://wabi.gg';
 
@@ -77,6 +84,21 @@ export class CoachingService {
       this.logger.log('user no consent', { userId });
       await message.reply({
         content: setupLinkMessage(baseUrl),
+      });
+      return;
+    }
+
+    // Consent-tier onboarding gate (ADR-0044). A consented user who never finished web Onboarding
+    // (`onboardingCompletedAt` null) is treated like a pre-setup user: tripwire floor only, no
+    // classifier, no coaching. This fires as a sibling of the unconsented branch above and BEFORE the
+    // classify∥strategy∥prepare block — the un-onboarded path stays cheap and structurally identical to
+    // the unconsented path (one tier, one nudge, no inference). The always-on crisis tripwire runs
+    // UPSTREAM of this whole method (EchoController), so explicit crisis still escalates regardless;
+    // only the nuanced classifier is deferred until the person becomes a real coaching user.
+    if (!onboardingCompleted) {
+      this.logger.log('user onboarding incomplete', { userId });
+      await message.reply({
+        content: finishOnboardingMessage(baseUrl),
       });
       return;
     }
@@ -121,6 +143,17 @@ export class CoachingService {
       const session = await this.sessionBuffer.getContext(userId).catch(() => null);
       const classifierContext = await this.classifierContextAssembler.assemble(userId, session);
 
+      // Cold-start strategy retrieval (ADR-0044). On a fresh Conversation there is no derived Memory and
+      // little-to-no live context, so a bare-message Qdrant fetch is cold and generic. When the buffer is
+      // cold we seed the retrieval query with the user's Improvement Area phrases (expandAreas) so day-1
+      // fetches are relevant; once the buffer is warm the live Conversation carries the query and we pass
+      // the message unchanged. This is a query-STRING change at the call site only — strategy-retrieval
+      // stays pure embedding search. Interests never touch retrieval (rapport-only, ADR-0029).
+      const coldBuffer = (session?.turns.length ?? 0) < COLD_BUFFER_TURN_THRESHOLD;
+      const areaPhrases = expandAreas(improveAreas);
+      const strategyQuery =
+        coldBuffer && areaPhrases.length > 0 ? [batch, ...areaPhrases].join(' ') : batch;
+
       // The router's routing decision runs IN this block — parallel with the crisis classifier and
       // strategy search, so it costs no added serial latency. prepare() is side-effect-free and the
       // whole routing decision (pending-capture check, intent classifier, θ, inline extraction) lives
@@ -138,7 +171,7 @@ export class CoachingService {
             classifyTelemetry = t;
           }),
         ),
-        measure(this.strategyRetrieval.search(batch).catch(() => [])),
+        measure(this.strategyRetrieval.search(strategyQuery).catch(() => [])),
         measure(this.dmRouter.prepare(userId, batch, { recentTurns: session?.turns })),
       ]);
       const classification = classifyResult.value;
@@ -275,6 +308,10 @@ export class CoachingService {
           strategies,
           inAftermath,
           timezone,
+          // Read-direct signup Personalization, threaded like timezone (ADR-0044). Only onboarded users
+          // reach here (the gate above), so `areas` is non-empty by the ≥1-area completion rule. The
+          // coach prompt renders it; Interests are rapport-only and never touch retrieval.
+          personalization: { areas: improveAreas, interests },
           traceId,
         },
         decision.plan,
