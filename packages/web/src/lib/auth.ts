@@ -23,6 +23,12 @@ export const lucia = new Lucia(adapter, {
 			timezone: attributes.timezone,
 			trialEndsAt: attributes.trialEndsAt,
 			subscriptionStatus: attributes.subscriptionStatus,
+			// Personalization — surfaced for the onboarding gate (dashboard nudge) and the
+			// /onboarding settings-edit prefill, off the same session row.
+			locale: attributes.locale,
+			improveAreas: attributes.improveAreas,
+			interests: attributes.interests,
+			onboardingCompletedAt: attributes.onboardingCompletedAt,
 		};
 	},
 });
@@ -44,5 +50,9 @@ declare module "lucia" {
 		timezone: string;
 		trialEndsAt: Date | null;
 		subscriptionStatus: string;
+		locale: string;
+		improveAreas: string[];
+		interests: string[];
+		onboardingCompletedAt: Date | null;
 	}
 }
